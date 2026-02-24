@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, LayoutGrid, AlertCircle } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -132,8 +132,7 @@ export function ThreadSidebar(): React.JSX.Element {
     createThread,
     selectThread,
     deleteThread,
-    updateThread,
-    setShowKanbanView
+    updateThread
   } = useAppStore()
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
@@ -171,7 +170,9 @@ export function ThreadSidebar(): React.JSX.Element {
           className="w-full justify-start gap-2"
           onClick={handleNewThread}
         >
-          <Plus className="size-4" />
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <Plus className="size-3" />
+          </div>
           新任务
         </Button>
       </div>
@@ -203,18 +204,6 @@ export function ThreadSidebar(): React.JSX.Element {
         </div>
       </ScrollArea>
 
-      {/* Overview Toggle */}
-      <div className="p-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-start gap-2"
-          onClick={() => setShowKanbanView(true)}
-        >
-          <LayoutGrid className="size-4" />
-          总览
-        </Button>
-      </div>
     </aside>
   )
 }

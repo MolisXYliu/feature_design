@@ -1,8 +1,7 @@
-import { User, Bot } from "lucide-react"
-import { cn } from "@/lib/utils"
 import type { Message, HITLRequest } from "@/types"
 import { ToolCallRenderer } from "./ToolCallRenderer"
 import { StreamingMarkdown } from "./StreamingMarkdown"
+
 
 interface ToolResultInfo {
   content: string | unknown
@@ -30,16 +29,6 @@ export function MessageBubble({
   // Hide tool result messages - they're shown inline with tool calls
   if (isTool) {
     return null
-  }
-
-  const getIcon = (): React.JSX.Element => {
-    if (isUser) return <User className="size-4" />
-    return <Bot className="size-4" />
-  }
-
-  const getLabel = (): string => {
-    if (isUser) return "YOU"
-    return "AGENT"
   }
 
   const renderContent = (): React.ReactNode => {
@@ -89,30 +78,48 @@ export function MessageBubble({
     return null
   }
 
+  if (isUser) {
+    return (
+      <div className="flex justify-end overflow-hidden">
+        <div
+          className="rounded-lg p-3 overflow-hidden bg-primary/10 max-w-[80%]"
+        >
+          {content}
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex gap-3 overflow-hidden">
-      {/* Left avatar column - shows for agent/tool */}
-      <div className="w-8 shrink-0">
-        {!isUser && (
-          <div className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-primary">
-            {getIcon()}
-          </div>
-        )}
+    <div className="overflow-hidden space-y-1.5">
+      <div className="flex items-center gap-2">
+        <svg className="size-5 shrink-0" viewBox="0 0 120 120" fill="none">
+          <defs>
+            <linearGradient id="chat-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#ff4d4d"/>
+              <stop offset="100%" stopColor="#991b1b"/>
+            </linearGradient>
+          </defs>
+          <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#chat-lobster)"/>
+          <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="url(#chat-lobster)"/>
+          <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="url(#chat-lobster)"/>
+          <path d="M45 15 Q35 5 30 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round"/>
+          <path d="M75 15 Q85 5 90 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round"/>
+          <circle cx="45" cy="35" r="6" fill="#050810"/>
+          <circle cx="75" cy="35" r="6" fill="#050810"/>
+          <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
+          <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
+        </svg>
+        <span className="text-xs font-medium text-muted-foreground">Cowork</span>
       </div>
 
-      {/* Content column - always same width */}
-      <div className="flex-1 min-w-0 space-y-2 overflow-hidden">
-        <div className={cn("text-section-header", isUser && "text-right")}>{getLabel()}</div>
-
+      <div className="flex-1 min-w-0 space-y-2 overflow-hidden pl-7">
         {content && (
-          <div
-            className={cn("rounded-lg p-3 overflow-hidden", isUser ? "bg-secondary" : "bg-card shadow-sm border border-border")}
-          >
+          <div className="rounded-lg p-3 overflow-hidden bg-card">
             {content}
           </div>
         )}
 
-        {/* Tool calls */}
         {hasToolCalls && (
           <div className="space-y-2 overflow-hidden">
             {message.tool_calls!.map((toolCall, index) => {
@@ -130,15 +137,6 @@ export function MessageBubble({
                 />
               )
             })}
-          </div>
-        )}
-      </div>
-
-      {/* Right avatar column - shows for user */}
-      <div className="w-8 shrink-0">
-        {isUser && (
-          <div className="flex size-8 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
-            {getIcon()}
           </div>
         )}
       </div>
