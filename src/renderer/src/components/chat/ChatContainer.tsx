@@ -34,6 +34,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const isAtBottomRef = useRef(true)
+  const isComposingRef = useRef(false)
 
   const { threads, loadThreads, generateTitleForFirstMessage } = useAppStore()
 
@@ -269,6 +270,10 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
+    // IME composing (Chinese/Japanese/Korean) should not trigger submit on Enter
+    const isComposing = e.nativeEvent.isComposing || isComposingRef.current
+    if (isComposing) return
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSubmit(e)
@@ -384,6 +389,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onCompositionStart={() => {
+                  isComposingRef.current = true
+                }}
+                onCompositionEnd={() => {
+                  isComposingRef.current = false
+                }}
                 onKeyDown={handleKeyDown}
                 placeholder="输入消息..."
                 disabled={isLoading}
