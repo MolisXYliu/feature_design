@@ -127,10 +127,10 @@ export function RightPanel(): React.JSX.Element {
   const subagents = threadState?.subagents ?? []
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const [tasksOpen, setTasksOpen] = useState(true)
-  const [filesOpen, setFilesOpen] = useState(true)
-  const [agentsOpen, setAgentsOpen] = useState(true)
-  const [skillsOpen, setSkillsOpen] = useState(true)
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [agentsOpen, setAgentsOpen] = useState(false)
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const [skills, setSkills] = useState<SkillMetadata[]>([])
 
   // Load skills on mount

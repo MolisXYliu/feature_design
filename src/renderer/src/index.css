@@ -241,7 +241,7 @@
 .right-panel-scroll::-webkit-scrollbar-thumb {
   background: #9d968d;
   border-radius: 9999px;
-  min-height: 120px;
+  min-height: 36px;
 }
 
 .right-panel-scroll::-webkit-scrollbar-thumb:hover {
