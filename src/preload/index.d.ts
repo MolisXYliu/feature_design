@@ -1,4 +1,4 @@
-import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision } from "../main/types"
+import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision, SkillMetadata } from "../main/types"
 
 interface ElectronAPI {
   ipcRenderer: {
@@ -52,6 +52,13 @@ interface CustomAPI {
     setDefault: (modelId: string) => Promise<void>
     setApiKey: (provider: string, apiKey: string) => Promise<void>
     getApiKey: (provider: string) => Promise<string | null>
+    getCustomConfig: () => Promise<{ baseUrl: string; model: string; hasApiKey: boolean } | null>
+    setCustomConfig: (config: {
+      baseUrl: string
+      model: string
+      apiKey?: string
+    }) => Promise<void>
+    deleteCustomConfig: () => Promise<void>
   }
   workspace: {
     get: (threadId?: string) => Promise<string | null>
@@ -91,6 +98,9 @@ interface CustomAPI {
     onFilesChanged: (
       callback: (data: { threadId: string; workspacePath: string }) => void
     ) => () => void
+  }
+  skills: {
+    list: () => Promise<SkillMetadata[]>
   }
 }
 

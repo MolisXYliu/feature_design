@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { createDeepAgent } from "deepagents"
 import { getDefaultModel } from "../ipc/models"
-import { getApiKey, getThreadCheckpointPath } from "../storage"
+import { getApiKey, getThreadCheckpointPath, getSkillsSources, getCustomModelConfig } from "../storage"
+
 import { ChatAnthropic } from "@langchain/anthropic"
 import { ChatOpenAI } from "@langchain/openai"
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai"
@@ -89,7 +90,7 @@ function getModelInstance(
     }
     return new ChatOpenAI({
       model,
-      openAIApiKey: apiKey
+      apiKey
     })
   } else if (model.startsWith("gemini")) {
     const apiKey = getApiKey("google")
@@ -100,6 +101,23 @@ function getModelInstance(
     return new ChatGoogleGenerativeAI({
       model,
       apiKey: apiKey
+    })
+  } else if (model.startsWith("custom:")) {
+    const customConfig = getCustomModelConfig()
+    if (!customConfig) {
+      throw new Error("Custom model not configured")
+    }
+    const apiKey = getApiKey("custom") || customConfig.apiKey
+    if (!apiKey) {
+      throw new Error("Custom API key not configured")
+    }
+    console.log("[Runtime] Custom model:", customConfig.model, "baseUrl:", customConfig.baseUrl)
+    return new ChatOpenAI({
+      model: customConfig.model,
+      apiKey,
+      configuration: {
+        baseURL: customConfig.baseUrl
+      }
     })
   }
 
@@ -163,6 +181,9 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
 
 The workspace root is: ${workspacePath}`
 
+  const skillsSources = getSkillsSources()
+  console.log("[Runtime] Skills sources:", skillsSources)
+
   const agent = createDeepAgent({
     model,
     checkpointer,
@@ -171,7 +192,9 @@ The workspace root is: ${workspacePath}`
     // Custom filesystem prompt for absolute paths (requires deepagents update)
     filesystemSystemPrompt,
     // Require human approval for all shell commands
-    interruptOn: { execute: true }
+    interruptOn: { execute: true },
+    // Load skills from user-level and project-level directories
+    skills: skillsSources.length > 0 ? skillsSources : undefined
   } as Parameters<typeof createDeepAgent>[0])
 
   console.log("[Runtime] Deep agent created with LocalSandbox at:", workspacePath)

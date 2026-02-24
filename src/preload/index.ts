@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision } from "../main/types"
+import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision, SkillMetadata } from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
@@ -148,6 +148,23 @@ const api = {
     },
     deleteApiKey: (provider: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteApiKey", provider)
+    },
+    getCustomConfig: (): Promise<{ baseUrl: string; model: string; hasApiKey: boolean } | null> => {
+      return ipcRenderer.invoke("models:getCustomConfig") as Promise<{
+        baseUrl: string
+        model: string
+        hasApiKey: boolean
+      } | null>
+    },
+    setCustomConfig: (config: {
+      baseUrl: string
+      model: string
+      apiKey?: string
+    }): Promise<void> => {
+      return ipcRenderer.invoke("models:setCustomConfig", config) as Promise<void>
+    },
+    deleteCustomConfig: (): Promise<void> => {
+      return ipcRenderer.invoke("models:deleteCustomConfig") as Promise<void>
     }
   },
   workspace: {
@@ -211,6 +228,11 @@ const api = {
       return () => {
         ipcRenderer.removeListener("workspace:files-changed", handler)
       }
+    }
+  },
+  skills: {
+    list: (): Promise<SkillMetadata[]> => {
+      return ipcRenderer.invoke("skills:list")
     }
   }
 }

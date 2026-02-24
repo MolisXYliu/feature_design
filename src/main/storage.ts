@@ -11,7 +11,8 @@ const ENV_VAR_NAMES: Record<ProviderId, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   openai: "OPENAI_API_KEY",
   google: "GOOGLE_API_KEY",
-  ollama: "" // Ollama doesn't require an API key
+  ollama: "",
+  custom: "CUSTOM_API_KEY"
 }
 
 export function getOpenworkDir(): string {
@@ -121,4 +122,98 @@ export function deleteApiKey(provider: string): void {
 
 export function hasApiKey(provider: string): boolean {
   return !!getApiKey(provider)
+}
+
+// Skills directory — bundled with the app at project root /skills/
+export function getSkillsDir(): string {
+  // In dev: project root /skills/
+  // In production: {app resources}/skills/ (copied by build)
+  const devDir = join(__dirname, "..", "..", "skills")
+  if (existsSync(devDir)) return devDir
+
+  const prodDir = join(__dirname, "..", "..", "..", "skills")
+  if (existsSync(prodDir)) return prodDir
+
+  return devDir
+}
+
+export function getSkillsSources(): string[] {
+  const dir = getSkillsDir()
+  return existsSync(dir) ? [dir] : []
+}
+
+// Custom model configuration stored as JSON in ~/.openwork/custom-model.json
+export interface CustomModelConfig {
+  baseUrl: string
+  model: string
+  apiKey?: string
+}
+
+export interface CustomModelPublicConfig {
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+}
+
+const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
+
+export function getCustomModelConfig(): CustomModelConfig | null {
+  getOpenworkDir()
+  if (!existsSync(CUSTOM_MODEL_FILE)) return null
+  try {
+    const content = readFileSync(CUSTOM_MODEL_FILE, "utf-8")
+    const config = JSON.parse(content) as CustomModelConfig
+    if (!config.baseUrl || !config.model) return null
+
+    // Migrate legacy API key from custom-model.json to .env if needed.
+    const existingKey = getApiKey("custom")
+    if (!existingKey && config.apiKey) {
+      setApiKey("custom", config.apiKey)
+    }
+
+    return {
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey: getApiKey("custom")
+    }
+  } catch {
+    return null
+  }
+}
+
+export function setCustomModelConfig(config: CustomModelConfig): void {
+  getOpenworkDir()
+  // Keep model metadata in JSON and keep secret in .env only.
+  writeFileSync(
+    CUSTOM_MODEL_FILE,
+    JSON.stringify(
+      {
+        baseUrl: config.baseUrl,
+        model: config.model
+      },
+      null,
+      2
+    )
+  )
+
+  if (config.apiKey?.trim()) {
+    setApiKey("custom", config.apiKey.trim())
+  }
+}
+
+export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
+  const config = getCustomModelConfig()
+  if (!config) return null
+  return {
+    baseUrl: config.baseUrl,
+    model: config.model,
+    hasApiKey: hasApiKey("custom")
+  }
+}
+
+export function deleteCustomModelConfig(): void {
+  if (existsSync(CUSTOM_MODEL_FILE)) {
+    unlinkSync(CUSTOM_MODEL_FILE)
+  }
+  deleteApiKey("custom")
 }

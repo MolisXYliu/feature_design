@@ -21,19 +21,22 @@ import {
   FileCode,
   FileJson,
   Image,
-  FileType
+  FileType,
+  Sparkles
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
 import { useThreadState } from "@/lib/thread-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import type { Todo } from "@/types"
+import type { Todo, SkillMetadata } from "@/types"
 
 const HEADER_HEIGHT = 40 // px
 const HANDLE_HEIGHT = 6 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
+
+type PanelHeights = { tasks: number; files: number; agents: number; skills: number }
 
 interface SectionHeaderProps {
   title: string
@@ -126,37 +129,63 @@ export function RightPanel(): React.JSX.Element {
   const [tasksOpen, setTasksOpen] = useState(true)
   const [filesOpen, setFilesOpen] = useState(true)
   const [agentsOpen, setAgentsOpen] = useState(true)
+  const [skillsOpen, setSkillsOpen] = useState(true)
+  const [skills, setSkills] = useState<SkillMetadata[]>([])
+
+  // Load skills on mount
+  useEffect(() => {
+    async function loadSkills(): Promise<void> {
+      try {
+        const loaded = await window.api.skills.list()
+        setSkills(loaded)
+      } catch (e) {
+        console.error("[RightPanel] Failed to load skills:", e)
+      }
+    }
+    loadSkills()
+  }, [])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
   const [filesHeight, setFilesHeight] = useState<number | null>(null)
   const [agentsHeight, setAgentsHeight] = useState<number | null>(null)
+  const [skillsHeight, setSkillsHeight] = useState<number | null>(null)
 
   // Track drag start heights
-  const dragStartHeights = useRef<{ tasks: number; files: number; agents: number } | null>(null)
+  const dragStartHeights = useRef<{
+    tasks: number
+    files: number
+    agents: number
+    skills: number
+  } | null>(null)
 
   // Calculate available content height
   const getAvailableContentHeight = useCallback(() => {
     if (!containerRef.current) return 0
     const totalHeight = containerRef.current.clientHeight
 
-    // Subtract headers (always visible)
-    let used = HEADER_HEIGHT * 3
+    const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen]
+    let used = HEADER_HEIGHT * 4
 
-    // Subtract handles (only between open panels)
-    if (tasksOpen && (filesOpen || agentsOpen)) used += HANDLE_HEIGHT
-    if (filesOpen && agentsOpen) used += HANDLE_HEIGHT
+    // Count handles between consecutive open panels
+    let handles = 0
+    let lastOpen = false
+    for (const isOpen of openPanels) {
+      if (isOpen && lastOpen) handles++
+      lastOpen = isOpen
+    }
+    used += HANDLE_HEIGHT * handles
 
     return Math.max(0, totalHeight - used)
-  }, [tasksOpen, filesOpen, agentsOpen])
+  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen])
 
   // Get current heights for each panel's content area
   const getContentHeights = useCallback(() => {
     const available = getAvailableContentHeight()
-    const openCount = [tasksOpen, filesOpen, agentsOpen].filter(Boolean).length
+    const openCount = [tasksOpen, filesOpen, agentsOpen, skillsOpen].filter(Boolean).length
 
     if (openCount === 0) {
-      return { tasks: 0, files: 0, agents: 0 }
+      return { tasks: 0, files: 0, agents: 0, skills: 0 }
     }
 
     const defaultHeight = available / openCount
@@ -164,16 +193,19 @@ export function RightPanel(): React.JSX.Element {
     return {
       tasks: tasksOpen ? (tasksHeight ?? defaultHeight) : 0,
       files: filesOpen ? (filesHeight ?? defaultHeight) : 0,
-      agents: agentsOpen ? (agentsHeight ?? defaultHeight) : 0
+      agents: agentsOpen ? (agentsHeight ?? defaultHeight) : 0,
+      skills: skillsOpen ? (skillsHeight ?? defaultHeight) : 0
     }
   }, [
     getAvailableContentHeight,
     tasksOpen,
     filesOpen,
     agentsOpen,
+    skillsOpen,
     tasksHeight,
     filesHeight,
-    agentsHeight
+    agentsHeight,
+    skillsHeight
   ])
 
   // Handle resize between tasks and the next open section
@@ -286,6 +318,53 @@ export function RightPanel(): React.JSX.Element {
     [getContentHeights, getAvailableContentHeight, tasksOpen, tasksHeight]
   )
 
+  // Handle resize between agents and skills
+  const handleAgentsResize = useCallback(
+    (totalDelta: number) => {
+      if (!dragStartHeights.current) {
+        const currentHeights = getContentHeights()
+        dragStartHeights.current = { ...currentHeights }
+      }
+
+      const start = dragStartHeights.current
+      const available = getAvailableContentHeight()
+      const usedByUpperPanels = (tasksOpen ? start.tasks : 0) + (filesOpen ? start.files : 0)
+      const maxForAgentsAndSkills = available - usedByUpperPanels
+
+      let newAgentsHeight = start.agents + totalDelta
+      let newSkillsHeight = start.skills - totalDelta
+
+      if (newAgentsHeight < MIN_CONTENT_HEIGHT) {
+        newAgentsHeight = MIN_CONTENT_HEIGHT
+        newSkillsHeight = start.skills + (start.agents - MIN_CONTENT_HEIGHT)
+      }
+      if (newSkillsHeight < MIN_CONTENT_HEIGHT) {
+        newSkillsHeight = MIN_CONTENT_HEIGHT
+        newAgentsHeight = start.agents + (start.skills - MIN_CONTENT_HEIGHT)
+      }
+
+      if (newAgentsHeight + newSkillsHeight > maxForAgentsAndSkills) {
+        const excess = newAgentsHeight + newSkillsHeight - maxForAgentsAndSkills
+        if (totalDelta > 0) {
+          newSkillsHeight = Math.max(MIN_CONTENT_HEIGHT, newSkillsHeight - excess)
+        } else {
+          newAgentsHeight = Math.max(MIN_CONTENT_HEIGHT, newAgentsHeight - excess)
+        }
+      }
+
+      setAgentsHeight(newAgentsHeight)
+      setSkillsHeight(newSkillsHeight)
+
+      if (newAgentsHeight < COLLAPSE_THRESHOLD) {
+        setAgentsOpen(false)
+      }
+      if (newSkillsHeight < COLLAPSE_THRESHOLD) {
+        setSkillsOpen(false)
+      }
+    },
+    [getContentHeights, getAvailableContentHeight, tasksOpen, filesOpen]
+  )
+
   // Reset drag start on mouse up
   useEffect(() => {
     const handleMouseUp = (): void => {
@@ -300,10 +379,11 @@ export function RightPanel(): React.JSX.Element {
     setTasksHeight(null)
     setFilesHeight(null)
     setAgentsHeight(null)
-  }, [tasksOpen, filesOpen, agentsOpen])
+    setSkillsHeight(null)
+  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen])
 
   // Calculate heights in an effect (refs can't be accessed during render)
-  const [heights, setHeights] = useState({ tasks: 0, files: 0, agents: 0 })
+  const [heights, setHeights] = useState<PanelHeights>({ tasks: 0, files: 0, agents: 0, skills: 0 })
   useEffect(() => {
     setHeights(getContentHeights())
   }, [getContentHeights])
@@ -352,7 +432,7 @@ export function RightPanel(): React.JSX.Element {
       {filesOpen && agentsOpen && <ResizeHandle onDrag={handleFilesResize} />}
 
       {/* AGENTS */}
-      <div className="flex flex-col shrink-0">
+      <div className="flex flex-col shrink-0 border-b border-border">
         <SectionHeader
           title="代理"
           icon={GitBranch}
@@ -363,6 +443,25 @@ export function RightPanel(): React.JSX.Element {
         {agentsOpen && (
           <div className="overflow-auto" style={{ height: heights.agents }}>
             <AgentsContent />
+          </div>
+        )}
+      </div>
+
+      {/* Resize handle after AGENTS */}
+      {agentsOpen && skillsOpen && <ResizeHandle onDrag={handleAgentsResize} />}
+
+      {/* SKILLS */}
+      <div className="flex flex-col shrink-0">
+        <SectionHeader
+          title="技能"
+          icon={Sparkles}
+          badge={skills.length}
+          isOpen={skillsOpen}
+          onToggle={() => setSkillsOpen((prev) => !prev)}
+        />
+        {skillsOpen && (
+          <div className="overflow-auto" style={{ height: heights.skills }}>
+            <SkillsContent skills={skills} />
           </div>
         )}
       </div>
@@ -459,9 +558,7 @@ function TasksContent(): React.JSX.Element {
               ) : (
                 <ChevronRight className="size-3.5" />
               )}
-              <span className="tracking-wider font-medium">
-                已完成 ({doneItems.length})
-              </span>
+              <span className="tracking-wider font-medium">已完成 ({doneItems.length})</span>
             </button>
             {completedExpanded && (
               <div className="space-y-2 pl-5 mb-3">
@@ -868,8 +965,7 @@ const FileTreeNode = memo(
     // 4. The onToggle callback changed
     return (
       prevProps.node === nextProps.node &&
-      prevProps.expanded.has(prevProps.node.path) ===
-        nextProps.expanded.has(nextProps.node.path) &&
+      prevProps.expanded.has(prevProps.node.path) === nextProps.expanded.has(nextProps.node.path) &&
       prevProps.openFile === nextProps.openFile &&
       prevProps.onToggle === nextProps.onToggle &&
       prevProps.depth === nextProps.depth
@@ -969,6 +1065,33 @@ function AgentsContent(): React.JSX.Element {
           </div>
           {agent.description && (
             <p className="text-xs text-muted-foreground mt-1">{agent.description}</p>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SkillsContent({ skills }: { skills: SkillMetadata[] }): React.JSX.Element {
+  if (skills.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
+        <Sparkles className="size-8 mb-2 opacity-50" />
+        <span>暂无技能</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-3 space-y-2">
+      {skills.map((skill) => (
+        <div key={skill.name} className="p-3 rounded-sm border border-border">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Sparkles className="size-3.5 text-amber-500 shrink-0" />
+            <span className="flex-1 truncate">{skill.name}</span>
+          </div>
+          {skill.description && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
           )}
         </div>
       ))}

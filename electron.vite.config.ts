@@ -1,5 +1,5 @@
 import { resolve } from "path"
-import { readFileSync, copyFileSync, existsSync, mkdirSync } from "fs"
+import { readFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
 import { defineConfig } from "electron-vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
@@ -21,6 +21,28 @@ function copyResources(): { name: string; closeBundle: () => void } {
         }
         copyFileSync(srcIcon, destIcon)
       }
+
+      // Copy skills directory
+      const srcSkills = resolve("skills")
+      const destSkills = resolve("out/skills")
+      if (existsSync(srcSkills)) {
+        copyDirRecursive(srcSkills, destSkills)
+      }
+    }
+  }
+}
+
+function copyDirRecursive(src: string, dest: string): void {
+  if (!existsSync(dest)) {
+    mkdirSync(dest, { recursive: true })
+  }
+  for (const entry of readdirSync(src)) {
+    const srcPath = resolve(src, entry)
+    const destPath = resolve(dest, entry)
+    if (statSync(srcPath).isDirectory()) {
+      copyDirRecursive(srcPath, destPath)
+    } else {
+      copyFileSync(srcPath, destPath)
     }
   }
 }

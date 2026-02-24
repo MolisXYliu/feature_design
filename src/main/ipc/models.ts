@@ -11,7 +11,17 @@ import type {
   WorkspaceFileParams
 } from "../types"
 import { startWatching, stopWatching } from "../services/workspace-watcher"
-import { getOpenworkDir, getApiKey, setApiKey, deleteApiKey, hasApiKey } from "../storage"
+import {
+  getOpenworkDir,
+  getApiKey,
+  setApiKey,
+  deleteApiKey,
+  hasApiKey,
+  getCustomModelPublicConfig,
+  setCustomModelConfig,
+  deleteCustomModelConfig
+} from "../storage"
+import type { CustomModelConfig } from "../storage"
 
 // Store for non-sensitive settings only (no encryption needed)
 const store = new Store({
@@ -23,7 +33,8 @@ const store = new Store({
 const PROVIDERS: Omit<Provider, "hasApiKey">[] = [
   { id: "anthropic", name: "Anthropic" },
   { id: "openai", name: "OpenAI" },
-  { id: "google", name: "Google" }
+  { id: "google", name: "Google" },
+  { id: "custom", name: "Custom" }
 ]
 
 // Available models configuration (updated Jan 2026)
@@ -207,11 +218,24 @@ const AVAILABLE_MODELS: ModelConfig[] = [
 export function registerModelHandlers(ipcMain: IpcMain): void {
   // List available models
   ipcMain.handle("models:list", async () => {
-    // Check which models have API keys configured
-    return AVAILABLE_MODELS.map((model) => ({
+    const models = AVAILABLE_MODELS.map((model) => ({
       ...model,
       available: hasApiKey(model.provider)
     }))
+
+    const customConfig = getCustomModelPublicConfig()
+    if (customConfig) {
+      models.push({
+        id: `custom:${customConfig.model}`,
+        name: customConfig.model,
+        provider: "custom",
+        model: customConfig.model,
+        description: customConfig.baseUrl,
+        available: customConfig.hasApiKey
+      })
+    }
+
+    return models
   })
 
   // Get default model
@@ -245,6 +269,19 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       ...provider,
       hasApiKey: hasApiKey(provider.id)
     }))
+  })
+
+  // Custom model configuration
+  ipcMain.handle("models:getCustomConfig", async () => {
+    return getCustomModelPublicConfig()
+  })
+
+  ipcMain.handle("models:setCustomConfig", async (_event, config: CustomModelConfig) => {
+    setCustomModelConfig(config)
+  })
+
+  ipcMain.handle("models:deleteCustomConfig", async () => {
+    deleteCustomModelConfig()
   })
 
   // Sync version info

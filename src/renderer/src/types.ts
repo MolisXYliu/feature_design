@@ -24,7 +24,7 @@ export interface Run {
 }
 
 // Provider configuration
-export type ProviderId = "anthropic" | "openai" | "google" | "ollama"
+export type ProviderId = "anthropic" | "openai" | "google" | "ollama" | "custom"
 
 export interface Provider {
   id: ProviderId
@@ -130,4 +130,15 @@ export interface GrepMatch {
   path: string
   line: number
   text: string
+}
+
+export interface SkillMetadata {
+  name: string
+  description: string
+  path: string
+  source: "user" | "project"
+  license?: string | null
+  compatibility?: string | null
+  metadata?: Record<string, string>
+  allowedTools?: string[]
 }
