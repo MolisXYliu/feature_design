@@ -122,7 +122,7 @@ function App(): React.JSX.Element {
             }}
             className="flex items-center gap-1.5"
           >
-            <svg className="size-4 translate-y-px" viewBox="0 0 120 120" fill="none">
+            <svg className="size-5 translate-y-px" viewBox="0 0 120 120" fill="none">
               <defs>
                 <linearGradient id="title-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stopColor="#ff4d4d"/>
