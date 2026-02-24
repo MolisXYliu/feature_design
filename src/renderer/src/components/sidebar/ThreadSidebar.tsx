@@ -204,7 +204,7 @@ export function ThreadSidebar(): React.JSX.Element {
       </ScrollArea>
 
       {/* Overview Toggle */}
-      <div className="p-2 border-t border-border">
+      <div className="p-2">
         <Button
           variant="ghost"
           size="sm"

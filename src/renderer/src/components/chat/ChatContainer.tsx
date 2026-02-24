@@ -376,7 +376,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       </ScrollArea>
 
       {/* Input */}
-      <div className="border-t border-border p-4">
+      <div className="p-4">
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
@@ -385,9 +385,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Message..."
+                placeholder="输入消息..."
                 disabled={isLoading}
-                className="flex-1 min-w-0 resize-none rounded-lg border border-border bg-background-elevated px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 shadow-sm"
+                className="flex-1 min-w-0 resize-none rounded-xl border border-border bg-white px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 shadow-sm"
                 rows={1}
                 style={{ minHeight: "48px", maxHeight: "200px" }}
               />

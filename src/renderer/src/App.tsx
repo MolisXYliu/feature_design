@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
-import { TabbedPanel, TabBar } from "@/components/tabs"
+import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
-import { KanbanView, KanbanHeader } from "@/components/kanban"
+import { KanbanView } from "@/components/kanban"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -13,7 +13,7 @@ const LEFT_DEFAULT = 240
 
 const RIGHT_MIN = 250
 const RIGHT_MAX = 450
-const RIGHT_DEFAULT = 320
+const RIGHT_DEFAULT = 300
 
 function App(): React.JSX.Element {
   const { currentThreadId, loadThreads, createThread, showKanbanView } = useAppStore()
@@ -56,12 +56,12 @@ function App(): React.JSX.Element {
   const handleLeftResize = useCallback(
     (totalDelta: number) => {
       if (!dragStartWidths.current) {
-        dragStartWidths.current = { left: leftWidth, right: rightWidth }
+        dragStartWidths.current = { left: leftWidth, right: 0 }
       }
       const newWidth = dragStartWidths.current.left + totalDelta
       setLeftWidth(Math.min(LEFT_MAX, Math.max(leftMinWidth, newWidth)))
     },
-    [leftWidth, rightWidth, leftMinWidth]
+    [leftWidth, leftMinWidth]
   )
 
   const handleRightResize = useCallback(
@@ -112,81 +112,58 @@ function App(): React.JSX.Element {
 
   return (
     <ThreadProvider>
-      <div className="flex h-screen overflow-hidden bg-background">
-        {/* Fixed app title - centered at top */}
-        <div
-          className="app-badge"
-          style={{
-            top: `${6 / zoomLevel}px`,
-            left: "50%",
-            transform: `translateX(-50%) scale(${1 / zoomLevel})`,
-            transformOrigin: "top center"
-          }}
-        >
-          <span className="app-badge-name">Cmb Cowork</span>
+      <div className="flex flex-col h-screen overflow-hidden bg-background">
+        {/* Titlebar - spans full width */}
+        <div className="flex h-9 w-full shrink-0 app-drag-region items-center justify-center border-b border-border">
+          <span
+            className="app-badge-name"
+            style={{
+              transform: `scale(${1 / zoomLevel})`,
+              transformOrigin: "center center"
+            }}
+          >
+            Cmb Cowork
+          </span>
         </div>
 
-        {/* Left + Center column */}
-        <div className="flex flex-col flex-1 min-w-0">
-          {/* Titlebar row with tabs integrated */}
-          <div className="flex h-9 w-full shrink-0 app-drag-region">
-            {/* Left section - spacer for traffic lights + badge (matches left sidebar width) */}
-            <div style={{ width: leftWidth }} className="shrink-0 bg-sidebar" />
-
-            {/* Resize handle spacer */}
-            <div className="w-[1px] shrink-0" />
-
-            {/* Center section - Tab bar or Kanban header */}
-            <div className="flex-1 min-w-0 bg-background border-b border-border">
-              {showKanbanView ? (
-                <KanbanHeader className="h-full" />
-              ) : (
-                currentThreadId && <TabBar className="h-full border-b-0" />
-              )}
-            </div>
+        {/* Main content below titlebar */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left Sidebar */}
+          <div style={{ width: leftWidth }} className="shrink-0">
+            <ThreadSidebar />
           </div>
 
-          {/* Main content area */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Left Sidebar - Thread List */}
-            <div style={{ width: leftWidth }} className="shrink-0">
-              <ThreadSidebar />
-            </div>
+          <ResizeHandle onDrag={handleLeftResize} />
 
-            <ResizeHandle onDrag={handleLeftResize} />
-
-            {showKanbanView ? (
-              /* Kanban View - replaces center and right panels */
+          {showKanbanView ? (
+            <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
+              <KanbanView />
+            </main>
+          ) : (
+            <>
+              {/* Center - Content Panel */}
               <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
-                <KanbanView />
+                {currentThreadId ? (
+                  <TabbedPanel threadId={currentThreadId} showTabBar={false} />
+                ) : (
+                  <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                    选择或创建一个任务开始
+                  </div>
+                )}
               </main>
-            ) : (
-              <>
-                {/* Center - Content Panel (Agent Chat + File Viewer) */}
-                <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
-                  {currentThreadId ? (
-                    <TabbedPanel threadId={currentThreadId} showTabBar={false} />
-                  ) : (
-                    <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                      Select or create a thread to begin
-                    </div>
-                  )}
-                </main>
-              </>
-            )}
-          </div>
+            </>
+          )}
+
+          {!showKanbanView && (
+            <>
+              <ResizeHandle onDrag={handleRightResize} />
+              {/* Right Panel - floating style */}
+              <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
+                <RightPanel />
+              </div>
+            </>
+          )}
         </div>
-
-        {!showKanbanView && (
-          <>
-            <ResizeHandle onDrag={handleRightResize} />
-
-            {/* Right Panel - Status Panels (full height) */}
-            <div style={{ width: rightWidth }} className="shrink-0">
-              <RightPanel />
-            </div>
-          </>
-        )}
       </div>
     </ThreadProvider>
   )

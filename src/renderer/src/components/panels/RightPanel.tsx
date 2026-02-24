@@ -311,7 +311,7 @@ export function RightPanel(): React.JSX.Element {
   return (
     <aside
       ref={containerRef}
-      className="flex h-full w-full flex-col border-l border-border bg-sidebar overflow-hidden"
+      className="flex h-full w-full flex-col bg-background rounded-xl shadow-sm border border-border/60 overflow-hidden"
     >
       {/* TASKS */}
       <div className="flex flex-col shrink-0 border-b border-border">
