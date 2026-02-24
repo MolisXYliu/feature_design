@@ -7,8 +7,7 @@ import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 
-// Badge requires ~235 screen pixels to display with comfortable margin
-const BADGE_MIN_SCREEN_WIDTH = 235
+const LEFT_MIN = 180
 const LEFT_MAX = 350
 const LEFT_DEFAULT = 240
 
@@ -52,15 +51,7 @@ function App(): React.JSX.Element {
     return () => window.removeEventListener("resize", updateZoom)
   }, [])
 
-  // Calculate zoom-compensated minimum width to always contain the badge
-  const leftMinWidth = Math.ceil(BADGE_MIN_SCREEN_WIDTH / zoomLevel)
-
-  // Enforce minimum width when zoom changes
-  useEffect(() => {
-    if (leftWidth < leftMinWidth) {
-      setLeftWidth(leftMinWidth)
-    }
-  }, [leftMinWidth, leftWidth])
+  const leftMinWidth = LEFT_MIN
 
   const handleLeftResize = useCallback(
     (totalDelta: number) => {
@@ -122,20 +113,17 @@ function App(): React.JSX.Element {
   return (
     <ThreadProvider>
       <div className="flex h-screen overflow-hidden bg-background">
-        {/* Fixed app badge - zoom independent position and size */}
+        {/* Fixed app title - centered at top */}
         <div
           className="app-badge"
           style={{
-            // Compensate both position and scale for zoom
-            // Target screen position: top 14px, left 82px (just past traffic lights)
-            top: `${14 / zoomLevel}px`,
-            left: `${82 / zoomLevel}px`,
-            transform: `scale(${1 / zoomLevel})`,
-            transformOrigin: "top left"
+            top: `${6 / zoomLevel}px`,
+            left: "50%",
+            transform: `translateX(-50%) scale(${1 / zoomLevel})`,
+            transformOrigin: "top center"
           }}
         >
-          <span className="app-badge-name">OPENWORK</span>
-          <span className="app-badge-version">{__APP_VERSION__}</span>
+          <span className="app-badge-name">Cmb Cowork</span>
         </div>
 
         {/* Left + Center column */}

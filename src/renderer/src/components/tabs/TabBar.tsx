@@ -1,4 +1,4 @@
-import { Bot, X, FileCode, FileText, FileJson, File } from "lucide-react"
+import { X, FileCode, FileText, FileJson, File } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
 import { useThreadState, type OpenFile } from "@/lib/thread-context"
@@ -29,20 +29,6 @@ export function TabBar({
         className
       )}
     >
-      {/* Agent Tab - Always first and prominent */}
-      <button
-        onClick={() => setActiveTab("agent")}
-        className={cn(
-          "flex items-center gap-2 px-4 h-full text-sm font-medium transition-colors shrink-0 border-r border-border",
-          activeTab === "agent"
-            ? "bg-primary/15 text-primary border-b-2 border-b-primary"
-            : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
-        )}
-      >
-        <Bot className="size-4" />
-        <span>Agent</span>
-      </button>
-
       {/* File Tabs */}
       {openFiles.map((file) => (
         <FileTab

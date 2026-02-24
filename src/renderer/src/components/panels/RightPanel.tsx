@@ -316,7 +316,7 @@ export function RightPanel(): React.JSX.Element {
       {/* TASKS */}
       <div className="flex flex-col shrink-0 border-b border-border">
         <SectionHeader
-          title="TASKS"
+          title="任务"
           icon={ListTodo}
           badge={todos.length}
           isOpen={tasksOpen}
@@ -335,7 +335,7 @@ export function RightPanel(): React.JSX.Element {
       {/* FILES */}
       <div className="flex flex-col shrink-0 border-b border-border">
         <SectionHeader
-          title="FILES"
+          title="文件"
           icon={FolderTree}
           badge={workspaceFiles.length}
           isOpen={filesOpen}
@@ -354,7 +354,7 @@ export function RightPanel(): React.JSX.Element {
       {/* AGENTS */}
       <div className="flex flex-col shrink-0">
         <SectionHeader
-          title="AGENTS"
+          title="代理"
           icon={GitBranch}
           badge={subagents.length}
           isOpen={agentsOpen}
@@ -376,25 +376,25 @@ const STATUS_CONFIG = {
   pending: {
     icon: Circle,
     badge: "outline" as const,
-    label: "PENDING",
+    label: "待处理",
     color: "text-muted-foreground"
   },
   in_progress: {
     icon: Clock,
     badge: "info" as const,
-    label: "IN PROGRESS",
+    label: "进行中",
     color: "text-status-info"
   },
   completed: {
     icon: CheckCircle2,
     badge: "nominal" as const,
-    label: "DONE",
+    label: "已完成",
     color: "text-status-nominal"
   },
   cancelled: {
     icon: XCircle,
     badge: "critical" as const,
-    label: "CANCELLED",
+    label: "已取消",
     color: "text-muted-foreground"
   }
 }
@@ -409,8 +409,8 @@ function TasksContent(): React.JSX.Element {
     return (
       <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
         <ListTodo className="size-8 mb-2 opacity-50" />
-        <span>No tasks yet</span>
-        <span className="text-xs mt-1">Tasks appear when the agent creates them</span>
+        <span>暂无任务</span>
+        <span className="text-xs mt-1">代理创建任务后会显示在这里</span>
       </div>
     )
   }
@@ -432,7 +432,7 @@ function TasksContent(): React.JSX.Element {
       {/* Progress bar */}
       <div className="p-3 border-b border-border/50">
         <div className="flex items-center justify-between mb-1.5 text-xs">
-          <span className="text-muted-foreground">PROGRESS</span>
+          <span className="text-muted-foreground">进度</span>
           <span className="font-mono">
             {done}/{total}
           </span>
@@ -459,8 +459,8 @@ function TasksContent(): React.JSX.Element {
               ) : (
                 <ChevronRight className="size-3.5" />
               )}
-              <span className="uppercase tracking-wider font-medium">
-                Completed ({doneItems.length})
+              <span className="tracking-wider font-medium">
+                已完成 ({doneItems.length})
               </span>
             </button>
             {completedExpanded && (
@@ -601,7 +601,7 @@ function FilesContent(): React.JSX.Element {
           className="text-[10px] text-muted-foreground truncate flex-1"
           title={workspacePath || undefined}
         >
-          {workspacePath ? workspacePath.split("/").pop() : "No folder linked"}
+          {workspacePath ? workspacePath.split("/").pop() : "未关联文件夹"}
         </span>
         <Button
           variant="ghost"
@@ -612,11 +612,11 @@ function FilesContent(): React.JSX.Element {
           title={
             workspaceFiles.length > 0
               ? workspacePath
-                ? `Sync to ${workspacePath}`
-                : "Sync files to disk"
+                ? `同步到 ${workspacePath}`
+                : "同步文件到磁盘"
               : workspacePath
-                ? `Change folder`
-                : "Link sync folder"
+                ? "更换文件夹"
+                : "关联同步文件夹"
           }
         >
           {syncing ? (
@@ -629,7 +629,7 @@ function FilesContent(): React.JSX.Element {
             <FolderSync className="size-3" />
           )}
           <span className="ml-1">
-            {workspaceFiles.length > 0 ? "Sync" : workspacePath ? "Change" : "Link"}
+            {workspaceFiles.length > 0 ? "同步" : workspacePath ? "更换" : "关联"}
           </span>
         </Button>
       </div>
@@ -638,11 +638,11 @@ function FilesContent(): React.JSX.Element {
       {workspaceFiles.length === 0 ? (
         <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4 flex-1">
           <FolderTree className="size-8 mb-2 opacity-50" />
-          <span>No workspace files</span>
+          <span>暂无工作区文件</span>
           <span className="text-xs mt-1">
             {workspacePath
-              ? `Linked to ${workspacePath.split("/").pop()}`
-              : 'Click "Link" to set a sync folder'}
+              ? `已关联 ${workspacePath.split("/").pop()}`
+              : '点击"关联"设置同步文件夹'}
           </span>
         </div>
       ) : (
@@ -942,8 +942,8 @@ function AgentsContent(): React.JSX.Element {
     return (
       <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
         <GitBranch className="size-8 mb-2 opacity-50" />
-        <span>No subagent tasks</span>
-        <span className="text-xs mt-1">Subagents appear when spawned</span>
+        <span>暂无子代理任务</span>
+        <span className="text-xs mt-1">子代理启动后会显示在这里</span>
       </div>
     )
   }

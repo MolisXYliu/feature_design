@@ -64,9 +64,9 @@
 :root {
   /* Foundation */
   --radius: 8px;
-  --background: #F5F0E8;
-  --background-elevated: #FAF7F2;
-  --background-interactive: #EDE6DA;
+  --background: #EDE8DE;
+  --background-elevated: #E8E3D9;
+  --background-interactive: #E5DED2;
   --foreground: #292524;
 
   /* Borders */
@@ -76,14 +76,14 @@
   --ring: #B8956A;
 
   /* Text hierarchy */
-  --muted: #EDE8E0;
+  --muted: #E5DFD5;
   --muted-foreground: #78716C;
   --tertiary-foreground: #A8A29E;
 
   /* Semantic mapping for shadcn compatibility */
-  --card: #FAF7F2;
+  --card: #E8E3D9;
   --card-foreground: #292524;
-  --popover: #FDFCFA;
+  --popover: #E8E3D9;
   --popover-foreground: #292524;
   --primary: #C4956A;
   --primary-foreground: #FFFFFF;
@@ -377,19 +377,15 @@
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  border-radius: 3px;
-  background-color: var(--sidebar);
-  border: 1px solid var(--border);
   line-height: 1;
   pointer-events: none;
   -webkit-app-region: drag;
 }
 
 .app-badge-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.02em;
   color: var(--foreground);
   line-height: 1;
 }

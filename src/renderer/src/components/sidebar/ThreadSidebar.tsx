@@ -113,12 +113,12 @@ function ThreadListItem({
       <ContextMenuContent>
         <ContextMenuItem onClick={onStartEditing}>
           <Pencil className="size-4 mr-2" />
-          Rename
+          重命名
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={onDelete}>
           <Trash2 className="size-4 mr-2" />
-          Delete
+          删除
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -172,7 +172,7 @@ export function ThreadSidebar(): React.JSX.Element {
           onClick={handleNewThread}
         >
           <Plus className="size-4" />
-          New Thread
+          新任务
         </Button>
       </div>
 
@@ -197,7 +197,7 @@ export function ThreadSidebar(): React.JSX.Element {
 
           {threads.length === 0 && (
             <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-              No threads yet
+              暂无任务
             </div>
           )}
         </div>
@@ -212,7 +212,7 @@ export function ThreadSidebar(): React.JSX.Element {
           onClick={() => setShowKanbanView(true)}
         >
           <LayoutGrid className="size-4" />
-          Overview
+          总览
         </Button>
       </div>
     </aside>
