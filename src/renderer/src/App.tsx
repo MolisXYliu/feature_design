@@ -144,7 +144,7 @@ function App(): React.JSX.Element {
         </div>
 
         {/* Main content below titlebar */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden bg-grid-subtle">
           {/* Left Sidebar */}
           <div style={{ width: leftWidth }} className="shrink-0">
             <ThreadSidebar />

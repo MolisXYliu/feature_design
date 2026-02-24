@@ -40,7 +40,7 @@ export function MessageBubble({
 
       // Use streaming markdown for assistant messages, plain text for user messages
       if (isUser) {
-        return <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+        return <div className="whitespace-pre-wrap text-[15px] leading-7 text-foreground/95">{message.content}</div>
       }
       return <StreamingMarkdown isStreaming={isStreaming}>{message.content}</StreamingMarkdown>
     }
@@ -52,7 +52,7 @@ export function MessageBubble({
           // Use streaming markdown for assistant text blocks
           if (isUser) {
             return (
-              <div key={index} className="whitespace-pre-wrap text-sm">
+              <div key={index} className="whitespace-pre-wrap text-[15px] leading-7 text-foreground/95">
                 {block.text}
               </div>
             )

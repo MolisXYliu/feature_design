@@ -297,7 +297,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 overflow-hidden bg-grid-subtle">
+    <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">

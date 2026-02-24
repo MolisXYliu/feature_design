@@ -31,8 +31,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { Todo, SkillMetadata } from "@/types"
 
-const HEADER_HEIGHT = 40 // px
+const HEADER_HEIGHT = 52 // px
 const HANDLE_HEIGHT = 6 // px
+const SECTION_GAP = 8 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
 
@@ -56,7 +57,7 @@ function SectionHeader({
   return (
     <button
       onClick={onToggle}
-      className="flex items-center gap-2 px-3 py-2.5 text-section-header hover:bg-background-interactive transition-colors shrink-0 w-full"
+      className="flex items-center gap-3 px-5 py-3 text-section-header hover:bg-background-interactive/60 transition-colors shrink-0 w-full"
       style={{ height: HEADER_HEIGHT }}
     >
       <ChevronRight
@@ -65,10 +66,10 @@ function SectionHeader({
           isOpen && "rotate-90"
         )}
       />
-      <Icon className="size-4" />
-      <span className="flex-1 text-left text-base font-bold text-black">{title}</span>
+      <Icon className="size-4.5 text-foreground/70" />
+      <span className="flex-1 text-left text-[16px] font-semibold leading-none">{title}</span>
       {badge !== undefined && badge > 0 && (
-        <span className="text-[10px] text-muted-foreground tabular-nums">{badge}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">{badge}</span>
       )}
     </button>
   )
@@ -110,10 +111,10 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="group bg-border/50 hover:bg-primary/30 active:bg-primary/50 transition-colors cursor-row-resize flex items-center justify-center shrink-0 select-none"
+      className="group bg-transparent hover:bg-border/50 active:bg-border/70 transition-colors cursor-row-resize flex items-center justify-center shrink-0 select-none rounded-sm"
       style={{ height: HANDLE_HEIGHT }}
     >
-      <GripHorizontal className="h-4 w-8 text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+      <GripHorizontal className="h-4 w-8 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
     </div>
   )
 }
@@ -166,6 +167,8 @@ export function RightPanel(): React.JSX.Element {
 
     const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen]
     let used = HEADER_HEIGHT * 4
+    // Fixed visual gaps between section blocks (任务/文件/代理/技能)
+    used += SECTION_GAP * 3
 
     // Count handles between consecutive open panels
     let handles = 0
@@ -388,13 +391,18 @@ export function RightPanel(): React.JSX.Element {
     setHeights(getContentHeights())
   }, [getContentHeights])
 
+  const allPanelsClosed = !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen
+
   return (
     <aside
       ref={containerRef}
-      className="flex h-full w-full flex-col bg-background rounded-xl shadow-sm border border-border/60 overflow-hidden"
+      className={cn(
+        "flex w-full flex-col bg-transparent overflow-hidden",
+        allPanelsClosed ? "h-auto self-start" : "h-full"
+      )}
     >
       {/* TASKS */}
-      <div className="flex flex-col shrink-0 border-b border-border">
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95">
         <SectionHeader
           title="任务"
           icon={ListTodo}
@@ -413,7 +421,7 @@ export function RightPanel(): React.JSX.Element {
       {tasksOpen && (filesOpen || agentsOpen) && <ResizeHandle onDrag={handleTasksResize} />}
 
       {/* FILES */}
-      <div className="flex flex-col shrink-0 border-b border-border">
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
           title="文件"
           icon={FolderTree}
@@ -432,7 +440,7 @@ export function RightPanel(): React.JSX.Element {
       {filesOpen && agentsOpen && <ResizeHandle onDrag={handleFilesResize} />}
 
       {/* AGENTS */}
-      <div className="flex flex-col shrink-0 border-b border-border">
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
           title="代理"
           icon={GitBranch}
@@ -451,7 +459,7 @@ export function RightPanel(): React.JSX.Element {
       {agentsOpen && skillsOpen && <ResizeHandle onDrag={handleAgentsResize} />}
 
       {/* SKILLS */}
-      <div className="flex flex-col shrink-0">
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
           title="技能"
           icon={Sparkles}

@@ -239,13 +239,13 @@
 }
 
 .right-panel-scroll::-webkit-scrollbar-thumb {
-  background: var(--border-emphasis);
+  background: #9d968d;
   border-radius: 9999px;
   min-height: 120px;
 }
 
 .right-panel-scroll::-webkit-scrollbar-thumb:hover {
-  background: #a8a29e;
+  background: #868076;
 }
 
 /* Subtle grid background for chat area */
@@ -259,8 +259,11 @@
 
 /* Streaming markdown styles */
 .streaming-markdown {
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.85;
+  color: color-mix(in srgb, var(--foreground) 94%, transparent);
+  font-weight: 400;
+  letter-spacing: 0.005em;
 }
 
 .streaming-markdown p {
@@ -319,7 +322,7 @@
   background-color: var(--background);
   padding: 0.125em 0.25em;
   border-radius: 3px;
-  font-size: 0.875em;
+  font-size: 0.84em;
 }
 
 .streaming-markdown pre {
@@ -411,11 +414,12 @@
 }
 
 .app-badge-name {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--foreground) 92%, transparent);
   line-height: 1;
+  text-rendering: optimizeLegibility;
 }
 
 .app-badge-version {
