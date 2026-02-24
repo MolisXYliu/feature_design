@@ -94,7 +94,7 @@ export function MessageBubble({
       {/* Left avatar column - shows for agent/tool */}
       <div className="w-8 shrink-0">
         {!isUser && (
-          <div className="flex size-8 items-center justify-center rounded-sm bg-status-info/10 text-status-info">
+          <div className="flex size-8 items-center justify-center rounded-full bg-primary/15 text-primary">
             {getIcon()}
           </div>
         )}
@@ -106,7 +106,7 @@ export function MessageBubble({
 
         {content && (
           <div
-            className={cn("rounded-sm p-3 overflow-hidden", isUser ? "bg-primary/10" : "bg-card")}
+            className={cn("rounded-lg p-3 overflow-hidden", isUser ? "bg-secondary" : "bg-card shadow-sm border border-border")}
           >
             {content}
           </div>
@@ -137,7 +137,7 @@ export function MessageBubble({
       {/* Right avatar column - shows for user */}
       <div className="w-8 shrink-0">
         {isUser && (
-          <div className="flex size-8 items-center justify-center rounded-sm bg-primary/10 text-primary">
+          <div className="flex size-8 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
             {getIcon()}
           </div>
         )}

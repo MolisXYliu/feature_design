@@ -4,7 +4,7 @@ import { createHighlighterCore, type HighlighterCore } from "shiki/core"
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
 
 // Import bundled themes and languages
-import githubDarkDefault from "shiki/themes/github-dark-default.mjs"
+import githubLight from "shiki/themes/github-light.mjs"
 import langTypescript from "shiki/langs/typescript.mjs"
 import langTsx from "shiki/langs/tsx.mjs"
 import langJavascript from "shiki/langs/javascript.mjs"
@@ -24,7 +24,7 @@ let highlighterPromise: Promise<HighlighterCore> | null = null
 async function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [githubDarkDefault],
+      themes: [githubLight],
       langs: [
         langTypescript,
         langTsx,
@@ -119,7 +119,7 @@ export function CodeViewer({ filePath, content }: CodeViewerProps) {
 
         const html = highlighter.codeToHtml(content, {
           lang: language,
-          theme: "github-dark-default"
+          theme: "github-light"
         })
 
         if (cancelled) return

@@ -387,7 +387,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 onKeyDown={handleKeyDown}
                 placeholder="Message..."
                 disabled={isLoading}
-                className="flex-1 min-w-0 resize-none rounded-sm border border-border bg-background px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                className="flex-1 min-w-0 resize-none rounded-lg border border-border bg-background-elevated px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 shadow-sm"
                 rows={1}
                 style={{ minHeight: "48px", maxHeight: "200px" }}
               />

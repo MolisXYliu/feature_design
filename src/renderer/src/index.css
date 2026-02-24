@@ -63,51 +63,51 @@
 
 :root {
   /* Foundation */
-  --radius: 3px;
-  --background: #0d0d0f;
-  --background-elevated: #141418;
-  --background-interactive: #1c1c22;
-  --foreground: #e8e8ec;
+  --radius: 8px;
+  --background: #F5F0E8;
+  --background-elevated: #FAF7F2;
+  --background-interactive: #EDE6DA;
+  --foreground: #292524;
 
   /* Borders */
-  --border: #2a2a32;
-  --border-emphasis: #3a3a45;
-  --input: #2a2a32;
-  --ring: #3b82f6;
+  --border: #DDD6CA;
+  --border-emphasis: #C8BFB0;
+  --input: #DDD6CA;
+  --ring: #B8956A;
 
   /* Text hierarchy */
-  --muted: #141418;
-  --muted-foreground: #8a8a96;
-  --tertiary-foreground: #5a5a66;
+  --muted: #EDE8E0;
+  --muted-foreground: #78716C;
+  --tertiary-foreground: #A8A29E;
 
   /* Semantic mapping for shadcn compatibility */
-  --card: #141418;
-  --card-foreground: #e8e8ec;
-  --popover: #141418;
-  --popover-foreground: #e8e8ec;
-  --primary: #3b82f6;
-  --primary-foreground: #e8e8ec;
-  --secondary: #1c1c22;
-  --secondary-foreground: #e8e8ec;
-  --accent: #fb923c;
-  --accent-foreground: #0d0d0f;
-  --destructive: #e53e3e;
+  --card: #FAF7F2;
+  --card-foreground: #292524;
+  --popover: #FDFCFA;
+  --popover-foreground: #292524;
+  --primary: #C4956A;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EDE6DA;
+  --secondary-foreground: #44403C;
+  --accent: #D4956A;
+  --accent-foreground: #FFFFFF;
+  --destructive: #DC2626;
 
   /* Status colors */
-  --status-critical: #e53e3e;
-  --status-warning: #f59e0b;
-  --status-nominal: #22c55e;
-  --status-info: #3b82f6;
+  --status-critical: #DC2626;
+  --status-warning: #D97706;
+  --status-nominal: #16A34A;
+  --status-info: #2563EB;
 
   /* Sidebar */
-  --sidebar: #141418;
-  --sidebar-foreground: #e8e8ec;
-  --sidebar-primary: #3b82f6;
-  --sidebar-primary-foreground: #e8e8ec;
-  --sidebar-accent: #1c1c22;
-  --sidebar-accent-foreground: #e8e8ec;
-  --sidebar-border: #2a2a32;
-  --sidebar-ring: #3b82f6;
+  --sidebar: #EDE8DE;
+  --sidebar-foreground: #292524;
+  --sidebar-primary: #C4956A;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E0D9CE;
+  --sidebar-accent-foreground: #292524;
+  --sidebar-border: #DDD6CA;
+  --sidebar-ring: #C4956A;
 }
 
 @layer base {
@@ -116,7 +116,7 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   }
 }
 
@@ -203,21 +203,21 @@
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--background);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
+  background: var(--border-emphasis);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-emphasis);
+  background: #A8A29E;
 }
 
 /* Hide scrollbar but allow scrolling */
@@ -378,8 +378,8 @@
   gap: 8px;
   padding: 4px 10px;
   border-radius: 3px;
-  background-color: color-mix(in srgb, var(--primary) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  background-color: var(--sidebar);
+  border: 1px solid var(--border);
   line-height: 1;
   pointer-events: none;
   -webkit-app-region: drag;
@@ -390,14 +390,14 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--primary);
+  color: var(--foreground);
   line-height: 1;
 }
 
 .app-badge-version {
   font-size: 11px;
-  font-family: "JetBrains Mono", monospace;
-  color: color-mix(in srgb, var(--primary) 70%, transparent);
+  font-family: ui-monospace, monospace;
+  color: var(--muted-foreground);
   line-height: 1;
 }
 
@@ -415,7 +415,7 @@
 }
 
 .shiki-content code {
-  font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
   font-size: inherit;
   background: transparent !important;
 }
