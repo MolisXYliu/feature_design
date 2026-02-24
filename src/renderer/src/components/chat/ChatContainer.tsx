@@ -1,17 +1,32 @@
-import { useRef, useEffect, useMemo, useCallback } from "react"
-import { Send, Square, Loader2, AlertCircle, X } from "lucide-react"
+import { useRef, useEffect, useMemo, useCallback, useState } from "react"
+import {
+  Send,
+  Square,
+  Loader2,
+  AlertCircle,
+  X,
+  FileText,
+  FileSpreadsheet,
+  Presentation,
+  Search,
+  Palette,
+  FlaskConical,
+  Code2,
+  LayoutTemplate,
+  Settings2,
+  ChevronDown,
+  ChevronUp
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { useCurrentThread, useThreadStream } from "@/lib/thread-context"
 import { MessageBubble } from "./MessageBubble"
 import { ModelSwitcher } from "./ModelSwitcher"
-import { Folder } from "lucide-react"
 import { WorkspacePicker } from "./WorkspacePicker"
-import { selectWorkspaceFolder } from "@/lib/workspace-utils"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
-import type { Message } from "@/types"
+import type { Message, SkillMetadata } from "@/types"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -35,6 +50,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const scrollRef = useRef<HTMLDivElement>(null)
   const isAtBottomRef = useRef(true)
   const isComposingRef = useRef(false)
+  const [skills, setSkills] = useState<SkillMetadata[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(true)
+  const [showAllSkills, setShowAllSkills] = useState(false)
 
   const { threads, loadThreads, generateTitleForFirstMessage } = useAppStore()
 
@@ -49,8 +67,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     currentModel,
     draftInput: input,
     setTodos,
-    setWorkspaceFiles,
-    setWorkspacePath,
     setPendingApproval,
     appendMessage,
     setError,
@@ -297,9 +313,214 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     await stream?.stop()
   }
 
-  const handleSelectWorkspaceFromEmptyState = async (): Promise<void> => {
-    await selectWorkspaceFolder(threadId, setWorkspacePath, setWorkspaceFiles, () => {}, undefined)
-  }
+  useEffect(() => {
+    let mounted = true
+
+    const loadSkills = async (): Promise<void> => {
+      try {
+        const loadedSkills = await window.api.skills.list()
+        if (!mounted) return
+        setSkills([...loadedSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+      } catch (error) {
+        console.error("[ChatContainer] Failed to load skills:", error)
+        if (mounted) setSkills([])
+      } finally {
+        if (mounted) setSkillsLoading(false)
+      }
+    }
+
+    void loadSkills()
+
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const getSkillId = useCallback((skill: SkillMetadata): string => {
+    const fromPath = skill.path.split("/").slice(-2, -1)[0]
+    return (fromPath || skill.name || "").toLowerCase()
+  }, [])
+
+  const buildSkillPrompt = useCallback(
+    (skill: SkillMetadata): string => {
+      const skillId = getSkillId(skill)
+      const promptMap: Record<string, string> = {
+        "algorithmic-art": [
+          "请帮我生成一套算法艺术方案。",
+          "主题与风格：<请补充>",
+          "输出：创意说明、实现步骤、可直接运行的代码。"
+        ].join("\n"),
+        "brand-guidelines": [
+          "请按品牌规范统一这份内容的视觉风格。",
+          "品牌调性：<请补充>",
+          "输出：改造方案、关键规范、最终可用结果。"
+        ].join("\n"),
+        "canvas-design": [
+          "请设计一张视觉海报。",
+          "场景与受众：<请补充>",
+          "输出：版式思路、配色建议、成稿方案。"
+        ].join("\n"),
+        docx: [
+          "请帮我处理 Word 文档。",
+          "具体需求：<新建/修改/排版/提取内容>",
+          "输出：处理结果与修改要点。"
+        ].join("\n"),
+        "doc-coauthoring": [
+          "请和我一起协作完善这份文档。",
+          "文档类型与目标：<请补充>",
+          "输出：结构优化建议和可直接使用的正文。"
+        ].join("\n"),
+        "frontend-design": [
+          "请帮我设计并实现前端界面。",
+          "页面目标与风格：<请补充>",
+          "输出：页面方案、关键代码、验证方式。"
+        ].join("\n"),
+        "internal-comms": [
+          "请帮我撰写内部沟通稿。",
+          "沟通对象与目的：<请补充>",
+          "输出：清晰版本正文与可选精简版。"
+        ].join("\n"),
+        "mcp-builder": [
+          "请帮我搭建一个 MCP 服务。",
+          "目标能力与外部系统：<请补充>",
+          "输出：实现步骤、核心代码、联调说明。"
+        ].join("\n"),
+        pdf: [
+          "请帮我处理 PDF 文档。",
+          "具体操作：<提取/合并/拆分/转换/校对>",
+          "输出：处理结果与关键说明。"
+        ].join("\n"),
+        pptx: [
+          "请帮我制作或优化演示文稿。",
+          "主题与页数预期：<请补充>",
+          "输出：大纲、页面建议、可交付稿件。"
+        ].join("\n"),
+        "skill-creator": [
+          "请帮我创建一个新技能包。",
+          "技能用途与触发场景：<请补充>",
+          "输出：技能结构、说明文档、示例。"
+        ].join("\n"),
+        "slack-gif-creator": [
+          "请帮我制作一个用于 Slack 的动图。",
+          "内容主题：<请补充>",
+          "输出：制作方案、参数建议、成品要求。"
+        ].join("\n"),
+        "theme-factory": [
+          "请帮我应用统一主题风格。",
+          "应用对象：<文档/页面/演示稿>",
+          "输出：主题方案与落地结果。"
+        ].join("\n"),
+        "web-app-testing": [
+          "请帮我测试这个 Web 应用。",
+          "重点流程：<请补充>",
+          "输出：测试步骤、问题清单、修复建议。"
+        ].join("\n"),
+        "webapp-testing": [
+          "请帮我测试这个 Web 应用。",
+          "重点流程：<请补充>",
+          "输出：测试步骤、问题清单、修复建议。"
+        ].join("\n"),
+        "web-artifacts-builder": [
+          "请帮我构建一个交互页面。",
+          "功能目标：<请补充>",
+          "输出：页面结构、实现代码、使用说明。"
+        ].join("\n"),
+        xlsx: [
+          "请帮我处理表格数据。",
+          "任务内容：<清洗/计算/格式化/分析>",
+          "输出：处理结果、公式或规则说明。"
+        ].join("\n")
+      }
+      return (
+        promptMap[skillId] ||
+        [
+          "请帮我处理该技能相关任务。",
+          "需求说明：<请补充>",
+          "输出：结果、关键改动、验证方式。"
+        ].join("\n")
+      )
+    },
+    [getSkillId]
+  )
+
+  const getSkillSummary = useCallback(
+    (skill: SkillMetadata): string => {
+      const skillId = getSkillId(skill)
+      const summaryMap: Record<string, string> = {
+        "algorithmic-art": "生成艺术图案",
+        "brand-guidelines": "统一品牌风格",
+        "canvas-design": "设计视觉海报",
+        docx: "编辑 Word 文档",
+        "doc-coauthoring": "协作撰写文档",
+        "frontend-design": "设计前端界面",
+        "internal-comms": "撰写内部沟通稿",
+        "mcp-builder": "搭建 MCP 服务",
+        pdf: "处理 PDF 文档",
+        pptx: "制作演示文稿",
+        "skill-creator": "创建新技能包",
+        "slack-gif-creator": "制作 Slack 动图",
+        "theme-factory": "应用主题风格",
+        "web-app-testing": "测试 Web 应用",
+        "webapp-testing": "测试 Web 应用",
+        "web-artifacts-builder": "构建交互页面",
+        xlsx: "处理表格数据"
+      }
+      return summaryMap[skillId] || "完成专项任务"
+    },
+    [getSkillId]
+  )
+
+  const getSkillIcon = useCallback(
+    (skill: SkillMetadata): React.JSX.Element => {
+      const skillId = getSkillId(skill)
+      const iconMap: Record<string, React.JSX.Element> = {
+        "algorithmic-art": <Palette className="size-4" />,
+        "brand-guidelines": <Palette className="size-4" />,
+        "canvas-design": <LayoutTemplate className="size-4" />,
+        docx: <FileText className="size-4" />,
+        "doc-coauthoring": <FileText className="size-4" />,
+        "frontend-design": <LayoutTemplate className="size-4" />,
+        "internal-comms": <FileText className="size-4" />,
+        "mcp-builder": <Code2 className="size-4" />,
+        pdf: <FileText className="size-4" />,
+        pptx: <Presentation className="size-4" />,
+        "skill-creator": <Settings2 className="size-4" />,
+        "slack-gif-creator": <FlaskConical className="size-4" />,
+        "theme-factory": <Palette className="size-4" />,
+        "web-app-testing": <FlaskConical className="size-4" />,
+        "webapp-testing": <FlaskConical className="size-4" />,
+        "web-artifacts-builder": <LayoutTemplate className="size-4" />,
+        xlsx: <FileSpreadsheet className="size-4" />
+      }
+      return iconMap[skillId] || <Search className="size-4" />
+    },
+    [getSkillId]
+  )
+
+  const visibleSkillCards = useMemo(() => {
+    const source = showAllSkills ? skills : skills.slice(0, 8)
+
+    return source.map((skill) => ({
+      skill,
+      label: getSkillSummary(skill),
+      icon: getSkillIcon(skill)
+    }))
+  }, [showAllSkills, skills, getSkillSummary, getSkillIcon])
+
+  const handleUseSkillPrompt = useCallback(
+    (skill: SkillMetadata): void => {
+      const prompt = buildSkillPrompt(skill)
+      setInput(prompt)
+      requestAnimationFrame(() => {
+        const textarea = inputRef.current
+        if (!textarea) return
+        textarea.focus()
+        const cursor = prompt.length
+        textarea.setSelectionRange(cursor, cursor)
+      })
+    },
+    [buildSkillPrompt, setInput]
+  )
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -308,26 +529,54 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         <div className="p-4">
           <div className="max-w-3xl mx-auto space-y-4">
             {displayMessages.length === 0 && !isLoading && (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                <div className="text-section-header mb-2">新任务</div>
-                {workspacePath ? (
-                  <div className="text-sm">开始与代理对话</div>
-                ) : (
-                  <div className="text-sm text-center space-y-3">
-                    <div>
-                      <span className="text-amber-500">选择工作区文件夹</span>
-                      <span className="block text-xs mt-1 opacity-75">
-                        代理需要一个工作区来创建和修改文件
-                      </span>
+              <div className="pt-14 pb-8">
+                <div className="mb-6 flex items-center justify-start">
+                  <div className="text-2xl md:text-3xl font-bold tracking-tight text-foreground leading-none">
+                    我能帮你做什么？
+                  </div>
+                </div>
+
+                {skillsLoading ? (
+                  <div className="text-sm text-muted-foreground text-center py-10">正在加载技能列表...</div>
+                ) : skills.length === 0 ? null : (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {visibleSkillCards.map(({ skill, label, icon }) => (
+                        <button
+                          key={skill.path}
+                          type="button"
+                          onClick={() => handleUseSkillPrompt(skill)}
+                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              {icon}
+                            </div>
+                            <div className="text-xs text-foreground leading-5">{label}</div>
+                          </div>
+                        </button>
+                      ))}
                     </div>
-                    <button
-                      type="button"
-                      className="inline-flex items-center justify-center rounded-md border border-border bg-background px-2 h-7 text-xs gap-1.5 text-amber-500 hover:bg-accent/50 transition-color duration-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                      onClick={handleSelectWorkspaceFromEmptyState}
-                    >
-                      <Folder className="size-3.5" />
-                      <span className="max-w-[120px] truncate">选择工作区</span>
-                    </button>
+
+                    {skills.length > 8 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSkills((prev) => !prev)}
+                        className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                      >
+                        {showAllSkills ? (
+                          <>
+                            <ChevronUp className="size-3.5" />
+                            <span>收起</span>
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="size-3.5" />
+                            <span>展开更多（+{skills.length - 8}）</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

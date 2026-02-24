@@ -2,6 +2,7 @@ import { useCurrentThread } from "@/lib/thread-context"
 import { TabBar } from "./TabBar"
 import { FileViewer } from "./FileViewer"
 import { ChatContainer } from "@/components/chat/ChatContainer"
+import { ArrowLeft } from "lucide-react"
 
 interface TabbedPanelProps {
   threadId: string
@@ -9,7 +10,7 @@ interface TabbedPanelProps {
 }
 
 export function TabbedPanel({ threadId, showTabBar = true }: TabbedPanelProps): React.JSX.Element {
-  const { activeTab, openFiles } = useCurrentThread(threadId)
+  const { activeTab, openFiles, setActiveTab } = useCurrentThread(threadId)
 
   // Determine what to render based on active tab
   const isAgentTab = activeTab === "agent"
@@ -28,8 +29,20 @@ export function TabbedPanel({ threadId, showTabBar = true }: TabbedPanelProps): 
         {isAgentTab ? (
           <ChatContainer threadId={threadId} />
         ) : activeFile ? (
-          // Use key to force remount when file changes, ensuring fresh state
-          <FileViewer key={activeFile.path} filePath={activeFile.path} threadId={threadId} />
+          <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+            <div className="flex h-10 shrink-0 items-center border-b border-border/60 px-3">
+              <button
+                type="button"
+                onClick={() => setActiveTab("agent")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+              >
+                <ArrowLeft className="size-3.5" />
+                返回对话
+              </button>
+            </div>
+            {/* Use key to force remount when file changes, ensuring fresh state */}
+            <FileViewer key={activeFile.path} filePath={activeFile.path} threadId={threadId} />
+          </div>
         ) : (
           // Fallback - shouldn't happen but just in case
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
