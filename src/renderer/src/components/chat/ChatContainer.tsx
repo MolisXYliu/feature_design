@@ -223,7 +223,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     if (!input.trim() || isLoading || !stream) return
 
     if (!workspacePath) {
-      setError("Please select a workspace folder before sending messages.")
+      setError("请先选择一个工作区文件夹再发送消息。")
       return
     }
 
@@ -304,15 +304,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           <div className="max-w-3xl mx-auto space-y-4">
             {displayMessages.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                <div className="text-section-header mb-2">NEW THREAD</div>
+                <div className="text-section-header mb-2">新任务</div>
                 {workspacePath ? (
-                  <div className="text-sm">Start a conversation with the agent</div>
+                  <div className="text-sm">开始与代理对话</div>
                 ) : (
                   <div className="text-sm text-center space-y-3">
                     <div>
-                      <span className="text-amber-500">Select a workspace folder</span>
+                      <span className="text-amber-500">选择工作区文件夹</span>
                       <span className="block text-xs mt-1 opacity-75">
-                        The agent needs a workspace to create and modify files
+                        代理需要一个工作区来创建和修改文件
                       </span>
                     </div>
                     <button
@@ -321,7 +321,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                       onClick={handleSelectWorkspaceFromEmptyState}
                     >
                       <Folder className="size-3.5" />
-                      <span className="max-w-[120px] truncate">Select workspace</span>
+                      <span className="max-w-[120px] truncate">选择工作区</span>
                     </button>
                   </div>
                 )}
@@ -343,7 +343,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-muted-foreground text-sm">
                   <Loader2 className="size-4 animate-spin" />
-                  Agent is thinking...
+                  正在思考...
                 </div>
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
@@ -354,12 +354,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
               <div className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-4">
                 <AlertCircle className="size-5 text-destructive shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-destructive text-sm">Agent Error</div>
+                  <div className="font-medium text-destructive text-sm">代理出错</div>
                   <div className="text-sm text-muted-foreground mt-1 break-words">
                     {threadError}
                   </div>
                   <div className="text-xs text-muted-foreground mt-2">
-                    You can try sending a new message to continue the conversation.
+                    你可以尝试发送新消息继续对话。
                   </div>
                 </div>
                 <button

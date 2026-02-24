@@ -55,15 +55,15 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
         >
           <Folder className="size-3.5" />
           <span className="max-w-[120px] truncate">
-            {workspacePath ? folderName : "Select workspace"}
+            {workspacePath ? folderName : "选择工作区"}
           </span>
           <ChevronDown className="size-3 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-3" align="start">
         <div className="space-y-3">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Workspace Folder
+          <div className="text-xs font-medium text-muted-foreground tracking-wider">
+            工作区文件夹
           </div>
 
           {workspacePath ? (
@@ -75,7 +75,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                The agent will read and write files in this folder.
+                代理将在此文件夹中读写文件。
               </p>
               <Button
                 variant="outline"
@@ -84,14 +84,13 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                 onClick={handleSelectFolder}
                 disabled={loading}
               >
-                Change Folder
+                更换文件夹
               </Button>
             </div>
           ) : (
             <div className="space-y-2">
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Select a folder for the agent to work in. The agent will read and write files
-                directly to this location.
+                选择一个文件夹作为工作区，代理将直接在该位置读写文件。
               </p>
               <Button
                 variant="default"
@@ -101,7 +100,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                 disabled={loading}
               >
                 <Folder className="size-3.5 mr-1.5" />
-                Select Folder
+                选择文件夹
               </Button>
             </div>
           )}
