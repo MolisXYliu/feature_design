@@ -114,11 +114,7 @@ export function MessageBubble({
       </div>
 
       <div className="flex-1 min-w-0 space-y-2 overflow-hidden pl-7">
-        {content && (
-          <div className="rounded-lg p-3 overflow-hidden bg-card">
-            {content}
-          </div>
-        )}
+        {content && <div className="rounded-lg p-3 overflow-hidden">{content}</div>}
 
         {hasToolCalls && (
           <div className="space-y-2 overflow-hidden">

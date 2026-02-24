@@ -66,7 +66,7 @@ function SectionHeader({
         )}
       />
       <Icon className="size-4" />
-      <span className="flex-1 text-left">{title}</span>
+      <span className="flex-1 text-left text-base font-bold text-black">{title}</span>
       {badge !== undefined && badge > 0 && (
         <span className="text-[10px] text-muted-foreground tabular-nums">{badge}</span>
       )}
@@ -113,7 +113,7 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
       className="group bg-border/50 hover:bg-primary/30 active:bg-primary/50 transition-colors cursor-row-resize flex items-center justify-center shrink-0 select-none"
       style={{ height: HANDLE_HEIGHT }}
     >
-      <GripHorizontal className="size-4 text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+      <GripHorizontal className="h-4 w-8 text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
     </div>
   )
 }
@@ -403,7 +403,7 @@ export function RightPanel(): React.JSX.Element {
           onToggle={() => setTasksOpen((prev) => !prev)}
         />
         {tasksOpen && (
-          <div className="overflow-auto" style={{ height: heights.tasks }}>
+          <div className="overflow-auto right-panel-scroll" style={{ height: heights.tasks }}>
             <TasksContent />
           </div>
         )}
@@ -422,7 +422,7 @@ export function RightPanel(): React.JSX.Element {
           onToggle={() => setFilesOpen((prev) => !prev)}
         />
         {filesOpen && (
-          <div className="overflow-auto" style={{ height: heights.files }}>
+          <div className="overflow-auto right-panel-scroll" style={{ height: heights.files }}>
             <FilesContent />
           </div>
         )}
@@ -441,7 +441,7 @@ export function RightPanel(): React.JSX.Element {
           onToggle={() => setAgentsOpen((prev) => !prev)}
         />
         {agentsOpen && (
-          <div className="overflow-auto" style={{ height: heights.agents }}>
+          <div className="overflow-auto right-panel-scroll" style={{ height: heights.agents }}>
             <AgentsContent />
           </div>
         )}
@@ -460,7 +460,7 @@ export function RightPanel(): React.JSX.Element {
           onToggle={() => setSkillsOpen((prev) => !prev)}
         />
         {skillsOpen && (
-          <div className="overflow-auto" style={{ height: heights.skills }}>
+          <div className="overflow-auto right-panel-scroll" style={{ height: heights.skills }}>
             <SkillsContent skills={skills} />
           </div>
         )}

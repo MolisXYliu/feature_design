@@ -229,6 +229,34 @@
   display: none;
 }
 
+/* Longer scrollbar thumb only for right panel sections */
+.right-panel-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.right-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.right-panel-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-emphasis);
+  border-radius: 9999px;
+  min-height: 120px;
+}
+
+.right-panel-scroll::-webkit-scrollbar-thumb:hover {
+  background: #a8a29e;
+}
+
+/* Subtle grid background for chat area */
+.bg-grid-subtle {
+  background-color: var(--background);
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
 /* Streaming markdown styles */
 .streaming-markdown {
   font-size: 0.875rem;

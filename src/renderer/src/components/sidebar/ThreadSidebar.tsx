@@ -167,13 +167,13 @@ export function ThreadSidebar(): React.JSX.Element {
         <Button
           variant="ghost"
           size="sm"
-          className="w-full justify-start gap-2"
+          className="w-full justify-start gap-2 text-sm font-semibold"
           onClick={handleNewThread}
         >
           <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
             <Plus className="size-3" />
           </div>
-          新任务
+          <span className="text-black">新任务</span>
         </Button>
       </div>
 
