@@ -1090,19 +1090,54 @@ function SkillsContent({ skills }: { skills: SkillMetadata[] }): React.JSX.Eleme
     )
   }
 
+  const isProgrammingSkill = (skill: SkillMetadata): boolean => {
+    return skill.name.trim().toLowerCase() === "security-review"
+  }
+
+  const programmingSkills = skills.filter(isProgrammingSkill)
+  const generalSkills = skills.filter((skill) => !isProgrammingSkill(skill))
+
+  const renderSkillCard = (skill: SkillMetadata): React.JSX.Element => (
+    <div key={skill.name} className="p-3 rounded-sm border border-border">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <Sparkles className="size-3.5 text-amber-500 shrink-0" />
+        <span className="flex-1 truncate">{skill.name}</span>
+      </div>
+      {skill.description && (
+        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
+      )}
+    </div>
+  )
+
   return (
     <div className="p-3 space-y-2">
-      {skills.map((skill) => (
-        <div key={skill.name} className="p-3 rounded-sm border border-border">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Sparkles className="size-3.5 text-amber-500 shrink-0" />
-            <span className="flex-1 truncate">{skill.name}</span>
+      {generalSkills.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] text-muted-foreground tracking-wider font-medium">
+              通用场景
+            </span>
+            <Badge variant="outline" className="text-[10px] h-5">
+              {generalSkills.length}
+            </Badge>
           </div>
-          {skill.description && (
-            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
-          )}
+          {generalSkills.map(renderSkillCard)}
         </div>
-      ))}
+      )}
+
+      {programmingSkills.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] text-muted-foreground tracking-wider font-medium">
+              编程场景
+            </span>
+            <Badge variant="outline" className="text-[10px] h-5">
+              {programmingSkills.length}
+            </Badge>
+          </div>
+          {programmingSkills.map(renderSkillCard)}
+        </div>
+      )}
     </div>
   )
 }

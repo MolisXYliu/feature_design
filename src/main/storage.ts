@@ -126,15 +126,18 @@ export function hasApiKey(provider: string): boolean {
 
 // Skills directory — bundled with the app at project root /skills/
 export function getSkillsDir(): string {
-  // In dev: project root /skills/
-  // In production: {app resources}/skills/ (copied by build)
-  const devDir = join(__dirname, "..", "..", "skills")
-  if (existsSync(devDir)) return devDir
+  // Prefer workspace root /skills in development (cwd is project root in electron-vite dev).
+  const workspaceSkillsDir = join(process.cwd(), "skills")
+  if (existsSync(workspaceSkillsDir)) return workspaceSkillsDir
 
-  const prodDir = join(__dirname, "..", "..", "..", "skills")
-  if (existsSync(prodDir)) return prodDir
+  // Fallbacks for packaged/bundled layouts.
+  const bundledDir = join(__dirname, "..", "..", "skills")
+  if (existsSync(bundledDir)) return bundledDir
 
-  return devDir
+  const resourcesDir = join(__dirname, "..", "..", "..", "skills")
+  if (existsSync(resourcesDir)) return resourcesDir
+
+  return workspaceSkillsDir
 }
 
 export function getSkillsSources(): string[] {

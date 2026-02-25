@@ -52,7 +52,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const isComposingRef = useRef(false)
   const [skills, setSkills] = useState<SkillMetadata[]>([])
   const [skillsLoading, setSkillsLoading] = useState(true)
-  const [showAllSkills, setShowAllSkills] = useState(false)
+  const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
+  const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
 
   const { threads, loadThreads, generateTitleForFirstMessage } = useAppStore()
 
@@ -420,6 +421,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           "重点流程：<请补充>",
           "输出：测试步骤、问题清单、修复建议。"
         ].join("\n"),
+        "security-review": [
+          "请使用 security-review 技能对当前分支变更做安全审查。",
+          "要求：仅输出高置信度（>=8/10）的中高危漏洞，避免误报。",
+          "输出：按 漏洞标题/严重级别/影响文件与位置/利用路径/修复建议 的结构化报告。"
+        ].join("\n"),
         "web-artifacts-builder": [
           "请帮我构建一个交互页面。",
           "功能目标：<请补充>",
@@ -463,7 +469,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "web-app-testing": "测试 Web 应用",
         "webapp-testing": "测试 Web 应用",
         "web-artifacts-builder": "构建交互页面",
-        xlsx: "处理表格数据"
+        xlsx: "处理表格数据",
+        "security-review": "安全代码审查"
       }
       return summaryMap[skillId] || "完成专项任务"
     },
@@ -490,22 +497,44 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "web-app-testing": <FlaskConical className="size-4" />,
         "webapp-testing": <FlaskConical className="size-4" />,
         "web-artifacts-builder": <LayoutTemplate className="size-4" />,
-        xlsx: <FileSpreadsheet className="size-4" />
+        xlsx: <FileSpreadsheet className="size-4" />,
+        "security-review": <Code2 className="size-4" />
       }
       return iconMap[skillId] || <Search className="size-4" />
     },
     [getSkillId]
   )
 
-  const visibleSkillCards = useMemo(() => {
-    const source = showAllSkills ? skills : skills.slice(0, 8)
+  const isProgrammingSkill = useCallback(
+    (skill: SkillMetadata): boolean => getSkillId(skill) === "security-review",
+    [getSkillId]
+  )
+
+  const { generalSkills, programmingSkills } = useMemo(() => {
+    const general = skills.filter((skill) => !isProgrammingSkill(skill))
+    const programming = skills.filter(isProgrammingSkill)
+    return { generalSkills: general, programmingSkills: programming }
+  }, [skills, isProgrammingSkill])
+
+  const visibleGeneralSkillCards = useMemo(() => {
+    const source = showAllGeneralSkills ? generalSkills : generalSkills.slice(0, 8)
 
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
       icon: getSkillIcon(skill)
     }))
-  }, [showAllSkills, skills, getSkillSummary, getSkillIcon])
+  }, [showAllGeneralSkills, generalSkills, getSkillSummary, getSkillIcon])
+
+  const programmingSkillCards = useMemo(() => {
+    const source = showAllProgrammingSkills ? programmingSkills : programmingSkills.slice(0, 8)
+
+    return source.map((skill) => ({
+      skill,
+      label: getSkillSummary(skill),
+      icon: getSkillIcon(skill)
+    }))
+  }, [showAllProgrammingSkills, programmingSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
     (skill: SkillMetadata): void => {
@@ -540,31 +569,82 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   <div className="text-sm text-muted-foreground text-center py-10">正在加载技能列表...</div>
                 ) : skills.length === 0 ? null : (
                   <div className="space-y-3">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                      {visibleSkillCards.map(({ skill, label, icon }) => (
-                        <button
-                          key={skill.path}
-                          type="button"
-                          onClick={() => handleUseSkillPrompt(skill)}
-                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
-                              {icon}
-                            </div>
-                            <div className="text-xs text-foreground leading-5">{label}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+                    {programmingSkillCards.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                          编程场景
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {programmingSkillCards.map(({ skill, label, icon }) => (
+                            <button
+                              key={skill.path}
+                              type="button"
+                              onClick={() => handleUseSkillPrompt(skill)}
+                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                  {icon}
+                                </div>
+                                <div className="text-xs text-foreground leading-5">{label}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {programmingSkills.length > 8 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllProgrammingSkills((prev) => !prev)}
+                            className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                          >
+                            {showAllProgrammingSkills ? (
+                              <>
+                                <ChevronUp className="size-3.5" />
+                                <span>收起</span>
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="size-3.5" />
+                                <span>展开更多（+{programmingSkills.length - 8}）</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
 
-                    {skills.length > 8 && (
+                    {visibleGeneralSkillCards.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                          通用场景
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {visibleGeneralSkillCards.map(({ skill, label, icon }) => (
+                            <button
+                              key={skill.path}
+                              type="button"
+                              onClick={() => handleUseSkillPrompt(skill)}
+                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                  {icon}
+                                </div>
+                                <div className="text-xs text-foreground leading-5">{label}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {generalSkills.length > 8 && (
                       <button
                         type="button"
-                        onClick={() => setShowAllSkills((prev) => !prev)}
+                        onClick={() => setShowAllGeneralSkills((prev) => !prev)}
                         className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
                       >
-                        {showAllSkills ? (
+                        {showAllGeneralSkills ? (
                           <>
                             <ChevronUp className="size-3.5" />
                             <span>收起</span>
@@ -572,7 +652,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         ) : (
                           <>
                             <ChevronDown className="size-3.5" />
-                            <span>展开更多（+{skills.length - 8}）</span>
+                            <span>展开更多（+{generalSkills.length - 8}）</span>
                           </>
                         )}
                       </button>
