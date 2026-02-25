@@ -1090,8 +1090,23 @@ function SkillsContent({ skills }: { skills: SkillMetadata[] }): React.JSX.Eleme
     )
   }
 
+  const programmingSkillIds = new Set([
+    "security-review",
+    "code-review-expert",
+    "vercel-react-best-practices",
+    "audit-website",
+    "supabase-postgres-best-practices",
+    "typescript-advanced-types",
+    "api-design-principles",
+    "architecture-patterns",
+    "error-handling-patterns",
+    "planning-with-files",
+    "mcp-builder",
+    "webapp-testing",
+    "frontend-design"
+  ])
   const isProgrammingSkill = (skill: SkillMetadata): boolean => {
-    return skill.name.trim().toLowerCase() === "security-review"
+    return programmingSkillIds.has(skill.name.trim().toLowerCase())
   }
 
   const programmingSkills = skills.filter(isProgrammingSkill)

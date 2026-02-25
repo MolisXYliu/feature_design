@@ -15,7 +15,10 @@ import {
   LayoutTemplate,
   Settings2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ShieldCheck,
+  Database,
+  Layers
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -435,6 +438,51 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           "请帮我处理表格数据。",
           "任务内容：<清洗/计算/格式化/分析>",
           "输出：处理结果、公式或规则说明。"
+        ].join("\n"),
+        "code-review-expert": [
+          "请使用 code-review-expert 技能对当前 git 变更做结构化代码审查。",
+          "审查范围：SOLID 原则、安全漏洞、性能问题、错误处理、边界条件。",
+          "输出：按 P0-P3 严重级别分类的结构化报告，完成后询问是否修复。"
+        ].join("\n"),
+        "vercel-react-best-practices": [
+          "请基于 React 最佳实践审查/优化当前组件代码。",
+          "关注点：渲染性能、组合模式、状态管理、异步处理、打包优化。",
+          "输出：问题列表、优化建议、改造代码。"
+        ].join("\n"),
+        "audit-website": [
+          "请对以下网站做全面安全审计。",
+          "目标网址：<请补充>",
+          "输出：漏洞清单、风险等级、修复建议。"
+        ].join("\n"),
+        "supabase-postgres-best-practices": [
+          "请基于 PostgreSQL 最佳实践审查当前数据库设计或查询。",
+          "关注点：索引优化、RLS 安全策略、连接池、N+1 查询、分区策略。",
+          "输出：问题诊断、优化建议、改进 SQL。"
+        ].join("\n"),
+        "typescript-advanced-types": [
+          "请帮我优化 TypeScript 类型定义，运用高级类型技巧。",
+          "目标文件或模块：<请补充>",
+          "输出：类型改进方案、重构代码、类型安全提升说明。"
+        ].join("\n"),
+        "api-design-principles": [
+          "请基于 API 设计原则审查/设计当前接口。",
+          "API 类型：<REST / GraphQL>",
+          "输出：设计规范建议、接口定义、示例代码。"
+        ].join("\n"),
+        "architecture-patterns": [
+          "请基于架构模式对当前项目结构提出改进方案。",
+          "关注点：Clean Architecture、六边形架构、DDD 领域驱动设计。",
+          "输出：架构诊断、重构方案、目录结构建议。"
+        ].join("\n"),
+        "error-handling-patterns": [
+          "请审查当前代码的错误处理策略并提出改进。",
+          "关注点：异常层次、重试机制、熔断器、优雅降级。",
+          "输出：问题清单、模式建议、改进代码。"
+        ].join("\n"),
+        "planning-with-files": [
+          "请使用文件驱动规划方式管理当前复杂任务。",
+          "任务目标：<请补充>",
+          "输出：task_plan.md、findings.md、progress.md 三份规划文档。"
         ].join("\n")
       }
       return (
@@ -470,7 +518,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "webapp-testing": "测试 Web 应用",
         "web-artifacts-builder": "构建交互页面",
         xlsx: "处理表格数据",
-        "security-review": "安全代码审查"
+        "security-review": "安全代码审查",
+        "code-review-expert": "结构化代码审查",
+        "vercel-react-best-practices": "React 最佳实践",
+        "audit-website": "网站安全审计",
+        "supabase-postgres-best-practices": "PostgreSQL 优化",
+        "typescript-advanced-types": "TS 高级类型优化",
+        "api-design-principles": "API 设计原则",
+        "architecture-patterns": "架构模式设计",
+        "error-handling-patterns": "错误处理模式",
+        "planning-with-files": "文件驱动规划"
       }
       return summaryMap[skillId] || "完成专项任务"
     },
@@ -498,16 +555,45 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "webapp-testing": <FlaskConical className="size-4" />,
         "web-artifacts-builder": <LayoutTemplate className="size-4" />,
         xlsx: <FileSpreadsheet className="size-4" />,
-        "security-review": <Code2 className="size-4" />
+        "security-review": <Code2 className="size-4" />,
+        "code-review-expert": <Code2 className="size-4" />,
+        "vercel-react-best-practices": <Code2 className="size-4" />,
+        "audit-website": <ShieldCheck className="size-4" />,
+        "supabase-postgres-best-practices": <Database className="size-4" />,
+        "typescript-advanced-types": <Code2 className="size-4" />,
+        "api-design-principles": <Layers className="size-4" />,
+        "architecture-patterns": <Layers className="size-4" />,
+        "error-handling-patterns": <AlertCircle className="size-4" />,
+        "planning-with-files": <FileText className="size-4" />
       }
       return iconMap[skillId] || <Search className="size-4" />
     },
     [getSkillId]
   )
 
+  const programmingSkillIds = useMemo(
+    () =>
+      new Set([
+        "security-review",
+        "code-review-expert",
+        "vercel-react-best-practices",
+        "audit-website",
+        "supabase-postgres-best-practices",
+        "typescript-advanced-types",
+        "api-design-principles",
+        "architecture-patterns",
+        "error-handling-patterns",
+        "planning-with-files",
+        "mcp-builder",
+        "webapp-testing",
+        "frontend-design"
+      ]),
+    []
+  )
+
   const isProgrammingSkill = useCallback(
-    (skill: SkillMetadata): boolean => getSkillId(skill) === "security-review",
-    [getSkillId]
+    (skill: SkillMetadata): boolean => programmingSkillIds.has(getSkillId(skill)),
+    [getSkillId, programmingSkillIds]
   )
 
   const { generalSkills, programmingSkills } = useMemo(() => {
