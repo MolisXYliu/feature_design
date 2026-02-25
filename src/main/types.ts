@@ -80,7 +80,7 @@ export interface Run {
 }
 
 // Provider configuration
-export type ProviderId = "anthropic" | "openai" | "google" | "ollama" | "custom"
+export type ProviderId = "custom"
 
 export interface Provider {
   id: ProviderId

@@ -1,19 +1,10 @@
 import { homedir } from "os"
 import { join } from "path"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
-import type { ProviderId } from "./types"
-
 const OPENWORK_DIR = join(homedir(), ".openwork")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
-// Environment variable names for each provider
-const ENV_VAR_NAMES: Record<ProviderId, string> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  google: "GOOGLE_API_KEY",
-  ollama: "",
-  custom: "CUSTOM_API_KEY"
-}
+const CUSTOM_API_KEY_ENV = "CUSTOM_API_KEY"
 
 export function getOpenworkDir(): string {
   if (!existsSync(OPENWORK_DIR)) {
@@ -83,41 +74,34 @@ function writeEnvFile(env: Record<string, string>): void {
   writeFileSync(getEnvFilePath(), lines.join("\n") + "\n")
 }
 
-// API key management
+// API key management (custom provider only)
 export function getApiKey(provider: string): string | undefined {
-  const envVarName = ENV_VAR_NAMES[provider]
-  if (!envVarName) return undefined
+  if (provider !== "custom") return undefined
 
-  // Check .env file first
   const env = parseEnvFile()
-  if (env[envVarName]) return env[envVarName]
+  if (env[CUSTOM_API_KEY_ENV]) return env[CUSTOM_API_KEY_ENV]
 
-  // Fall back to process environment
-  return process.env[envVarName]
+  return process.env[CUSTOM_API_KEY_ENV]
 }
 
 export function setApiKey(provider: string, apiKey: string): void {
-  const envVarName = ENV_VAR_NAMES[provider]
-  if (!envVarName) return
+  if (provider !== "custom") return
 
   const env = parseEnvFile()
-  env[envVarName] = apiKey
+  env[CUSTOM_API_KEY_ENV] = apiKey
   writeEnvFile(env)
 
-  // Also set in process.env for current session
-  process.env[envVarName] = apiKey
+  process.env[CUSTOM_API_KEY_ENV] = apiKey
 }
 
 export function deleteApiKey(provider: string): void {
-  const envVarName = ENV_VAR_NAMES[provider]
-  if (!envVarName) return
+  if (provider !== "custom") return
 
   const env = parseEnvFile()
-  delete env[envVarName]
+  delete env[CUSTOM_API_KEY_ENV]
   writeEnvFile(env)
 
-  // Also clear from process.env
-  delete process.env[envVarName]
+  delete process.env[CUSTOM_API_KEY_ENV]
 }
 
 export function hasApiKey(provider: string): boolean {
@@ -150,15 +134,46 @@ export interface CustomModelConfig {
   baseUrl: string
   model: string
   apiKey?: string
+  maxTokens?: number
 }
+
+export const DEFAULT_MAX_TOKENS = 128_000
+export const MIN_MAX_TOKENS = 32_000
+export const MAX_MAX_TOKENS = 128_000
 
 export interface CustomModelPublicConfig {
   baseUrl: string
   model: string
   hasApiKey: boolean
+  maxTokens: number
 }
 
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
+
+function normalizeMaxTokens(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_MAX_TOKENS
+  }
+
+  return Math.min(MAX_MAX_TOKENS, Math.max(MIN_MAX_TOKENS, Math.floor(value)))
+}
+
+function assertValidMaxTokens(value: unknown): number {
+  if (value === undefined || value === null) {
+    return DEFAULT_MAX_TOKENS
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`maxTokens 必须是数字，范围为 ${MIN_MAX_TOKENS} 到 ${MAX_MAX_TOKENS}`)
+  }
+
+  const parsed = Math.floor(value)
+  if (parsed < MIN_MAX_TOKENS || parsed > MAX_MAX_TOKENS) {
+    throw new Error(`maxTokens 超出范围，必须在 ${MIN_MAX_TOKENS} 到 ${MAX_MAX_TOKENS} 之间`)
+  }
+
+  return parsed
+}
 
 export function getCustomModelConfig(): CustomModelConfig | null {
   getOpenworkDir()
@@ -177,7 +192,8 @@ export function getCustomModelConfig(): CustomModelConfig | null {
     return {
       baseUrl: config.baseUrl,
       model: config.model,
-      apiKey: getApiKey("custom")
+      apiKey: getApiKey("custom"),
+      maxTokens: normalizeMaxTokens(config.maxTokens)
     }
   } catch {
     return null
@@ -186,13 +202,15 @@ export function getCustomModelConfig(): CustomModelConfig | null {
 
 export function setCustomModelConfig(config: CustomModelConfig): void {
   getOpenworkDir()
+  const validatedMaxTokens = assertValidMaxTokens(config.maxTokens)
   // Keep model metadata in JSON and keep secret in .env only.
   writeFileSync(
     CUSTOM_MODEL_FILE,
     JSON.stringify(
       {
         baseUrl: config.baseUrl,
-        model: config.model
+        model: config.model,
+        maxTokens: validatedMaxTokens
       },
       null,
       2
@@ -210,7 +228,8 @@ export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
   return {
     baseUrl: config.baseUrl,
     model: config.model,
-    hasApiKey: hasApiKey("custom")
+    hasApiKey: hasApiKey("custom"),
+    maxTokens: normalizeMaxTokens(config.maxTokens)
   }
 }
 

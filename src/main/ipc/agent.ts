@@ -68,7 +68,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         return
       }
 
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId })
+      const effectiveModelId = modelId || (metadata.model as string | undefined)
+      const agent = await createAgentRuntime({
+        threadId,
+        workspacePath,
+        modelId: effectiveModelId
+      })
       const humanMessage = new HumanMessage(message)
 
       // Stream with both modes:
@@ -160,7 +165,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     activeRuns.set(threadId, abortController)
 
     try {
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId })
+      const effectiveModelId = modelId || (metadata.model as string | undefined)
+      const agent = await createAgentRuntime({
+        threadId,
+        workspacePath,
+        modelId: effectiveModelId
+      })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,

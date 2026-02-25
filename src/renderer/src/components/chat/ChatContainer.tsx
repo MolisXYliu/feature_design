@@ -57,7 +57,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
 
-  const { threads, loadThreads, generateTitleForFirstMessage } = useAppStore()
+  const { threads, models, loadThreads, generateTitleForFirstMessage } = useAppStore()
 
   // Get persisted thread state and actions from context
   const {
@@ -241,6 +241,22 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!input.trim() || isLoading || !stream) return
+
+    if (!currentModel) {
+      setError("请先在下方选择模型后再发送消息。")
+      return
+    }
+
+    const selectedModel = models.find((m) => m.id === currentModel)
+    if (!selectedModel) {
+      setError("当前线程模型不存在，请重新选择模型。")
+      return
+    }
+
+    if (!selectedModel.available) {
+      setError("当前模型不可用，请先在模型配置中设置 API 密钥。")
+      return
+    }
 
     if (!workspacePath) {
       setError("请先选择一个工作区文件夹再发送消息。")

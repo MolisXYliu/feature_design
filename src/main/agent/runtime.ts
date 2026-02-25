@@ -1,13 +1,17 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { createDeepAgent } from "deepagents"
-import { getDefaultModel } from "../ipc/models"
-import { getApiKey, getThreadCheckpointPath, getSkillsSources, getCustomModelConfig } from "../storage"
+import {
+  getApiKey,
+  getThreadCheckpointPath,
+  getSkillsSources,
+  getCustomModelConfig,
+  DEFAULT_MAX_TOKENS
+} from "../storage"
 
-import { ChatAnthropic } from "@langchain/anthropic"
 import { ChatOpenAI } from "@langchain/openai"
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai"
 import { SqlJsSaver } from "../checkpointer/sqljs-saver"
 import { LocalSandbox } from "./local-sandbox"
+import { summarizationMiddleware } from "langchain"
 
 import type * as _lcTypes from "langchain"
 import type * as _lcMessages from "@langchain/core/messages"
@@ -59,76 +63,37 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
   }
 }
 
-// Get the appropriate model instance based on configuration
+// Get the model instance from custom model configuration
 function getModelInstance(
+  customConfig: NonNullable<ReturnType<typeof getCustomModelConfig>>,
   modelId?: string
-): ChatAnthropic | ChatOpenAI | ChatGoogleGenerativeAI | string {
-  const model = modelId || getDefaultModel()
-  console.log("[Runtime] Using model:", model)
-
-  // Determine provider from model ID
-  if (model.startsWith("claude")) {
-    const apiKey = getApiKey("anthropic")
-    console.log("[Runtime] Anthropic API key present:", !!apiKey)
-    if (!apiKey) {
-      throw new Error("Anthropic API key not configured")
-    }
-    return new ChatAnthropic({
-      model,
-      anthropicApiKey: apiKey
-    })
-  } else if (
-    model.startsWith("gpt") ||
-    model.startsWith("o1") ||
-    model.startsWith("o3") ||
-    model.startsWith("o4")
-  ) {
-    const apiKey = getApiKey("openai")
-    console.log("[Runtime] OpenAI API key present:", !!apiKey)
-    if (!apiKey) {
-      throw new Error("OpenAI API key not configured")
-    }
-    return new ChatOpenAI({
-      model,
-      apiKey
-    })
-  } else if (model.startsWith("gemini")) {
-    const apiKey = getApiKey("google")
-    console.log("[Runtime] Google API key present:", !!apiKey)
-    if (!apiKey) {
-      throw new Error("Google API key not configured")
-    }
-    return new ChatGoogleGenerativeAI({
-      model,
-      apiKey: apiKey
-    })
-  } else if (model.startsWith("custom:")) {
-    const customConfig = getCustomModelConfig()
-    if (!customConfig) {
-      throw new Error("Custom model not configured")
-    }
-    const apiKey = getApiKey("custom") || customConfig.apiKey
-    if (!apiKey) {
-      throw new Error("Custom API key not configured")
-    }
-    console.log("[Runtime] Custom model:", customConfig.model, "baseUrl:", customConfig.baseUrl)
-    return new ChatOpenAI({
-      model: customConfig.model,
-      apiKey,
-      configuration: {
-        baseURL: customConfig.baseUrl
-      }
-    })
+): ChatOpenAI {
+  const apiKey = getApiKey("custom") || customConfig.apiKey
+  if (!apiKey) {
+    throw new Error("Custom API key not configured")
   }
 
-  // Default to model string (let deepagents handle it)
-  return model
+  const resolvedModel = modelId?.startsWith("custom:")
+    ? modelId.slice("custom:".length)
+    : customConfig.model
+  if (!resolvedModel.trim()) {
+    throw new Error("Custom model name is empty. Please configure a valid model name in Settings.")
+  }
+  console.log("[Runtime] Custom model:", resolvedModel, "baseUrl:", customConfig.baseUrl)
+
+  return new ChatOpenAI({
+    model: resolvedModel,
+    apiKey,
+    configuration: {
+      baseURL: customConfig.baseUrl
+    }
+  })
 }
 
 export interface CreateAgentRuntimeOptions {
   /** Thread ID - REQUIRED for per-thread checkpointing */
   threadId: string
-  /** Model ID to use (defaults to configured default model) */
+  /** Optional model ID from thread/runtime config */
   modelId?: string
   /** Workspace path - REQUIRED for agent to operate on files */
   workspacePath: string
@@ -138,7 +103,7 @@ export interface CreateAgentRuntimeOptions {
 export type AgentRuntime = ReturnType<typeof createDeepAgent>
 
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
-  const { threadId, modelId, workspacePath } = options
+  const { threadId, workspacePath, modelId } = options
 
   if (!threadId) {
     throw new Error("Thread ID is required for checkpointing.")
@@ -154,8 +119,13 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
   console.log("[Runtime] Thread ID:", threadId)
   console.log("[Runtime] Workspace path:", workspacePath)
 
-  const model = getModelInstance(modelId)
-  console.log("[Runtime] Model instance created:", typeof model)
+  const customConfig = getCustomModelConfig()
+  if (!customConfig) {
+    throw new Error("Custom model not configured. Please configure a model in Settings.")
+  }
+
+  const model = getModelInstance(customConfig, modelId)
+  console.log("[Runtime] Model instance created")
 
   const checkpointer = await getCheckpointer(threadId)
   console.log("[Runtime] Checkpointer ready for thread:", threadId)
@@ -184,17 +154,26 @@ The workspace root is: ${workspacePath}`
   const skillsSources = getSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
 
+  const maxTokens = customConfig?.maxTokens ?? DEFAULT_MAX_TOKENS
+  const summarizationTrigger = Math.floor(maxTokens * 0.85)
+  console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", summarizationTrigger)
+
+  const customSummarization = summarizationMiddleware({
+    model,
+    trigger: { tokens: summarizationTrigger },
+    keep: { messages: 6 }
+  }) as ReturnType<typeof summarizationMiddleware> & { name: string }
+  customSummarization.name = "CustomSummarizationMiddleware"
+
   const agent = createDeepAgent({
     model,
     checkpointer,
     backend,
     systemPrompt,
-    // Custom filesystem prompt for absolute paths (requires deepagents update)
     filesystemSystemPrompt,
-    // Require human approval for all shell commands
     interruptOn: { execute: true },
-    // Load skills from user-level and project-level directories
-    skills: skillsSources.length > 0 ? skillsSources : undefined
+    skills: skillsSources.length > 0 ? skillsSources : undefined,
+    middleware: [customSummarization]
   } as Parameters<typeof createDeepAgent>[0])
 
   console.log("[Runtime] Deep agent created with LocalSandbox at:", workspacePath)

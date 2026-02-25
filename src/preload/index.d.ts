@@ -52,11 +52,22 @@ interface CustomAPI {
     setDefault: (modelId: string) => Promise<void>
     setApiKey: (provider: string, apiKey: string) => Promise<void>
     getApiKey: (provider: string) => Promise<string | null>
-    getCustomConfig: () => Promise<{ baseUrl: string; model: string; hasApiKey: boolean } | null>
+    getTokenLimits: () => Promise<{
+      defaultMaxTokens: number
+      minMaxTokens: number
+      maxMaxTokens: number
+    }>
+    getCustomConfig: () => Promise<{
+      baseUrl: string
+      model: string
+      hasApiKey: boolean
+      maxTokens: number
+    } | null>
     setCustomConfig: (config: {
       baseUrl: string
       model: string
       apiKey?: string
+      maxTokens?: number
     }) => Promise<void>
     deleteCustomConfig: () => Promise<void>
   }

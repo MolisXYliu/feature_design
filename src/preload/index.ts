@@ -42,12 +42,10 @@ const api = {
       ipcRenderer.on(channel, handler)
       ipcRenderer.send("agent:invoke", { threadId, message, modelId })
 
-      // Return cleanup function
       return () => {
         ipcRenderer.removeListener(channel, handler)
       }
     },
-    // Stream agent events for useStream transport
     streamAgent: (
       threadId: string,
       message: string,
@@ -66,14 +64,12 @@ const api = {
 
       ipcRenderer.on(channel, handler)
 
-      // If we have a command, it might be a resume/retry
       if (command) {
         ipcRenderer.send("agent:resume", { threadId, command, modelId })
       } else {
         ipcRenderer.send("agent:invoke", { threadId, message, modelId })
       }
 
-      // Return cleanup function
       return () => {
         ipcRenderer.removeListener(channel, handler)
       }
@@ -146,20 +142,38 @@ const api = {
     getApiKey: (provider: string): Promise<string | null> => {
       return ipcRenderer.invoke("models:getApiKey", provider)
     },
+    getTokenLimits: (): Promise<{
+      defaultMaxTokens: number
+      minMaxTokens: number
+      maxMaxTokens: number
+    }> => {
+      return ipcRenderer.invoke("models:getTokenLimits") as Promise<{
+        defaultMaxTokens: number
+        minMaxTokens: number
+        maxMaxTokens: number
+      }>
+    },
     deleteApiKey: (provider: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteApiKey", provider)
     },
-    getCustomConfig: (): Promise<{ baseUrl: string; model: string; hasApiKey: boolean } | null> => {
+    getCustomConfig: (): Promise<{
+      baseUrl: string
+      model: string
+      hasApiKey: boolean
+      maxTokens: number
+    } | null> => {
       return ipcRenderer.invoke("models:getCustomConfig") as Promise<{
         baseUrl: string
         model: string
         hasApiKey: boolean
+        maxTokens: number
       } | null>
     },
     setCustomConfig: (config: {
       baseUrl: string
       model: string
       apiKey?: string
+      maxTokens?: number
     }): Promise<void> => {
       return ipcRenderer.invoke("models:setCustomConfig", config) as Promise<void>
     },

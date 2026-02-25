@@ -98,7 +98,6 @@ export class ElectronIPCTransport implements UseStreamTransport {
     this.activeSubagents.clear()
     this.accumulatedToolCalls.clear()
     this.completedToolCallsByName.clear()
-    // Extract thread ID and model ID from config
     const threadId = payload.config?.configurable?.thread_id
     const modelId = payload.config?.configurable?.model_id as string | undefined
     if (!threadId) {
@@ -164,7 +163,6 @@ export class ElectronIPCTransport implements UseStreamTransport {
       }
     }
 
-    // Start the stream via IPC (pass modelId to use the selected model)
     const cleanup = window.api.agent.streamAgent(
       threadId,
       message,

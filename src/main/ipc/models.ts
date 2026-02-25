@@ -19,7 +19,10 @@ import {
   hasApiKey,
   getCustomModelPublicConfig,
   setCustomModelConfig,
-  deleteCustomModelConfig
+  deleteCustomModelConfig,
+  DEFAULT_MAX_TOKENS,
+  MIN_MAX_TOKENS,
+  MAX_MAX_TOKENS
 } from "../storage"
 import type { CustomModelConfig } from "../storage"
 
@@ -29,199 +32,19 @@ const store = new Store({
   cwd: getOpenworkDir()
 })
 
-// Provider configurations
 const PROVIDERS: Omit<Provider, "hasApiKey">[] = [
-  { id: "anthropic", name: "Anthropic" },
-  { id: "openai", name: "OpenAI" },
-  { id: "google", name: "Google" },
   { id: "custom", name: "Custom" }
 ]
 
-// Available models configuration (updated Jan 2026)
-const AVAILABLE_MODELS: ModelConfig[] = [
-  // Anthropic Claude 4.5 series (latest as of Jan 2026)
-  {
-    id: "claude-opus-4-5-20251101",
-    name: "Claude Opus 4.5",
-    provider: "anthropic",
-    model: "claude-opus-4-5-20251101",
-    description: "Premium model with maximum intelligence",
-    available: true
-  },
-  {
-    id: "claude-sonnet-4-5-20250929",
-    name: "Claude Sonnet 4.5",
-    provider: "anthropic",
-    model: "claude-sonnet-4-5-20250929",
-    description: "Best balance of intelligence, speed, and cost for agents",
-    available: true
-  },
-  {
-    id: "claude-haiku-4-5-20251001",
-    name: "Claude Haiku 4.5",
-    provider: "anthropic",
-    model: "claude-haiku-4-5-20251001",
-    description: "Fastest model with near-frontier intelligence",
-    available: true
-  },
-  // Anthropic Claude legacy models
-  {
-    id: "claude-opus-4-1-20250805",
-    name: "Claude Opus 4.1",
-    provider: "anthropic",
-    model: "claude-opus-4-1-20250805",
-    description: "Previous generation premium model with extended thinking",
-    available: true
-  },
-  {
-    id: "claude-sonnet-4-20250514",
-    name: "Claude Sonnet 4",
-    provider: "anthropic",
-    model: "claude-sonnet-4-20250514",
-    description: "Fast and capable previous generation model",
-    available: true
-  },
-  // OpenAI GPT-5 series (latest as of Jan 2026)
-  {
-    id: "gpt-5.2",
-    name: "GPT-5.2",
-    provider: "openai",
-    model: "gpt-5.2",
-    description: "Latest flagship with enhanced coding and agentic capabilities",
-    available: true
-  },
-  {
-    id: "gpt-5.1",
-    name: "GPT-5.1",
-    provider: "openai",
-    model: "gpt-5.1",
-    description: "Advanced reasoning and robust performance",
-    available: true
-  },
-  // OpenAI o-series reasoning models
-  {
-    id: "o3",
-    name: "o3",
-    provider: "openai",
-    model: "o3",
-    description: "Advanced reasoning for complex problem-solving",
-    available: true
-  },
-  {
-    id: "o3-mini",
-    name: "o3 Mini",
-    provider: "openai",
-    model: "o3-mini",
-    description: "Cost-effective reasoning with faster response times",
-    available: true
-  },
-  {
-    id: "o4-mini",
-    name: "o4 Mini",
-    provider: "openai",
-    model: "o4-mini",
-    description: "Fast, efficient reasoning model succeeding o3",
-    available: true
-  },
-  {
-    id: "o1",
-    name: "o1",
-    provider: "openai",
-    model: "o1",
-    description: "Premium reasoning for research, coding, math and science",
-    available: true
-  },
-  // OpenAI GPT-4 series
-  {
-    id: "gpt-4.1",
-    name: "GPT-4.1",
-    provider: "openai",
-    model: "gpt-4.1",
-    description: "Strong instruction-following with 1M context window",
-    available: true
-  },
-  {
-    id: "gpt-4.1-mini",
-    name: "GPT-4.1 Mini",
-    provider: "openai",
-    model: "gpt-4.1-mini",
-    description: "Faster, smaller version balancing performance and efficiency",
-    available: true
-  },
-  {
-    id: "gpt-4.1-nano",
-    name: "GPT-4.1 Nano",
-    provider: "openai",
-    model: "gpt-4.1-nano",
-    description: "Most cost-efficient for lighter tasks",
-    available: true
-  },
-  {
-    id: "gpt-4o",
-    name: "GPT-4o",
-    provider: "openai",
-    model: "gpt-4o",
-    description: "Versatile model for text generation and comprehension",
-    available: true
-  },
-  {
-    id: "gpt-4o-mini",
-    name: "GPT-4o Mini",
-    provider: "openai",
-    model: "gpt-4o-mini",
-    description: "Cost-efficient variant with faster response times",
-    available: true
-  },
-  // Google Gemini models
-  {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3 Pro Preview",
-    provider: "google",
-    model: "gemini-3-pro-preview",
-    description: "State-of-the-art reasoning and multimodal understanding",
-    available: true
-  },
-  {
-    id: "gemini-3-flash-preview",
-    name: "Gemini 3 Flash Preview",
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    description: "Fast frontier-class model with low latency and cost",
-    available: true
-  },
-  {
-    id: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
-    provider: "google",
-    model: "gemini-2.5-pro",
-    description: "High-capability model for complex reasoning and coding",
-    available: true
-  },
-  {
-    id: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash",
-    provider: "google",
-    model: "gemini-2.5-flash",
-    description: "Lightning-fast with balance of intelligence and latency",
-    available: true
-  },
-  {
-    id: "gemini-2.5-flash-lite",
-    name: "Gemini 2.5 Flash Lite",
-    provider: "google",
-    model: "gemini-2.5-flash-lite",
-    description: "Fast, low-cost, high-performance model",
-    available: true
-  }
-]
+function resolveDefaultModelId(): string {
+  const customConfig = getCustomModelPublicConfig()
+  return customConfig ? `custom:${customConfig.model}` : ""
+}
 
 export function registerModelHandlers(ipcMain: IpcMain): void {
-  // List available models
+  // List available models (custom only)
   ipcMain.handle("models:list", async () => {
-    const models = AVAILABLE_MODELS.map((model) => ({
-      ...model,
-      available: hasApiKey(model.provider)
-    }))
+    const models: ModelConfig[] = []
 
     const customConfig = getCustomModelPublicConfig()
     if (customConfig) {
@@ -240,7 +63,8 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
   // Get default model
   ipcMain.handle("models:getDefault", async () => {
-    return store.get("defaultModel", "claude-sonnet-4-5-20250929") as string
+    const stored = store.get("defaultModel", "") as string
+    return stored || resolveDefaultModelId()
   })
 
   // Set default model
@@ -274,6 +98,14 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
   // Custom model configuration
   ipcMain.handle("models:getCustomConfig", async () => {
     return getCustomModelPublicConfig()
+  })
+
+  ipcMain.handle("models:getTokenLimits", async () => {
+    return {
+      defaultMaxTokens: DEFAULT_MAX_TOKENS,
+      minMaxTokens: MIN_MAX_TOKENS,
+      maxMaxTokens: MAX_MAX_TOKENS
+    }
   })
 
   ipcMain.handle("models:setCustomConfig", async (_event, config: CustomModelConfig) => {
@@ -556,5 +388,6 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 export { getApiKey } from "../storage"
 
 export function getDefaultModel(): string {
-  return store.get("defaultModel", "claude-sonnet-4-5-20250929") as string
+  const stored = store.get("defaultModel", "") as string
+  return stored || resolveDefaultModelId()
 }
