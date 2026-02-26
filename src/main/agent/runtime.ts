@@ -1,5 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { createDeepAgent } from "deepagents"
+import {
+  createFilesystemMiddleware,
+  createSubAgentMiddleware,
+  createPatchToolCallsMiddleware,
+  createSkillsMiddleware,
+  createMemoryMiddleware,
+  StateBackend
+} from "deepagents"
 import {
   getThreadCheckpointPath,
   getSkillsSources,
@@ -10,7 +17,14 @@ import {
 import { ChatOpenAI } from "@langchain/openai"
 import { SqlJsSaver } from "../checkpointer/sqljs-saver"
 import { LocalSandbox } from "./local-sandbox"
-import { summarizationMiddleware } from "langchain"
+import {
+  createAgent,
+  SystemMessage,
+  todoListMiddleware,
+  summarizationMiddleware,
+  anthropicPromptCachingMiddleware,
+  humanInTheLoopMiddleware
+} from "langchain"
 
 import type * as _lcTypes from "langchain"
 import type * as _lcMessages from "@langchain/core/messages"
@@ -19,6 +33,121 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 
 import { BASE_SYSTEM_PROMPT } from "./system-prompt"
 
+const BASE_PROMPT =
+  "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+
+/**
+ * Custom version of deepagents' createDeepAgent.
+ *
+ * Identical to the original except:
+ *   1. `defaultInterruptOn` is always null — subagents run autonomously without HITL.
+ *   2. `subagentSummarizationTrigger` — configurable summarization trigger for subagents
+ *      (original hardcodes 170 000 tokens).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function createDeepAgent(params: Record<string, any> = {}) {
+  const {
+    model = "claude-sonnet-4-5-20250929",
+    tools = [],
+    systemPrompt,
+    middleware: customMiddleware = [],
+    subagents = [],
+    responseFormat,
+    contextSchema,
+    checkpointer,
+    store,
+    backend,
+    interruptOn,
+    name,
+    memory,
+    skills,
+    filesystemSystemPrompt,
+    subagentSummarizationTrigger = 170_000
+  } = params
+
+  // --- systemPrompt handling (identical to original) ---
+  const finalSystemPrompt = systemPrompt
+    ? typeof systemPrompt === "string"
+      ? `${systemPrompt}\n\n${BASE_PROMPT}`
+      : new SystemMessage({
+          content: [
+            { type: "text" as const, text: BASE_PROMPT },
+            ...(typeof systemPrompt.content === "string"
+              ? [{ type: "text" as const, text: systemPrompt.content }]
+              : systemPrompt.content)
+          ]
+        })
+    : BASE_PROMPT
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const filesystemBackend = backend ? backend : (config: any) => new StateBackend(config)
+
+  const skillsMiddleware =
+    skills != null && skills.length > 0
+      ? [createSkillsMiddleware({ backend: filesystemBackend, sources: skills })]
+      : []
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const builtInMiddleware: any[] = [
+    todoListMiddleware(),
+    ...skillsMiddleware,
+    createFilesystemMiddleware({
+      backend: filesystemBackend,
+      ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt })
+    }),
+    createSubAgentMiddleware({
+      defaultModel: model,
+      defaultTools: tools,
+      defaultMiddleware: [
+        todoListMiddleware(),
+        ...skillsMiddleware,
+        createFilesystemMiddleware({
+          backend: filesystemBackend,
+          ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt })
+        }),
+        summarizationMiddleware({
+          model,
+          trigger: { tokens: subagentSummarizationTrigger },
+          keep: { messages: 6 },
+          trimTokensToSummarize: 10_000
+        }),
+        anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
+        createPatchToolCallsMiddleware()
+      ],
+      defaultInterruptOn: null, // FIX: subagents run without HITL
+      subagents,
+      generalPurposeAgent: true
+    } as Parameters<typeof createSubAgentMiddleware>[0]),
+    summarizationMiddleware({
+      model,
+      trigger: { tokens: subagentSummarizationTrigger },
+      keep: { messages: 6 },
+      trimTokensToSummarize: 10_000
+    }),
+    anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
+    createPatchToolCallsMiddleware(),
+    ...(memory != null && memory.length > 0
+      ? [createMemoryMiddleware({ backend: filesystemBackend, sources: memory })]
+      : [])
+  ]
+
+  if (interruptOn) {
+    builtInMiddleware.push(humanInTheLoopMiddleware({ interruptOn }))
+  }
+
+  return createAgent({
+    model,
+    systemPrompt: finalSystemPrompt,
+    tools,
+    middleware: [...builtInMiddleware, ...customMiddleware],
+    responseFormat,
+    contextSchema,
+    checkpointer,
+    store,
+    name
+  } as unknown as Parameters<typeof createAgent>[0])
+}
+
 /**
  * Generate the full system prompt for the agent.
  *
@@ -26,13 +155,25 @@ import { BASE_SYSTEM_PROMPT } from "./system-prompt"
  * @returns The complete system prompt
  */
 function getSystemPrompt(workspacePath: string): string {
+  const isWindows = process.platform === "win32"
+  const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
+  const shell = isWindows ? "PowerShell" : process.env.SHELL?.split("/").pop() || "bash"
+  const examplePath = isWindows
+    ? `${workspacePath}\\src\\index.ts`
+    : `${workspacePath}/src/index.ts`
+
   const workingDirSection = `
+### System Environment
+- Operating system: ${platform} (${process.arch})
+- Default shell: ${shell}
+${isWindows ? "- Use PowerShell syntax for shell commands (e.g., Get-ChildItem instead of ls, Get-Content instead of cat)" : "- Use Unix commands for shell operations (ls, cat, grep, etc.)"}
+
 ### File System and Paths
 
 **IMPORTANT - Path Handling:**
 - All file paths use fully qualified absolute system paths
 - The workspace root is: \`${workspacePath}\`
-- Example: \`${workspacePath}/src/index.ts\`, \`${workspacePath}/README.md\`
+- Example: \`${examplePath}\`
 - To list the workspace root, use \`ls("${workspacePath}")\`
 - Always use full absolute paths for all file operations
 `
@@ -101,7 +242,7 @@ export interface CreateAgentRuntimeOptions {
 }
 
 // Create agent runtime with configured model and checkpointer
-export type AgentRuntime = ReturnType<typeof createDeepAgent>
+export type AgentRuntime = ReturnType<typeof createAgent>
 
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
   const { threadId, workspacePath, modelId } = options
@@ -140,14 +281,13 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
 
   const backend = new LocalSandbox({
     rootDir: workspacePath,
-    virtualMode: false, // Use absolute system paths for consistency with shell commands
-    timeout: 120_000, // 2 minutes
-    maxOutputBytes: 100_000 // ~100KB
+    virtualMode: false,
+    timeout: 120_000,
+    maxOutputBytes: 100_000
   })
 
   const systemPrompt = getSystemPrompt(workspacePath)
 
-  // Custom filesystem prompt for absolute paths (matches virtualMode: false)
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
 
 - ls: list files in a directory (e.g., ls("${workspacePath}"))
@@ -166,30 +306,22 @@ The workspace root is: ${workspacePath}`
   const summarizationTrigger = Math.floor(maxTokens * 0.85)
   console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", summarizationTrigger)
 
-  const customSummarization = summarizationMiddleware({
-    model,
-    trigger: { tokens: summarizationTrigger },
-    keep: { messages: 6 },
-    trimTokensToSummarize: 10_000
-  }) as ReturnType<typeof summarizationMiddleware> & { name: string }
-  customSummarization.name = "CustomSummarizationMiddleware"
-
   const agent = createDeepAgent({
     model,
     checkpointer,
     backend,
     systemPrompt,
     filesystemSystemPrompt,
-    interruptOn: { execute: true },
     skills: skillsSources.length > 0 ? skillsSources : undefined,
-    middleware: [customSummarization]
-  } as Parameters<typeof createDeepAgent>[0])
+    interruptOn: { execute: true },
+    subagentSummarizationTrigger: summarizationTrigger
+  })
 
-  console.log("[Runtime] Deep agent created with LocalSandbox at:", workspacePath)
+  console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
   return agent
 }
 
-export type DeepAgent = ReturnType<typeof createDeepAgent>
+export type DeepAgent = ReturnType<typeof createAgent>
 
 // Clean up all checkpointer resources
 export async function closeRuntime(): Promise<void> {
