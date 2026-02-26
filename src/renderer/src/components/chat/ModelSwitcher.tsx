@@ -34,12 +34,26 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
 
   const selectedModel = models.find((m) => m.id === currentModel)
 
+  const [metadataLoaded, setMetadataLoaded] = useState(false)
+
   useEffect(() => {
-    if (models.length === 0) return
+    let cancelled = false
+    window.api.threads.get(threadId).then((thread) => {
+      if (cancelled) return
+      const metadata = thread?.metadata || {}
+      if (metadata.model) {
+        setCurrentModel(metadata.model as string)
+      }
+      setMetadataLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [threadId, setCurrentModel])
+
+  useEffect(() => {
+    if (models.length === 0 || !metadataLoaded) return
 
     const hasValidSelection = currentModel && models.some((m) => m.id === currentModel)
     if (!hasValidSelection && currentModel?.startsWith("custom:")) {
-      // Backward compatibility: map legacy `custom:<modelName>` to new `custom:<modelId>`.
       const legacyModelName = currentModel.slice("custom:".length)
       const migrated = models.find((m) => m.model === legacyModelName)
       if (migrated) {
@@ -52,7 +66,7 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
       const preferred = models.find((m) => m.available) || models[0]
       setCurrentModel(preferred.id)
     }
-  }, [models, currentModel, setCurrentModel])
+  }, [models, currentModel, setCurrentModel, metadataLoaded])
 
   function handleModelSelect(modelId: string): void {
     setCurrentModel(modelId)
