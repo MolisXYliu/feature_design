@@ -11,6 +11,7 @@
 
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { join } from "node:path"
 import { FilesystemBackend, type ExecuteResponse, type SandboxBackendProtocol } from "deepagents"
 
 /**
@@ -71,6 +72,31 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.maxOutputBytes = options.maxOutputBytes ?? 100_000 // ~100KB default
     this.env = options.env ?? ({ ...process.env } as Record<string, string>)
     this.workingDir = options.rootDir ?? process.cwd()
+
+    this.patchResolvePath()
+  }
+
+  /**
+   * Patch resolvePath at instance level to redirect deepagents' eviction
+   * path (/large_tool_results/...) into the workspace directory.
+   * Covers ALL file operations (read, write, edit, list, grep, glob)
+   * since they all funnel through resolvePath internally.
+   */
+  private patchResolvePath(): void {
+    if (typeof (this as any).resolvePath !== "function") {
+      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping eviction path patch")
+      return
+    }
+    const original = (this as any).resolvePath.bind(this)
+    const workingDir = this.workingDir
+    ;(this as any).resolvePath = (key: string): string => {
+      if (key.startsWith("/large_tool_results/")) {
+        const redirected = join(workingDir, ".large_tool_results", key.slice("/large_tool_results/".length))
+        console.log("[LocalSandbox] Redirecting eviction path:", key, "→", redirected)
+        key = redirected
+      }
+      return original(key)
+    }
   }
 
   /**

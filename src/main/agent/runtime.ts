@@ -62,7 +62,8 @@ function createDeepAgent(params: Record<string, any> = {}) {
     memory,
     skills,
     filesystemSystemPrompt,
-    subagentSummarizationTrigger = 170_000
+    subagentSummarizationTrigger = 170_000,
+    toolTokenLimitBeforeEvict
   } = params
 
   // --- systemPrompt handling (identical to original) ---
@@ -93,7 +94,8 @@ function createDeepAgent(params: Record<string, any> = {}) {
     ...skillsMiddleware,
     createFilesystemMiddleware({
       backend: filesystemBackend,
-      ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt })
+      ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
+      ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
     }),
     createSubAgentMiddleware({
       defaultModel: model,
@@ -103,7 +105,8 @@ function createDeepAgent(params: Record<string, any> = {}) {
         ...skillsMiddleware,
         createFilesystemMiddleware({
           backend: filesystemBackend,
-          ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt })
+          ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
+          ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
         }),
         summarizationMiddleware({
           model,
@@ -279,11 +282,13 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
   const checkpointer = await getCheckpointer(threadId)
   console.log("[Runtime] Checkpointer ready for thread:", threadId)
 
+  const maxTokens = customConfig?.maxTokens ?? DEFAULT_MAX_TOKENS
+  const maxOutputBytes = maxTokens * 4 * 0.3
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
     timeout: 120_000,
-    maxOutputBytes: 100_000
+    maxOutputBytes
   })
 
   const systemPrompt = getSystemPrompt(workspacePath)
@@ -302,9 +307,9 @@ The workspace root is: ${workspacePath}`
   const skillsSources = getSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
 
-  const maxTokens = customConfig?.maxTokens ?? DEFAULT_MAX_TOKENS
   const summarizationTrigger = Math.floor(maxTokens * 0.85)
-  console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", summarizationTrigger)
+  const toolEvictLimit = Math.floor(maxTokens * 0.1)
+  console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", summarizationTrigger, "→ tool evict limit:", toolEvictLimit, "→ max output bytes:", maxOutputBytes)
 
   const agent = createDeepAgent({
     model,
@@ -314,7 +319,8 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: skillsSources.length > 0 ? skillsSources : undefined,
     interruptOn: { execute: true },
-    subagentSummarizationTrigger: summarizationTrigger
+    subagentSummarizationTrigger: summarizationTrigger,
+    toolTokenLimitBeforeEvict: toolEvictLimit
   })
 
   console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
