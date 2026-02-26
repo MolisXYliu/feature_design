@@ -29,7 +29,7 @@ export type ProviderId = "custom"
 export interface Provider {
   id: ProviderId
   name: string
-  hasApiKey: boolean
+  hasAnyModelApiKey: boolean
 }
 
 export interface ModelConfig {

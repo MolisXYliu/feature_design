@@ -48,14 +48,6 @@ export interface WorkspaceFileParams {
   filePath: string
 }
 
-// Model IPC
-export interface SetApiKeyParams {
-  provider: string
-  apiKey: string
-}
-
-// =============================================================================
-
 export interface Thread {
   thread_id: string
   created_at: Date
@@ -85,7 +77,7 @@ export type ProviderId = "custom"
 export interface Provider {
   id: ProviderId
   name: string
-  hasApiKey: boolean
+  hasAnyModelApiKey: boolean
 }
 
 // Model configuration

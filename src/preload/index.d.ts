@@ -48,28 +48,48 @@ interface CustomAPI {
     list: () => Promise<ModelConfig[]>
     listProviders: () => Promise<Provider[]>
     getDefault: () => Promise<string>
-    deleteApiKey: (provider: string) => Promise<void>
     setDefault: (modelId: string) => Promise<void>
-    setApiKey: (provider: string, apiKey: string) => Promise<void>
-    getApiKey: (provider: string) => Promise<string | null>
     getTokenLimits: () => Promise<{
       defaultMaxTokens: number
       minMaxTokens: number
       maxMaxTokens: number
     }>
-    getCustomConfig: () => Promise<{
+    getCustomConfigs: () => Promise<
+      Array<{
+        id: string
+        name: string
+        baseUrl: string
+        model: string
+        hasApiKey: boolean
+        maxTokens: number
+      }>
+    >
+    getCustomConfig: (id?: string) => Promise<{
+      id: string
+      name: string
       baseUrl: string
       model: string
       hasApiKey: boolean
       maxTokens: number
     } | null>
     setCustomConfig: (config: {
+      id: string
+      name: string
       baseUrl: string
       model: string
       apiKey?: string
       maxTokens?: number
     }) => Promise<void>
-    deleteCustomConfig: () => Promise<void>
+    // Backward-compatible alias, prefer upsertCustomConfig in new code.
+    upsertCustomConfig: (config: {
+      id?: string
+      name: string
+      baseUrl: string
+      model: string
+      apiKey?: string
+      maxTokens?: number
+    }) => Promise<{ id: string }>
+    deleteCustomConfig: (id: string) => Promise<void>
   }
   workspace: {
     get: (threadId?: string) => Promise<string | null>

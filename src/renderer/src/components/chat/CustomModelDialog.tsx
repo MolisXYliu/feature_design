@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Eye, EyeOff, Loader2 } from "lucide-react"
+import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -12,10 +12,14 @@ import { Input } from "@/components/ui/input"
 
 interface CustomModelDialogProps {
   open: boolean
+  selectedModelId?: string
+  onModelSaved?: (modelId: string) => void
   onOpenChange: (open: boolean) => void
 }
 
 interface CustomConfig {
+  id?: string
+  name: string
   baseUrl: string
   model: string
   apiKey: string
@@ -26,6 +30,15 @@ interface TokenLimits {
   defaultMaxTokens: number
   minMaxTokens: number
   maxMaxTokens: number
+}
+
+interface CustomModelItem {
+  id: string
+  name: string
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+  maxTokens: number
 }
 
 const FALLBACK_LIMITS: TokenLimits = {
@@ -55,9 +68,13 @@ function getMaxTokensError(value: string, limits: TokenLimits): string | null {
 
 export function CustomModelDialog({
   open,
+  selectedModelId,
+  onModelSaved,
   onOpenChange
 }: CustomModelDialogProps): React.JSX.Element {
   const [config, setConfig] = useState<CustomConfig>({
+    id: undefined,
+    name: "",
     baseUrl: "",
     model: "",
     apiKey: "",
@@ -70,6 +87,7 @@ export function CustomModelDialog({
   const [hasExistingKey, setHasExistingKey] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [tokenLimits, setTokenLimits] = useState<TokenLimits>(FALLBACK_LIMITS)
+  const [allConfigs, setAllConfigs] = useState<CustomModelItem[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -78,22 +96,42 @@ export function CustomModelDialog({
       setShowKey(false)
       setFormError(null)
 
-      void Promise.all([window.api.models.getTokenLimits(), window.api.models.getCustomConfig()]).then(
-        ([limits, existing]) => {
+      const normalizedSelectedId = selectedModelId?.startsWith("custom:")
+        ? selectedModelId.slice("custom:".length)
+        : selectedModelId
+      void Promise.all([
+        window.api.models.getTokenLimits(),
+        window.api.models.getCustomConfigs(),
+        window.api.models.getCustomConfig(normalizedSelectedId)
+      ]).then(
+        ([limits, all, existing]) => {
           if (cancelled) return
           setTokenLimits(limits)
+          setAllConfigs(all)
 
-          if (existing) {
+          const resolvedExisting =
+            existing ||
+            (normalizedSelectedId
+              ? all.find(
+                  (item) => item.id === normalizedSelectedId || item.model === normalizedSelectedId
+                ) || null
+              : null)
+
+          if (resolvedExisting) {
             setConfig({
-              baseUrl: existing.baseUrl,
-              model: existing.model,
+              id: resolvedExisting.id,
+              name: resolvedExisting.name,
+              baseUrl: resolvedExisting.baseUrl,
+              model: resolvedExisting.model,
               apiKey: "",
-              maxTokensInput: String(existing.maxTokens ?? limits.defaultMaxTokens)
+              maxTokensInput: String(resolvedExisting.maxTokens ?? limits.defaultMaxTokens)
             })
             setHasExisting(true)
-            setHasExistingKey(existing.hasApiKey)
+            setHasExistingKey(resolvedExisting.hasApiKey)
           } else {
             setConfig({
+              id: undefined,
+              name: "",
               baseUrl: "",
               model: "",
               apiKey: "",
@@ -111,20 +149,47 @@ export function CustomModelDialog({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, selectedModelId])
+
+  const selectedConfigId = config.id
+
+  async function selectConfigToEdit(id: string): Promise<void> {
+    setFormError(null)
+    const picked = await window.api.models.getCustomConfig(id)
+    if (!picked) return
+    setConfig({
+      id: picked.id,
+      name: picked.name,
+      baseUrl: picked.baseUrl,
+      model: picked.model,
+      apiKey: "",
+      maxTokensInput: String(picked.maxTokens ?? tokenLimits.defaultMaxTokens)
+    })
+    setHasExisting(true)
+    setHasExistingKey(picked.hasApiKey)
+    setShowKey(false)
+  }
 
   const maxTokensError = getMaxTokensError(config.maxTokensInput, tokenLimits)
   const canToggleKeyVisibility = config.apiKey.trim().length > 0
+  const duplicateNameError =
+    config.name.trim() &&
+    allConfigs.some((item) => item.name === config.name.trim() && item.id !== config.id)
+      ? "显示名称不能重复，请使用不同的显示名称"
+      : null
 
   const canSave =
+    config.name.trim() &&
     config.baseUrl.trim() &&
     config.model.trim() &&
     (hasExistingKey || config.apiKey.trim()) &&
-    !maxTokensError
+    !maxTokensError &&
+    !duplicateNameError
 
   async function handleSave(): Promise<void> {
     if (!canSave) {
       if (maxTokensError) setFormError(maxTokensError)
+      else if (duplicateNameError) setFormError(duplicateNameError)
       return
     }
     setSaving(true)
@@ -136,13 +201,29 @@ export function CustomModelDialog({
         return
       }
 
-      await window.api.models.setCustomConfig({
+      const result = await window.api.models.upsertCustomConfig({
+        id: config.id,
+        name: config.name.trim(),
         baseUrl: config.baseUrl.trim(),
         model: config.model.trim(),
         apiKey: config.apiKey.trim() || undefined,
         maxTokens: parsedMaxTokens
       })
-      onOpenChange(false)
+      const refreshed = await window.api.models.getCustomConfigs()
+      setAllConfigs(refreshed)
+      const updated = refreshed.find((item) => item.id === result.id)
+      if (updated) {
+        setConfig((prev) => ({
+          ...prev,
+          id: updated.id,
+          name: updated.name,
+          apiKey: ""
+        }))
+        setHasExisting(true)
+        setHasExistingKey(updated.hasApiKey)
+      }
+      onModelSaved?.(`custom:${result.id}`)
+      setFormError(null)
     } catch (e) {
       console.error("[CustomModelDialog] Failed to save:", e)
       setFormError(e instanceof Error ? e.message : "保存失败，请稍后重试")
@@ -152,10 +233,38 @@ export function CustomModelDialog({
   }
 
   async function handleDelete(): Promise<void> {
+    if (!config.id) return
     setDeleting(true)
     try {
-      await window.api.models.deleteCustomConfig()
-      onOpenChange(false)
+      await window.api.models.deleteCustomConfig(config.id)
+      const refreshed = await window.api.models.getCustomConfigs()
+      setAllConfigs(refreshed)
+      if (refreshed.length > 0) {
+        const fallback = refreshed[0]
+        setConfig({
+          id: fallback.id,
+          name: fallback.name,
+          baseUrl: fallback.baseUrl,
+          model: fallback.model,
+          apiKey: "",
+          maxTokensInput: String(fallback.maxTokens ?? tokenLimits.defaultMaxTokens)
+        })
+        setHasExisting(true)
+        setHasExistingKey(fallback.hasApiKey)
+        onModelSaved?.(`custom:${fallback.id}`)
+      } else {
+        setConfig({
+          id: undefined,
+          name: "",
+          baseUrl: "",
+          model: "",
+          apiKey: "",
+          maxTokensInput: String(tokenLimits.defaultMaxTokens)
+        })
+        setHasExisting(false)
+        setHasExistingKey(false)
+      }
+      setFormError(null)
     } catch (e) {
       console.error("[CustomModelDialog] Failed to delete:", e)
     } finally {
@@ -165,105 +274,169 @@ export function CustomModelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[440px]">
+      <DialogContent className="sm:max-w-[760px]">
         <DialogHeader>
-          <DialogTitle>{hasExisting ? "编辑自定义模型" : "添加自定义模型"}</DialogTitle>
+          <DialogTitle>编辑模型配置</DialogTitle>
           <DialogDescription>配置兼容 OpenAI 接口格式的模型服务。</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">接口地址（Base URL）</label>
-            <Input
-              value={config.baseUrl}
-              onChange={(e) => setConfig((c) => ({ ...c, baseUrl: e.target.value }))}
-              placeholder="https://api.example.com/v1"
-              autoFocus
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">模型名称（Model）</label>
-            <Input
-              value={config.model}
-              onChange={(e) => setConfig((c) => ({ ...c, model: e.target.value }))}
-              placeholder="gpt-4o, deepseek-chat, ..."
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              最大 Token（上下文窗口）
-            </label>
-            <Input
-              type="number"
-              value={config.maxTokensInput}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  maxTokensInput: e.target.value
-                }))
-              }
-              placeholder={String(tokenLimits.defaultMaxTokens)}
-              min={tokenLimits.minMaxTokens}
-              max={tokenLimits.maxMaxTokens}
-            />
-            {maxTokensError && <p className="text-xs text-destructive">{maxTokensError}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">API 密钥</label>
-            <div className="relative">
-              <Input
-                type={showKey ? "text" : "password"}
-                value={config.apiKey}
-                onChange={(e) => setConfig((c) => ({ ...c, apiKey: e.target.value }))}
-                placeholder={hasExisting ? "••••••••••••••••" : "sk-..."}
-                className="pr-10"
-              />
-              <button
+        <div className="grid grid-cols-[220px_1fr] gap-4 py-2">
+          <div className="rounded-md border border-border p-2">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-medium text-muted-foreground">模型列表</div>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => {
-                  if (canToggleKeyVisibility) setShowKey(!showKey)
+                  setConfig({
+                    id: undefined,
+                    name: "",
+                    baseUrl: "",
+                    model: "",
+                    apiKey: "",
+                    maxTokensInput: String(tokenLimits.defaultMaxTokens)
+                  })
+                  setHasExisting(false)
+                  setHasExistingKey(false)
+                  setFormError(null)
+                  setShowKey(false)
                 }}
-                disabled={!canToggleKeyVisibility}
-                title={canToggleKeyVisibility ? "显示或隐藏密钥" : "请输入密钥后再切换显示"}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
+                <Plus className="size-4" />
+                新增
+              </Button>
+            </div>
+            <div className="max-h-[360px] space-y-1 overflow-y-auto">
+              {allConfigs.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    void selectConfigToEdit(item.id)
+                  }}
+                  className={`w-full rounded-sm border px-2 py-2 text-left text-xs transition-colors ${
+                    item.id === selectedConfigId
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-transparent text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <div className="truncate font-medium">{item.name}</div>
+                </button>
+              ))}
+              {allConfigs.length === 0 && (
+                <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无模型配置</div>
+              )}
             </div>
           </div>
-        </div>
 
-        {formError && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {formError}
-          </div>
-        )}
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">显示名称</label>
+              <Input
+                value={config.name}
+                onChange={(e) => setConfig((c) => ({ ...c, name: e.target.value }))}
+                placeholder="例如：DeepSeek Chat（生产）"
+                autoFocus
+              />
+              {duplicateNameError && <p className="text-xs text-destructive">{duplicateNameError}</p>}
+            </div>
 
-        <div className="flex justify-between">
-          {hasExisting ? (
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              onClick={handleDelete}
-              disabled={deleting || saving}
-            >
-              {deleting ? <Loader2 className="size-4 animate-spin" /> : null}
-              删除
-            </Button>
-          ) : (
-            <div />
-          )}
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              取消
-            </Button>
-            <Button type="button" onClick={handleSave} disabled={!canSave || saving}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : "保存"}
-            </Button>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">接口地址（Base URL）</label>
+              <Input
+                value={config.baseUrl}
+                onChange={(e) => setConfig((c) => ({ ...c, baseUrl: e.target.value }))}
+                placeholder="https://api.example.com/v1"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">模型名称（Model）</label>
+              <Input
+                value={config.model}
+                onChange={(e) => setConfig((c) => ({ ...c, model: e.target.value }))}
+                placeholder="gpt-4o, deepseek-chat, ..."
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                最大 Token（上下文窗口）
+              </label>
+              <Input
+                type="number"
+                value={config.maxTokensInput}
+                onChange={(e) =>
+                  setConfig((c) => ({
+                    ...c,
+                    maxTokensInput: e.target.value
+                  }))
+                }
+                placeholder={String(tokenLimits.defaultMaxTokens)}
+                min={tokenLimits.minMaxTokens}
+                max={tokenLimits.maxMaxTokens}
+              />
+              {maxTokensError && <p className="text-xs text-destructive">{maxTokensError}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">API 密钥</label>
+              <div className="relative">
+                <Input
+                  type={showKey ? "text" : "password"}
+                  value={config.apiKey}
+                  onChange={(e) => setConfig((c) => ({ ...c, apiKey: e.target.value }))}
+                  placeholder={hasExisting ? "••••••••••••••••" : "sk-..."}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (canToggleKeyVisibility) setShowKey(!showKey)
+                  }}
+                  disabled={!canToggleKeyVisibility}
+                  title={canToggleKeyVisibility ? "显示或隐藏密钥" : "请输入密钥后再切换显示"}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                密钥仅作用于当前模型（按模型 ID 独立保存）。
+              </p>
+            </div>
+
+            {formError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {formError}
+              </div>
+            )}
+
+            <div className="flex justify-between">
+              {hasExisting ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={deleting || saving}
+                >
+                  {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                  删除
+                </Button>
+              ) : (
+                <div />
+              )}
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                  取消
+                </Button>
+                <Button type="button" onClick={handleSave} disabled={!canSave || saving}>
+                  {saving ? <Loader2 className="size-4 animate-spin" /> : "保存"}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </DialogContent>

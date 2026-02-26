@@ -22,6 +22,7 @@ interface ModelSwitcherProps {
 export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
+  const [dialogModelId, setDialogModelId] = useState<string | undefined>(undefined)
 
   const { models, loadModels, loadProviders } = useAppStore()
   const { currentModel, setCurrentModel } = useCurrentThread(threadId)
@@ -37,6 +38,16 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
     if (models.length === 0) return
 
     const hasValidSelection = currentModel && models.some((m) => m.id === currentModel)
+    if (!hasValidSelection && currentModel?.startsWith("custom:")) {
+      // Backward compatibility: map legacy `custom:<modelName>` to new `custom:<modelId>`.
+      const legacyModelName = currentModel.slice("custom:".length)
+      const migrated = models.find((m) => m.model === legacyModelName)
+      if (migrated) {
+        setCurrentModel(migrated.id)
+        return
+      }
+    }
+
     if (!hasValidSelection) {
       const preferred = models.find((m) => m.available) || models[0]
       setCurrentModel(preferred.id)
@@ -106,6 +117,7 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
               <button
                 onClick={() => {
                   setOpen(false)
+                  setDialogModelId(currentModel || undefined)
                   setCustomDialogOpen(true)
                 }}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors mt-1 border-t border-border pt-2"
@@ -124,6 +136,7 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
                 size="sm"
                 onClick={() => {
                   setOpen(false)
+                  setDialogModelId(undefined)
                   setCustomDialogOpen(true)
                 }}
               >
@@ -136,9 +149,14 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
 
       <CustomModelDialog
         open={customDialogOpen}
+        selectedModelId={dialogModelId}
+        onModelSaved={(modelId) => {
+          setCurrentModel(modelId)
+        }}
         onOpenChange={(isOpen) => {
           setCustomDialogOpen(isOpen)
           if (!isOpen) {
+            setDialogModelId(undefined)
             loadProviders()
             loadModels()
           }

@@ -1,10 +1,11 @@
 import { homedir } from "os"
 import { join } from "path"
+import { createHash } from "crypto"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
 const OPENWORK_DIR = join(homedir(), ".openwork")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
-const CUSTOM_API_KEY_ENV = "CUSTOM_API_KEY"
+const CUSTOM_API_KEY_PREFIX = "CUSTOM_API_KEY__"
 
 export function getOpenworkDir(): string {
   if (!existsSync(OPENWORK_DIR)) {
@@ -74,40 +75,6 @@ function writeEnvFile(env: Record<string, string>): void {
   writeFileSync(getEnvFilePath(), lines.join("\n") + "\n")
 }
 
-// API key management (custom provider only)
-export function getApiKey(provider: string): string | undefined {
-  if (provider !== "custom") return undefined
-
-  const env = parseEnvFile()
-  if (env[CUSTOM_API_KEY_ENV]) return env[CUSTOM_API_KEY_ENV]
-
-  return process.env[CUSTOM_API_KEY_ENV]
-}
-
-export function setApiKey(provider: string, apiKey: string): void {
-  if (provider !== "custom") return
-
-  const env = parseEnvFile()
-  env[CUSTOM_API_KEY_ENV] = apiKey
-  writeEnvFile(env)
-
-  process.env[CUSTOM_API_KEY_ENV] = apiKey
-}
-
-export function deleteApiKey(provider: string): void {
-  if (provider !== "custom") return
-
-  const env = parseEnvFile()
-  delete env[CUSTOM_API_KEY_ENV]
-  writeEnvFile(env)
-
-  delete process.env[CUSTOM_API_KEY_ENV]
-}
-
-export function hasApiKey(provider: string): boolean {
-  return !!getApiKey(provider)
-}
-
 // Skills directory — bundled with the app at project root /skills/
 export function getSkillsDir(): string {
   // Prefer workspace root /skills in development (cwd is project root in electron-vite dev).
@@ -129,8 +96,10 @@ export function getSkillsSources(): string[] {
   return existsSync(dir) ? [dir] : []
 }
 
-// Custom model configuration stored as JSON in ~/.openwork/custom-model.json
+// Custom model configurations stored as JSON in ~/.openwork/custom-models.json
 export interface CustomModelConfig {
+  id: string
+  name: string
   baseUrl: string
   model: string
   apiKey?: string
@@ -142,13 +111,24 @@ export const MIN_MAX_TOKENS = 32_000
 export const MAX_MAX_TOKENS = 128_000
 
 export interface CustomModelPublicConfig {
+  id: string
+  name: string
   baseUrl: string
   model: string
   hasApiKey: boolean
   maxTokens: number
 }
 
+interface StoredCustomModelRecord {
+  id: string
+  name: string
+  baseUrl: string
+  model: string
+  maxTokens?: number
+}
+
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
+const CUSTOM_MODELS_FILE = join(OPENWORK_DIR, "custom-models.json")
 
 function normalizeMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -156,6 +136,49 @@ function normalizeMaxTokens(value: unknown): number {
   }
 
   return Math.min(MAX_MAX_TOKENS, Math.max(MIN_MAX_TOKENS, Math.floor(value)))
+}
+
+function getCustomApiKeyEnvName(id: string): string {
+  const hash = createHash("sha256").update(id.trim()).digest("hex").slice(0, 12)
+  return `${CUSTOM_API_KEY_PREFIX}${hash}`
+}
+
+function getCustomModelApiKey(id: string, env?: Record<string, string>): string | undefined {
+  const resolved = env ?? parseEnvFile()
+  const keyName = getCustomApiKeyEnvName(id)
+  if (resolved[keyName]) return resolved[keyName]
+  return process.env[keyName]
+}
+
+function setCustomModelApiKey(id: string, apiKey: string): void {
+  const keyName = getCustomApiKeyEnvName(id)
+  const env = parseEnvFile()
+  env[keyName] = apiKey
+  writeEnvFile(env)
+  process.env[keyName] = apiKey
+}
+
+function deleteCustomModelApiKey(id: string): void {
+  const keyName = getCustomApiKeyEnvName(id)
+  const env = parseEnvFile()
+  delete env[keyName]
+  writeEnvFile(env)
+  delete process.env[keyName]
+}
+
+function deleteAllCustomModelApiKeys(): void {
+  const env = parseEnvFile()
+  for (const key of Object.keys(env)) {
+    if (key.startsWith(CUSTOM_API_KEY_PREFIX)) {
+      delete env[key]
+    }
+  }
+  writeEnvFile(env)
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(CUSTOM_API_KEY_PREFIX)) {
+      delete process.env[key]
+    }
+  }
 }
 
 function assertValidMaxTokens(value: unknown): number {
@@ -175,67 +198,234 @@ function assertValidMaxTokens(value: unknown): number {
   return parsed
 }
 
+function assertValidBaseUrl(value: string): string {
+  const normalized = value.trim()
+  if (!normalized) {
+    throw new Error("接口地址不能为空")
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(normalized)
+  } catch {
+    throw new Error("接口地址格式无效，请输入完整 URL（例如 https://api.example.com/v1）")
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("接口地址必须以 http:// 或 https:// 开头")
+  }
+
+  return normalized
+}
+
 export function getCustomModelConfig(): CustomModelConfig | null {
+  const configs = getCustomModelConfigs()
+  return configs[0] ?? null
+}
+
+function readCustomModelsRaw(): StoredCustomModelRecord[] {
   getOpenworkDir()
-  if (!existsSync(CUSTOM_MODEL_FILE)) return null
+  if (!existsSync(CUSTOM_MODELS_FILE)) return []
+  try {
+    const content = readFileSync(CUSTOM_MODELS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is StoredCustomModelRecord =>
+        !!item &&
+        typeof item === "object" &&
+        typeof (item as { id?: unknown }).id === "string" &&
+        typeof (item as { name?: unknown }).name === "string" &&
+        typeof (item as { baseUrl?: unknown }).baseUrl === "string" &&
+        typeof (item as { model?: unknown }).model === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+function writeCustomModelsRaw(items: StoredCustomModelRecord[]): void {
+  writeFileSync(CUSTOM_MODELS_FILE, JSON.stringify(items, null, 2))
+}
+
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+}
+
+let _legacyMigrated = false
+function migrateLegacyCustomModel(): void {
+  if (_legacyMigrated) return
+  _legacyMigrated = true
+
+  getOpenworkDir()
+  if (existsSync(CUSTOM_MODELS_FILE) || !existsSync(CUSTOM_MODEL_FILE)) return
+
   try {
     const content = readFileSync(CUSTOM_MODEL_FILE, "utf-8")
-    const config = JSON.parse(content) as CustomModelConfig
-    if (!config.baseUrl || !config.model) return null
-
-    // Migrate legacy API key from custom-model.json to .env if needed.
-    const existingKey = getApiKey("custom")
-    if (!existingKey && config.apiKey) {
-      setApiKey("custom", config.apiKey)
+    const legacy = JSON.parse(content) as {
+      baseUrl?: string
+      model?: string
+      maxTokens?: number
     }
+    if (!legacy.baseUrl || !legacy.model) return
 
-    return {
-      baseUrl: config.baseUrl,
-      model: config.model,
-      apiKey: getApiKey("custom"),
-      maxTokens: normalizeMaxTokens(config.maxTokens)
+    const baseId = slugify(`${legacy.model}-${legacy.baseUrl}`) || "custom-model"
+    const migrated: StoredCustomModelRecord = {
+      id: baseId,
+      name: legacy.model,
+      baseUrl: legacy.baseUrl,
+      model: legacy.model,
+      maxTokens: normalizeMaxTokens(legacy.maxTokens)
     }
+    writeCustomModelsRaw([migrated])
+
   } catch {
-    return null
+    // Ignore migration failures and keep legacy behavior.
   }
 }
 
-export function setCustomModelConfig(config: CustomModelConfig): void {
-  getOpenworkDir()
-  const validatedMaxTokens = assertValidMaxTokens(config.maxTokens)
-  // Keep model metadata in JSON and keep secret in .env only.
-  writeFileSync(
-    CUSTOM_MODEL_FILE,
-    JSON.stringify(
-      {
-        baseUrl: config.baseUrl,
-        model: config.model,
-        maxTokens: validatedMaxTokens
-      },
-      null,
-      2
-    )
-  )
-
-  if (config.apiKey?.trim()) {
-    setApiKey("custom", config.apiKey.trim())
-  }
-}
-
-export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
-  const config = getCustomModelConfig()
-  if (!config) return null
+function toPublicConfig(config: StoredCustomModelRecord, env?: Record<string, string>): CustomModelPublicConfig {
   return {
+    id: config.id,
+    name: config.name || config.model,
     baseUrl: config.baseUrl,
     model: config.model,
-    hasApiKey: hasApiKey("custom"),
+    hasApiKey: !!getCustomModelApiKey(config.id, env),
     maxTokens: normalizeMaxTokens(config.maxTokens)
   }
 }
 
-export function deleteCustomModelConfig(): void {
+export function getCustomModelConfigs(): CustomModelConfig[] {
+  migrateLegacyCustomModel()
+  const env = parseEnvFile()
+  return readCustomModelsRaw().map((item) => ({
+    id: item.id,
+    name: item.name || item.model,
+    baseUrl: item.baseUrl,
+    model: item.model,
+    apiKey: getCustomModelApiKey(item.id, env),
+    maxTokens: normalizeMaxTokens(item.maxTokens)
+  }))
+}
+
+export function getCustomModelConfigById(id: string): CustomModelConfig | null {
+  migrateLegacyCustomModel()
+  const record = readCustomModelsRaw().find((item) => item.id === id)
+  if (!record) return null
+  return {
+    id: record.id,
+    name: record.name || record.model,
+    baseUrl: record.baseUrl,
+    model: record.model,
+    apiKey: getCustomModelApiKey(record.id),
+    maxTokens: normalizeMaxTokens(record.maxTokens)
+  }
+}
+
+export function upsertCustomModelConfig(
+  config: Omit<CustomModelConfig, "id"> & { id?: string }
+): string {
+  getOpenworkDir()
+  migrateLegacyCustomModel()
+
+  const validatedMaxTokens = assertValidMaxTokens(config.maxTokens)
+  const validatedBaseUrl = assertValidBaseUrl(config.baseUrl)
+  const normalizedName = config.name.trim()
+  const normalizedModel = config.model.trim()
+  if (!normalizedName) {
+    throw new Error("显示名称不能为空")
+  }
+  if (!normalizedModel) {
+    throw new Error("模型名称不能为空")
+  }
+  const items = readCustomModelsRaw()
+  let targetId: string
+
+  if (config.id) {
+    targetId = config.id
+  } else {
+    const baseId = slugify(normalizedName || normalizedModel || "custom-model") || "custom-model"
+    targetId = baseId
+    let suffix = 1
+    while (items.some((item) => item.id === targetId)) {
+      suffix += 1
+      targetId = `${baseId}-${suffix}`
+    }
+  }
+
+  const duplicate = items.find((item) => item.name === normalizedName && item.id !== targetId)
+  if (duplicate) {
+    throw new Error("显示名称不能重复，请使用不同的显示名称")
+  }
+
+  const nextRecord: StoredCustomModelRecord = {
+    id: targetId,
+    name: normalizedName,
+    baseUrl: validatedBaseUrl,
+    model: normalizedModel,
+    maxTokens: validatedMaxTokens
+  }
+
+  const index = items.findIndex((item) => item.id === targetId)
+  if (index >= 0) {
+    items[index] = nextRecord
+  } else {
+    items.push(nextRecord)
+  }
+
+  writeCustomModelsRaw(items)
+
+  if (config.apiKey?.trim()) {
+    setCustomModelApiKey(targetId, config.apiKey.trim())
+  }
+
+  return targetId
+}
+
+export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
+  const configs = getCustomModelPublicConfigs()
+  return configs[0] ?? null
+}
+
+export function getCustomModelPublicConfigById(id: string): CustomModelPublicConfig | null {
+  migrateLegacyCustomModel()
+  const target = readCustomModelsRaw().find((item) => item.id === id)
+  return target ? toPublicConfig(target) : null
+}
+
+export function getCustomModelPublicConfigs(): CustomModelPublicConfig[] {
+  migrateLegacyCustomModel()
+  const env = parseEnvFile()
+  return readCustomModelsRaw().map((item) => toPublicConfig(item, env))
+}
+
+export function setCustomModelConfig(config: CustomModelConfig): void {
+  upsertCustomModelConfig(config)
+}
+
+export function deleteCustomModelConfig(id: string): void {
+  migrateLegacyCustomModel()
+
+  const items = readCustomModelsRaw()
+  const existed = items.some((item) => item.id === id)
+  const next = items.filter((item) => item.id !== id)
+  writeCustomModelsRaw(next)
+  if (existed) {
+    deleteCustomModelApiKey(id)
+  }
+}
+
+export function deleteAllCustomModelConfigs(): void {
+  migrateLegacyCustomModel()
+  if (existsSync(CUSTOM_MODELS_FILE)) {
+    unlinkSync(CUSTOM_MODELS_FILE)
+  }
   if (existsSync(CUSTOM_MODEL_FILE)) {
     unlinkSync(CUSTOM_MODEL_FILE)
   }
-  deleteApiKey("custom")
+  deleteAllCustomModelApiKeys()
 }

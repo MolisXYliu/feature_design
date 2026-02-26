@@ -1,10 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { createDeepAgent } from "deepagents"
 import {
-  getApiKey,
   getThreadCheckpointPath,
   getSkillsSources,
-  getCustomModelConfig,
+  getCustomModelConfigs,
   DEFAULT_MAX_TOKENS
 } from "../storage"
 
@@ -65,17 +64,19 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
 
 // Get the model instance from custom model configuration
 function getModelInstance(
-  customConfig: NonNullable<ReturnType<typeof getCustomModelConfig>>,
-  modelId?: string
+  customConfig: {
+    id: string
+    model: string
+    baseUrl: string
+    apiKey?: string
+  }
 ): ChatOpenAI {
-  const apiKey = getApiKey("custom") || customConfig.apiKey
+  const apiKey = customConfig.apiKey
   if (!apiKey) {
     throw new Error("Custom API key not configured")
   }
 
-  const resolvedModel = modelId?.startsWith("custom:")
-    ? modelId.slice("custom:".length)
-    : customConfig.model
+  const resolvedModel = customConfig.model
   if (!resolvedModel.trim()) {
     throw new Error("Custom model name is empty. Please configure a valid model name in Settings.")
   }
@@ -119,12 +120,19 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
   console.log("[Runtime] Thread ID:", threadId)
   console.log("[Runtime] Workspace path:", workspacePath)
 
-  const customConfig = getCustomModelConfig()
+  const selectedModelId = modelId?.startsWith("custom:") ? modelId.slice("custom:".length) : undefined
+
+  const allCustomConfigs = getCustomModelConfigs()
+  const customConfig = selectedModelId
+    ? (allCustomConfigs.find((item) => item.id === selectedModelId) ||
+      allCustomConfigs.find((item) => item.model === selectedModelId) ||
+      null)
+    : (allCustomConfigs[0] ?? null)
   if (!customConfig) {
     throw new Error("Custom model not configured. Please configure a model in Settings.")
   }
 
-  const model = getModelInstance(customConfig, modelId)
+  const model = getModelInstance(customConfig)
   console.log("[Runtime] Model instance created")
 
   const checkpointer = await getCheckpointer(threadId)
@@ -161,7 +169,8 @@ The workspace root is: ${workspacePath}`
   const customSummarization = summarizationMiddleware({
     model,
     trigger: { tokens: summarizationTrigger },
-    keep: { messages: 6 }
+    keep: { messages: 6 },
+    trimTokensToSummarize: 10_000
   }) as ReturnType<typeof summarizationMiddleware> & { name: string }
   customSummarization.name = "CustomSummarizationMiddleware"
 

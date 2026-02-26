@@ -136,12 +136,6 @@ const api = {
     setDefault: (modelId: string): Promise<void> => {
       return ipcRenderer.invoke("models:setDefault", modelId)
     },
-    setApiKey: (provider: string, apiKey: string): Promise<void> => {
-      return ipcRenderer.invoke("models:setApiKey", { provider, apiKey })
-    },
-    getApiKey: (provider: string): Promise<string | null> => {
-      return ipcRenderer.invoke("models:getApiKey", provider)
-    },
     getTokenLimits: (): Promise<{
       defaultMaxTokens: number
       minMaxTokens: number
@@ -153,16 +147,38 @@ const api = {
         maxMaxTokens: number
       }>
     },
-    deleteApiKey: (provider: string): Promise<void> => {
-      return ipcRenderer.invoke("models:deleteApiKey", provider)
+    getCustomConfigs: (): Promise<
+      Array<{
+        id: string
+        name: string
+        baseUrl: string
+        model: string
+        hasApiKey: boolean
+        maxTokens: number
+      }>
+    > => {
+      return ipcRenderer.invoke("models:getCustomConfigs") as Promise<
+        Array<{
+          id: string
+          name: string
+          baseUrl: string
+          model: string
+          hasApiKey: boolean
+          maxTokens: number
+        }>
+      >
     },
-    getCustomConfig: (): Promise<{
+    getCustomConfig: (id?: string): Promise<{
+      id: string
+      name: string
       baseUrl: string
       model: string
       hasApiKey: boolean
       maxTokens: number
     } | null> => {
-      return ipcRenderer.invoke("models:getCustomConfig") as Promise<{
+      return ipcRenderer.invoke("models:getCustomConfig", id) as Promise<{
+        id: string
+        name: string
         baseUrl: string
         model: string
         hasApiKey: boolean
@@ -170,6 +186,8 @@ const api = {
       } | null>
     },
     setCustomConfig: (config: {
+      id: string
+      name: string
       baseUrl: string
       model: string
       apiKey?: string
@@ -177,8 +195,18 @@ const api = {
     }): Promise<void> => {
       return ipcRenderer.invoke("models:setCustomConfig", config) as Promise<void>
     },
-    deleteCustomConfig: (): Promise<void> => {
-      return ipcRenderer.invoke("models:deleteCustomConfig") as Promise<void>
+    upsertCustomConfig: (config: {
+      id?: string
+      name: string
+      baseUrl: string
+      model: string
+      apiKey?: string
+      maxTokens?: number
+    }): Promise<{ id: string }> => {
+      return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
+    },
+    deleteCustomConfig: (id: string): Promise<void> => {
+      return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>
     }
   },
   workspace: {

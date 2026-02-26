@@ -34,8 +34,6 @@ interface AppState {
   // Model actions
   loadModels: () => Promise<void>
   loadProviders: () => Promise<void>
-  setApiKey: (providerId: string, apiKey: string) => Promise<void>
-  deleteApiKey: (providerId: string) => Promise<void>
 
   // Panel actions
   setRightPanelTab: (tab: "todos" | "files" | "subagents") => void
@@ -139,28 +137,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadProviders: async () => {
     const providers = await window.api.models.listProviders()
     set({ providers })
-  },
-
-  setApiKey: async (providerId: string, apiKey: string) => {
-    console.log("[Store] setApiKey called:", { providerId, keyLength: apiKey.length })
-    try {
-      await window.api.models.setApiKey(providerId, apiKey)
-      console.log("[Store] API key saved via IPC")
-      // Reload providers and models to update availability
-      await get().loadProviders()
-      await get().loadModels()
-      console.log("[Store] Providers and models reloaded")
-    } catch (e) {
-      console.error("[Store] Failed to set API key:", e)
-      throw e
-    }
-  },
-
-  deleteApiKey: async (providerId: string) => {
-    await window.api.models.deleteApiKey(providerId)
-    // Reload providers and models to update availability
-    await get().loadProviders()
-    await get().loadModels()
   },
 
   // Panel actions

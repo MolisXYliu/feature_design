@@ -5,7 +5,6 @@ import * as path from "path"
 import type {
   ModelConfig,
   Provider,
-  SetApiKeyParams,
   WorkspaceSetParams,
   WorkspaceLoadParams,
   WorkspaceFileParams
@@ -13,12 +12,10 @@ import type {
 import { startWatching, stopWatching } from "../services/workspace-watcher"
 import {
   getOpenworkDir,
-  getApiKey,
-  setApiKey,
-  deleteApiKey,
-  hasApiKey,
-  getCustomModelPublicConfig,
+  getCustomModelPublicConfigById,
+  getCustomModelPublicConfigs,
   setCustomModelConfig,
+  upsertCustomModelConfig,
   deleteCustomModelConfig,
   DEFAULT_MAX_TOKENS,
   MIN_MAX_TOKENS,
@@ -32,33 +29,58 @@ const store = new Store({
   cwd: getOpenworkDir()
 })
 
-const PROVIDERS: Omit<Provider, "hasApiKey">[] = [
+const PROVIDERS: Omit<Provider, "hasAnyModelApiKey">[] = [
   { id: "custom", name: "Custom" }
 ]
 
 function resolveDefaultModelId(): string {
-  const customConfig = getCustomModelPublicConfig()
-  return customConfig ? `custom:${customConfig.model}` : ""
+  const customConfigs = getCustomModelPublicConfigs()
+  return customConfigs.length > 0 ? `custom:${customConfigs[0].id}` : ""
 }
 
 export function registerModelHandlers(ipcMain: IpcMain): void {
   // List available models (custom only)
   ipcMain.handle("models:list", async () => {
-    const models: ModelConfig[] = []
-
-    const customConfig = getCustomModelPublicConfig()
-    if (customConfig) {
-      models.push({
-        id: `custom:${customConfig.model}`,
-        name: customConfig.model,
-        provider: "custom",
-        model: customConfig.model,
-        description: customConfig.baseUrl,
-        available: customConfig.hasApiKey
-      })
-    }
+    const customConfigs = getCustomModelPublicConfigs()
+    const models: ModelConfig[] = customConfigs.map((customConfig) => ({
+      id: `custom:${customConfig.id}`,
+      name: customConfig.name,
+      provider: "custom",
+      model: customConfig.model,
+      description: customConfig.baseUrl,
+      available: customConfig.hasApiKey
+    }))
 
     return models
+  })
+
+  ipcMain.handle("models:getCustomConfigs", async () => {
+    return getCustomModelPublicConfigs()
+  })
+
+  ipcMain.handle("models:getCustomConfig", async (_event, id?: string) => {
+    if (id) {
+      return getCustomModelPublicConfigById(id)
+    }
+    const all = getCustomModelPublicConfigs()
+    return all[0] || null
+  })
+
+  ipcMain.handle("models:setCustomConfig", async (_event, config: CustomModelConfig) => {
+    setCustomModelConfig(config)
+  })
+
+  ipcMain.handle(
+    "models:upsertCustomConfig",
+    async (_event, config: Omit<CustomModelConfig, "id"> & { id?: string }) => {
+      const id = upsertCustomModelConfig(config)
+      return { id }
+    }
+  )
+
+  ipcMain.handle("models:deleteCustomConfig", async (_event, id: string) => {
+    if (!id) throw new Error("Model id is required for deletion")
+    deleteCustomModelConfig(id)
   })
 
   // Get default model
@@ -72,32 +94,13 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     store.set("defaultModel", modelId)
   })
 
-  // Set API key for a provider (stored in ~/.openwork/.env)
-  ipcMain.handle("models:setApiKey", async (_event, { provider, apiKey }: SetApiKeyParams) => {
-    setApiKey(provider, apiKey)
-  })
-
-  // Get API key for a provider (from ~/.openwork/.env or process.env)
-  ipcMain.handle("models:getApiKey", async (_event, provider: string) => {
-    return getApiKey(provider) ?? null
-  })
-
-  // Delete API key for a provider
-  ipcMain.handle("models:deleteApiKey", async (_event, provider: string) => {
-    deleteApiKey(provider)
-  })
-
-  // List providers with their API key status
+  // List providers with whether any model has a key configured.
   ipcMain.handle("models:listProviders", async () => {
+    const hasAnyModelApiKey = getCustomModelPublicConfigs().some((config) => config.hasApiKey)
     return PROVIDERS.map((provider) => ({
       ...provider,
-      hasApiKey: hasApiKey(provider.id)
+      hasAnyModelApiKey
     }))
-  })
-
-  // Custom model configuration
-  ipcMain.handle("models:getCustomConfig", async () => {
-    return getCustomModelPublicConfig()
   })
 
   ipcMain.handle("models:getTokenLimits", async () => {
@@ -106,14 +109,6 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       minMaxTokens: MIN_MAX_TOKENS,
       maxMaxTokens: MAX_MAX_TOKENS
     }
-  })
-
-  ipcMain.handle("models:setCustomConfig", async (_event, config: CustomModelConfig) => {
-    setCustomModelConfig(config)
-  })
-
-  ipcMain.handle("models:deleteCustomConfig", async () => {
-    deleteCustomModelConfig()
   })
 
   // Sync version info
@@ -383,9 +378,6 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     }
   )
 }
-
-// Re-export getApiKey from storage for use in agent runtime
-export { getApiKey } from "../storage"
 
 export function getDefaultModel(): string {
   const stored = store.get("defaultModel", "") as string
