@@ -293,8 +293,18 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
 
   const systemPrompt = getSystemPrompt(workspacePath)
 
+  const isWindows = process.platform === "win32"
+  const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
+  const shell = isWindows ? "PowerShell" : process.env.SHELL?.split("/").pop() || "bash"
+
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
 
+### System Environment
+- Operating system: ${platform} (${process.arch})
+- Default shell: ${shell}
+${isWindows ? "- Use PowerShell syntax for shell commands (e.g., Get-ChildItem instead of ls, Get-Content instead of cat)" : "- Use Unix commands for shell operations (ls, cat, grep, etc.)"}
+
+### Available Tools
 - ls: list files in a directory (e.g., ls("${workspacePath}"))
 - read_file: read a file from the filesystem
 - write_file: write to a file in the filesystem

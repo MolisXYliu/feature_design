@@ -174,11 +174,11 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
-        streamMode: ["messages", "values"] as const,
-        recursionLimit: 1000
-      }
+      streamMode: ["messages", "values"] as ("messages" | "values")[],
+      recursionLimit: 1000
+    }
 
-      // Resume from checkpoint by streaming with Command containing the decision
+    // Resume from checkpoint by streaming with Command containing the decision
       // The HITL middleware expects { decisions: [{ type: 'approve' | 'reject' | 'edit' }] }
       const decisionType = command?.resume?.decision || "approve"
       const resumeValue = { decisions: [{ type: decisionType }] }
@@ -256,11 +256,11 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
-        streamMode: ["messages", "values"] as const,
-        recursionLimit: 1000
-      }
+      streamMode: ["messages", "values"] as ("messages" | "values")[],
+      recursionLimit: 1000
+    }
 
-      if (decision.type === "approve") {
+    if (decision.type === "approve") {
         // Resume execution by invoking with null (continues from checkpoint)
         const stream = await agent.stream(null, config)
 
