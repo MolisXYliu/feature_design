@@ -12,7 +12,13 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import { FilesystemBackend, type ExecuteResponse, type SandboxBackendProtocol } from "deepagents"
+import {
+  FilesystemBackend,
+  type ExecuteResponse,
+  type SandboxBackendProtocol,
+  type GrepMatch,
+  type FileInfo
+} from "deepagents"
 
 /**
  * Options for LocalSandbox configuration.
@@ -77,26 +83,117 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   /**
-   * Patch resolvePath at instance level to redirect deepagents' eviction
+   * Patch resolvePath at instance level to redirect deepagents' internal
    * path (/large_tool_results/...) into the workspace directory.
    * Covers ALL file operations (read, write, edit, list, grep, glob)
    * since they all funnel through resolvePath internally.
    */
   private patchResolvePath(): void {
     if (typeof (this as any).resolvePath !== "function") {
-      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping eviction path patch")
+      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
       return
     }
     const original = (this as any).resolvePath.bind(this)
     const workingDir = this.workingDir
+    const redirects: Record<string, string> = {
+      "/large_tool_results/": ".cmbcoworkagent/large_tool_results"
+    }
     ;(this as any).resolvePath = (key: string): string => {
-      if (key.startsWith("/large_tool_results/")) {
-        const redirected = join(workingDir, ".large_tool_results", key.slice("/large_tool_results/".length))
-        console.log("[LocalSandbox] Redirecting eviction path:", key, "→", redirected)
-        key = redirected
+      for (const [prefix, localDir] of Object.entries(redirects)) {
+        if (key.startsWith(prefix)) {
+          const redirected = join(workingDir, localDir, key.slice(prefix.length))
+          console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
+          key = redirected
+          break
+        }
       }
       return original(key)
     }
+  }
+
+  private static readonly MAX_GREP_MATCHES = 200
+  private static readonly MAX_GREP_CHARS = 24_000
+  private static readonly MAX_GLOB_ENTRIES = 400
+  private static readonly MAX_LS_ENTRIES = 300
+
+  /**
+   * Override grepRaw to cap results for codebase exploration.
+   * In this LocalSandbox path (FilesystemBackend-based), grep results can
+   * otherwise grow very large and pressure small model context windows.
+   */
+  async grepRaw(
+    pattern: string,
+    path?: string,
+    glob?: string | null
+  ): Promise<GrepMatch[] | string> {
+    const results = await super.grepRaw(pattern, path ?? "/", glob)
+    if (typeof results === "string") return results
+    if (results.length === 0) return results
+
+    const capped: GrepMatch[] = []
+    let charCount = 0
+
+    for (const match of results) {
+      if (capped.length >= LocalSandbox.MAX_GREP_MATCHES) break
+      const estChars = match.path.length + match.text.length + 16
+      if (charCount + estChars > LocalSandbox.MAX_GREP_CHARS) break
+      capped.push(match)
+      charCount += estChars
+    }
+
+    if (capped.length < results.length) {
+      const omitted = results.length - capped.length
+      console.log(
+        "[LocalSandbox] grepRaw capped results:",
+        `${capped.length}/${results.length}`,
+        `(omitted ${omitted}, chars=${charCount})`
+      )
+      capped.push({
+        path: "(truncated)",
+        line: 0,
+        text: `... ${omitted} more matches omitted. Refine pattern/path/glob and run grep again.`
+      })
+    }
+
+    return capped
+  }
+
+  /**
+   * Cap glob results because repository-wide globs can easily return thousands
+   * of files and consume context on small windows.
+   */
+  async globInfo(pattern: string, path = "/"): Promise<FileInfo[]> {
+    const infos = await super.globInfo(pattern, path)
+    if (infos.length <= LocalSandbox.MAX_GLOB_ENTRIES) return infos
+
+    const capped = infos.slice(0, LocalSandbox.MAX_GLOB_ENTRIES)
+    const omitted = infos.length - capped.length
+    console.log(
+      "[LocalSandbox] globInfo capped results:",
+      `${capped.length}/${infos.length}`,
+      `for pattern=${pattern}`
+    )
+    capped.push({
+      path: `(truncated) ... ${omitted} more files omitted. Use a more specific glob pattern or path.`,
+      is_dir: false
+    } as FileInfo)
+    return capped
+  }
+
+  /**
+   * Light cap for ls to avoid pathological large directory listings.
+   */
+  async lsInfo(path: string): Promise<FileInfo[]> {
+    const infos = await super.lsInfo(path)
+    if (infos.length <= LocalSandbox.MAX_LS_ENTRIES) return infos
+
+    const capped = infos.slice(0, LocalSandbox.MAX_LS_ENTRIES)
+    console.log(
+      "[LocalSandbox] lsInfo capped results:",
+      `${capped.length}/${infos.length}`,
+      `for path=${path}`
+    )
+    return capped
   }
 
   /**

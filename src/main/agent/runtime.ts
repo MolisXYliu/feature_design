@@ -5,6 +5,7 @@ import {
   createPatchToolCallsMiddleware,
   createSkillsMiddleware,
   createMemoryMiddleware,
+  createSummarizationMiddleware,
   StateBackend
 } from "deepagents"
 import {
@@ -21,10 +22,10 @@ import {
   createAgent,
   SystemMessage,
   todoListMiddleware,
-  summarizationMiddleware,
   anthropicPromptCachingMiddleware,
   humanInTheLoopMiddleware
 } from "langchain"
+import { Runnable } from "@langchain/core/runnables"
 
 import type * as _lcTypes from "langchain"
 import type * as _lcMessages from "@langchain/core/messages"
@@ -39,10 +40,10 @@ const BASE_PROMPT =
 /**
  * Custom version of deepagents' createDeepAgent.
  *
- * Identical to the original except:
- *   1. `defaultInterruptOn` is always null — subagents run autonomously without HITL.
- *   2. `subagentSummarizationTrigger` — configurable summarization trigger for subagents
- *      (original hardcodes 170 000 tokens).
+ * Aligned with official 1.8.1 except:
+ *   - `defaultInterruptOn` is always null — subagents run autonomously without HITL.
+ *   - Accepts `summarizationTrigger` / `summarizationKeep` for explicit overrides
+ *     (useful for custom models without a profile).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function createDeepAgent(params: Record<string, any> = {}) {
@@ -62,8 +63,10 @@ function createDeepAgent(params: Record<string, any> = {}) {
     memory,
     skills,
     filesystemSystemPrompt,
-    subagentSummarizationTrigger = 170_000,
-    toolTokenLimitBeforeEvict
+    summarizationTrigger,
+    summarizationKeep,
+    toolTokenLimitBeforeEvict,
+    trimTokensToSummarize
   } = params
 
   // --- systemPrompt handling (identical to original) ---
@@ -83,67 +86,90 @@ function createDeepAgent(params: Record<string, any> = {}) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const filesystemBackend = backend ? backend : (config: any) => new StateBackend(config)
 
-  const skillsMiddleware =
+  const skillsMiddlewareArray =
     skills != null && skills.length > 0
       ? [createSkillsMiddleware({ backend: filesystemBackend, sources: skills })]
       : []
 
+  const memoryMiddlewareArray =
+    memory != null && memory.length > 0
+      ? [createMemoryMiddleware({ backend: filesystemBackend, sources: memory })]
+      : []
+
+  // Process subagents: auto-inject SkillsMiddleware for subagents with their own skills
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const builtInMiddleware: any[] = [
+  const processedSubagents = subagents.map((subagent: any) => {
+    if (Runnable.isRunnable(subagent)) return subagent
+    if (!("skills" in subagent) || subagent.skills?.length === 0) return subagent
+    const subagentSkillsMiddleware = createSkillsMiddleware({
+      backend: filesystemBackend,
+      sources: subagent.skills ?? []
+    })
+    return {
+      ...subagent,
+      middleware: [subagentSkillsMiddleware, ...(subagent.middleware || [])]
+    }
+  })
+
+  // Summarization options: pass explicit trigger/keep if provided, otherwise let
+  // createSummarizationMiddleware auto-compute from the model profile.
+  const summarizationOptions = {
+    model,
+    backend: filesystemBackend,
+    historyPathPrefix: ".cmbcoworkagent/conversation_history",
+    ...(trimTokensToSummarize != null && { trimTokensToSummarize }),
+    ...(summarizationTrigger != null && { trigger: summarizationTrigger }),
+    ...(summarizationKeep != null && { keep: summarizationKeep }),
+    truncateArgsSettings: {
+      trigger: { type: "messages" as const, value: 20 },
+      keep: { type: "messages" as const, value: 20 },
+      maxLength: 1000
+    }
+  }
+
+  // Base middleware for custom subagents (no skills — custom subagents must define their own)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const subagentMiddleware: any[] = [
     todoListMiddleware(),
-    ...skillsMiddleware,
     createFilesystemMiddleware({
       backend: filesystemBackend,
       ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
       ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
     }),
-    createSubAgentMiddleware({
-      defaultModel: model,
-      defaultTools: tools,
-      defaultMiddleware: [
-        todoListMiddleware(),
-        ...skillsMiddleware,
-        createFilesystemMiddleware({
-          backend: filesystemBackend,
-          ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
-          ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
-        }),
-        summarizationMiddleware({
-          model,
-          trigger: { tokens: subagentSummarizationTrigger },
-          keep: { messages: 6 },
-          trimTokensToSummarize: 10_000
-        }),
-        anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
-        createPatchToolCallsMiddleware()
-      ],
-      defaultInterruptOn: null, // FIX: subagents run without HITL
-      subagents,
-      generalPurposeAgent: true
-    } as Parameters<typeof createSubAgentMiddleware>[0]),
-    summarizationMiddleware({
-      model,
-      trigger: { tokens: subagentSummarizationTrigger },
-      keep: { messages: 6 },
-      trimTokensToSummarize: 10_000
-    }),
+    createSummarizationMiddleware(summarizationOptions),
     anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
-    createPatchToolCallsMiddleware(),
-    ...(memory != null && memory.length > 0
-      ? [createMemoryMiddleware({ backend: filesystemBackend, sources: memory })]
-      : [])
+    createPatchToolCallsMiddleware()
   ]
-
-  if (interruptOn) {
-    builtInMiddleware.push(humanInTheLoopMiddleware({ interruptOn }))
-  }
 
   return createAgent({
     model,
     systemPrompt: finalSystemPrompt,
     tools,
-    middleware: [...builtInMiddleware, ...customMiddleware],
-    responseFormat,
+    middleware: [
+      todoListMiddleware(),
+      createFilesystemMiddleware({
+        backend: filesystemBackend,
+        ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
+        ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
+      }),
+      createSubAgentMiddleware({
+        defaultModel: model,
+        defaultTools: tools,
+        defaultMiddleware: subagentMiddleware,
+        generalPurposeMiddleware: [...subagentMiddleware, ...skillsMiddlewareArray],
+        defaultInterruptOn: null, // FIX: subagents run without HITL
+        subagents: processedSubagents,
+        generalPurposeAgent: true
+      } as Parameters<typeof createSubAgentMiddleware>[0]),
+      createSummarizationMiddleware(summarizationOptions),
+      anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
+      createPatchToolCallsMiddleware(),
+      ...skillsMiddlewareArray,
+      ...memoryMiddlewareArray,
+      ...(interruptOn ? [humanInTheLoopMiddleware({ interruptOn })] : []),
+      ...customMiddleware
+    ],
+    ...(responseFormat != null && { responseFormat }),
     contextSchema,
     checkpointer,
     store,
@@ -283,7 +309,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
   console.log("[Runtime] Checkpointer ready for thread:", threadId)
 
   const maxTokens = customConfig?.maxTokens ?? DEFAULT_MAX_TOKENS
-  const maxOutputBytes = maxTokens * 4 * 0.3
+  // Tune shell output cap for 32K~64K context windows to reduce context pressure.
+  const maxOutputBytes = Math.max(30_000, Math.min(80_000, Math.floor(maxTokens * 4 * 0.2)))
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
@@ -317,9 +344,11 @@ The workspace root is: ${workspacePath}`
   const skillsSources = getSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
 
-  const summarizationTrigger = Math.floor(maxTokens * 0.85)
-  const toolEvictLimit = Math.floor(maxTokens * 0.1)
-  console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", summarizationTrigger, "→ tool evict limit:", toolEvictLimit, "→ max output bytes:", maxOutputBytes)
+  const triggerTokens = Math.floor(maxTokens * 0.75)
+  const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
+  const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
+  const trimForSummary = Math.min(12_000, Math.floor(maxTokens * 0.25))
+  console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", triggerTokens, "→ keep:", keepTokens, "→ tool evict limit:", toolEvictLimit, "→ trim for summary:", trimForSummary, "→ max output bytes:", maxOutputBytes)
 
   const agent = createDeepAgent({
     model,
@@ -329,8 +358,10 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: skillsSources.length > 0 ? skillsSources : undefined,
     interruptOn: { execute: true },
-    subagentSummarizationTrigger: summarizationTrigger,
-    toolTokenLimitBeforeEvict: toolEvictLimit
+    summarizationTrigger: { type: "tokens", value: triggerTokens },
+    summarizationKeep: { type: "tokens", value: keepTokens },
+    toolTokenLimitBeforeEvict: toolEvictLimit,
+    trimTokensToSummarize: trimForSummary
   })
 
   console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
