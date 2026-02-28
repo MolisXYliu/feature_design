@@ -37,6 +37,33 @@ import { BASE_SYSTEM_PROMPT } from "./system-prompt"
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
 
+const SEQUENTIAL_TASK_PROMPT = `## \`task\` (subagent spawner)
+
+You have access to a \`task\` tool to launch short-lived subagents that handle isolated tasks. These agents are ephemeral — they live only for the duration of the task and return a single result.
+
+When to use the task tool:
+- When a task is complex and multi-step, and can be fully delegated in isolation
+- When a task requires focused reasoning or heavy token/context usage that would bloat the orchestrator thread
+- When sandboxing improves reliability (e.g. code execution, structured searches, data formatting)
+- When you only care about the output of the subagent, and not the intermediate steps (ex. performing a lot of research and then returned a synthesized report, performing a series of computations or lookups to achieve a concise, relevant answer.)
+
+Subagent lifecycle:
+1. **Spawn** → Provide clear role, instructions, and expected output
+2. **Run** → The subagent completes the task autonomously
+3. **Return** → The subagent provides a single structured result
+4. **Reconcile** → Incorporate or synthesize the result into the main thread
+
+When NOT to use the task tool:
+- If you need to see the intermediate reasoning or steps after the subagent has completed (the task tool hides them)
+- If the task is trivial (a few tool calls or simple lookup)
+- If delegating does not reduce token usage, complexity, or context switching
+- If splitting would add latency without benefit
+
+## Important Task Tool Usage Notes to Remember
+- **CRITICAL: Only launch ONE subagent at a time.** Wait for the current subagent to finish and return its result before deciding whether to launch the next one. Do NOT spawn multiple subagents in parallel. This ensures stable context and predictable execution order.
+- Remember to use the \`task\` tool to silo independent tasks within a multi-part objective.
+- You should use the \`task\` tool whenever you have a complex task that will take multiple steps, and is independent from other tasks that the agent needs to complete. These agents are highly competent and efficient.`
+
 /**
  * Custom version of deepagents' createDeepAgent.
  *
@@ -159,7 +186,8 @@ function createDeepAgent(params: Record<string, any> = {}) {
         generalPurposeMiddleware: [...subagentMiddleware, ...skillsMiddlewareArray],
         defaultInterruptOn: null, // FIX: subagents run without HITL
         subagents: processedSubagents,
-        generalPurposeAgent: true
+        generalPurposeAgent: true,
+        systemPrompt: SEQUENTIAL_TASK_PROMPT
       } as Parameters<typeof createSubAgentMiddleware>[0]),
       createSummarizationMiddleware(summarizationOptions),
       anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
