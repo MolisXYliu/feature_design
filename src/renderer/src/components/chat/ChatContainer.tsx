@@ -337,9 +337,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
     const loadSkills = async (): Promise<void> => {
       try {
-        const loadedSkills = await window.api.skills.list()
+        const [loadedSkills, disabledList] = await Promise.all([
+          window.api.skills.list(),
+          window.api.skills.getDisabled()
+        ])
         if (!mounted) return
-        setSkills([...loadedSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+        const disabledSet = new Set(disabledList)
+        const builtinOnly = loadedSkills.filter((s) => s.source === "project" && !disabledSet.has(s.name))
+        setSkills([...builtinOnly].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
       } catch (error) {
         console.error("[ChatContainer] Failed to load skills:", error)
         if (mounted) setSkills([])

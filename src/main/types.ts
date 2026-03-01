@@ -177,6 +177,34 @@ export interface GrepMatch {
   text: string
 }
 
+// MCP Connector types
+export interface McpConnectorAdvanced {
+  headers?: Record<string, string>
+  transport?: "sse" | "streamable-http"
+  reconnect?: {
+    enabled?: boolean
+    maxAttempts?: number
+    delayMs?: number
+  }
+}
+
+export interface McpConnectorConfig {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+  advanced?: McpConnectorAdvanced
+  createdAt: string
+  updatedAt: string
+}
+
+export interface McpConnectorUpsert {
+  name: string
+  url: string
+  enabled?: boolean
+  advanced?: McpConnectorAdvanced
+}
+
 // Skills types
 export interface SkillMetadata {
   name: string

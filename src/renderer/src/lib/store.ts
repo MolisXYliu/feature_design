@@ -18,10 +18,14 @@ interface AppState {
 
   // Sidebar state
   sidebarCollapsed: boolean
+  rightPanelCollapsed: boolean
 
   // Kanban view state
   showKanbanView: boolean
   showSubagentsInKanban: boolean
+
+  // Customize view state
+  showCustomizeView: boolean
 
   // Thread actions
   loadThreads: () => Promise<void>
@@ -44,10 +48,15 @@ interface AppState {
   // Sidebar actions
   toggleSidebar: () => void
   setSidebarCollapsed: (collapsed: boolean) => void
+  toggleRightPanel: () => void
+  setRightPanelCollapsed: (collapsed: boolean) => void
 
   // Kanban actions
   setShowKanbanView: (show: boolean) => void
   setShowSubagentsInKanban: (show: boolean) => void
+
+  // Customize actions
+  setShowCustomizeView: (show: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -59,8 +68,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   rightPanelTab: "todos",
   settingsOpen: false,
   sidebarCollapsed: false,
+  rightPanelCollapsed: false,
   showKanbanView: false,
   showSubagentsInKanban: true,
+  showCustomizeView: false,
 
   // Thread actions
   loadThreads: async () => {
@@ -84,9 +95,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   selectThread: async (threadId: string) => {
-    // Just update currentThreadId - ThreadContext handles per-thread state
-    // Also close kanban view when selecting a thread
-    set({ currentThreadId: threadId, showKanbanView: false })
+    set({ currentThreadId: threadId, showKanbanView: false, showCustomizeView: false })
   },
 
   deleteThread: async (threadId: string) => {
@@ -158,10 +167,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ sidebarCollapsed: collapsed })
   },
 
+  toggleRightPanel: () => {
+    set((state) => ({ rightPanelCollapsed: !state.rightPanelCollapsed }))
+  },
+
+  setRightPanelCollapsed: (collapsed: boolean) => {
+    set({ rightPanelCollapsed: collapsed })
+  },
+
   // Kanban actions
   setShowKanbanView: (show: boolean) => {
     if (show) {
-      set({ showKanbanView: true, currentThreadId: null })
+      set({ showKanbanView: true, showCustomizeView: false, currentThreadId: null })
     } else {
       set({ showKanbanView: false })
     }
@@ -169,5 +186,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setShowSubagentsInKanban: (show: boolean) => {
     set({ showSubagentsInKanban: show })
+  },
+
+  setShowCustomizeView: (show: boolean) => {
+    if (show) {
+      set({ showCustomizeView: true, showKanbanView: false })
+    } else {
+      set({ showCustomizeView: false })
+    }
   }
 }))

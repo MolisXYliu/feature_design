@@ -4,6 +4,7 @@ import { registerAgentHandlers } from "./ipc/agent"
 import { registerThreadHandlers } from "./ipc/threads"
 import { registerModelHandlers } from "./ipc/models"
 import { registerSkillsHandlers } from "./ipc/skills"
+import { registerMcpHandlers } from "./ipc/mcp"
 import { initializeDatabase } from "./db"
 
 let mainWindow: BrowserWindow | null = null
@@ -20,7 +21,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: "#0D0D0F",
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
+    trafficLightPosition: { x: 16, y: 11 },
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false
@@ -87,6 +88,8 @@ app.whenReady().then(async () => {
   registerThreadHandlers(ipcMain)
   registerModelHandlers(ipcMain)
   registerSkillsHandlers(ipcMain)
+  registerMcpHandlers(ipcMain)
+
 
   createWindow()
 

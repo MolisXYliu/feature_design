@@ -132,18 +132,22 @@ export function RightPanel(): React.JSX.Element {
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [skills, setSkills] = useState<SkillMetadata[]>([])
+  const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set())
 
-  // Load skills on mount
   useEffect(() => {
-    async function loadSkills(): Promise<void> {
+    async function load(): Promise<void> {
       try {
-        const loaded = await window.api.skills.list()
+        const [loaded, disabled] = await Promise.all([
+          window.api.skills.list(),
+          window.api.skills.getDisabled()
+        ])
         setSkills(loaded)
+        setDisabledSkills(new Set(disabled))
       } catch (e) {
         console.error("[RightPanel] Failed to load skills:", e)
       }
     }
-    loadSkills()
+    load()
   }, [])
 
   // Store content heights in pixels (null = auto/equal distribution)
@@ -469,7 +473,7 @@ export function RightPanel(): React.JSX.Element {
         />
         {skillsOpen && (
           <div className="overflow-auto right-panel-scroll" style={{ height: heights.skills }}>
-            <SkillsContent skills={skills} />
+            <SkillsContent skills={skills} disabledSkills={disabledSkills} />
           </div>
         )}
       </div>
@@ -1080,7 +1084,13 @@ function AgentsContent(): React.JSX.Element {
   )
 }
 
-function SkillsContent({ skills }: { skills: SkillMetadata[] }): React.JSX.Element {
+function SkillsContent({
+  skills,
+  disabledSkills
+}: {
+  skills: SkillMetadata[]
+  disabledSkills: Set<string>
+}): React.JSX.Element {
   if (skills.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
@@ -1112,17 +1122,29 @@ function SkillsContent({ skills }: { skills: SkillMetadata[] }): React.JSX.Eleme
   const programmingSkills = skills.filter(isProgrammingSkill)
   const generalSkills = skills.filter((skill) => !isProgrammingSkill(skill))
 
-  const renderSkillCard = (skill: SkillMetadata): React.JSX.Element => (
-    <div key={skill.name} className="p-3 rounded-sm border border-border">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <Sparkles className="size-3.5 text-amber-500 shrink-0" />
-        <span className="flex-1 truncate">{skill.name}</span>
+  const renderSkillCard = (skill: SkillMetadata): React.JSX.Element => {
+    const disabled = disabledSkills.has(skill.name)
+    return (
+      <div
+        key={skill.name}
+        className={cn(
+          "p-3 rounded-sm border border-border",
+          disabled && "opacity-60"
+        )}
+      >
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Sparkles className={cn("size-3.5 shrink-0", disabled ? "text-muted-foreground" : "text-amber-500")} />
+          <span className={cn("flex-1 truncate", disabled && "text-muted-foreground line-through")}>{skill.name}</span>
+          {disabled && (
+            <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">已禁用</Badge>
+          )}
+        </div>
+        {skill.description && (
+          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
+        )}
       </div>
-      {skill.description && (
-        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{skill.description}</p>
-      )}
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="p-3 space-y-2">

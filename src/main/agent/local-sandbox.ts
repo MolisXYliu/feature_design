@@ -188,11 +188,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (infos.length <= LocalSandbox.MAX_LS_ENTRIES) return infos
 
     const capped = infos.slice(0, LocalSandbox.MAX_LS_ENTRIES)
+    const omitted = infos.length - capped.length
     console.log(
       "[LocalSandbox] lsInfo capped results:",
       `${capped.length}/${infos.length}`,
       `for path=${path}`
     )
+    capped.push({
+      path: `(truncated) ... ${omitted} more entries omitted. Use a more specific path.`,
+      is_dir: false
+    } as FileInfo)
     return capped
   }
 

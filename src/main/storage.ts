@@ -1,7 +1,9 @@
 import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
+import { v4 as uuid } from "uuid"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
+import { readdir, readFile, rm, mkdir, cp } from "fs/promises"
 const OPENWORK_DIR = join(homedir(), ".openwork")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -91,9 +93,177 @@ export function getSkillsDir(): string {
   return workspaceSkillsDir
 }
 
+const CUSTOM_SKILLS_DIR = join(OPENWORK_DIR, "skills")
+
+export function getCustomSkillsDir(): string {
+  getOpenworkDir()
+  return CUSTOM_SKILLS_DIR
+}
+
 export function getSkillsSources(): string[] {
-  const dir = getSkillsDir()
-  return existsSync(dir) ? [dir] : []
+  const builtin = getSkillsDir()
+  const custom = getCustomSkillsDir()
+  const sources: string[] = []
+  if (existsSync(builtin)) sources.push(builtin)
+  if (existsSync(custom)) sources.push(custom)
+  return sources
+}
+
+const DISABLED_SKILLS_FILE = join(OPENWORK_DIR, "disabled-skills.json")
+
+export function getDisabledSkills(): string[] {
+  getOpenworkDir()
+  if (!existsSync(DISABLED_SKILLS_FILE)) return []
+  try {
+    const content = readFileSync(DISABLED_SKILLS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === "string") : []
+  } catch {
+    return []
+  }
+}
+
+export function setDisabledSkills(skillNames: string[]): void {
+  getOpenworkDir()
+  writeFileSync(DISABLED_SKILLS_FILE, JSON.stringify(skillNames, null, 2))
+  invalidateEnabledSkillsCache()
+}
+
+function parseSkillNameFromFrontmatter(content: string): string | null {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (!match) return null
+  for (const line of match[1].split("\n")) {
+    const colonIdx = line.indexOf(":")
+    if (colonIdx > 0 && line.slice(0, colonIdx).trim().toLowerCase() === "name") {
+      return line.slice(colonIdx + 1).trim()
+    }
+  }
+  return null
+}
+
+const ENABLED_SKILLS_DIR = join(OPENWORK_DIR, "enabled-skills")
+
+// Fingerprint of the last successful enabled-skills rebuild
+let _enabledSkillsFingerprint: string | null = null
+
+function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: string[]): string {
+  const parts = [disabledList.sort().join(","), sourceDirs.join("|")]
+  for (const dir of sourceDirs) {
+    if (!existsSync(dir)) continue
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true })
+      const dirNames: string[] = []
+      for (const e of entries) {
+        if (!e.isDirectory()) continue
+        dirNames.push(e.name)
+        const skillMdPath = join(dir, e.name, "SKILL.md")
+        try {
+          const st = statSync(skillMdPath)
+          dirNames.push(String(st.mtimeMs))
+        } catch { /* no SKILL.md or unreadable */ }
+      }
+      parts.push(dirNames.sort().join(","))
+    } catch { /* ignore */ }
+  }
+  return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 16)
+}
+
+async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set<string>): Promise<number> {
+  let count = 0
+  const entries = await readdir(sourceDir, { withFileTypes: true })
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const skillMdPath = join(sourceDir, entry.name, "SKILL.md")
+    if (!existsSync(skillMdPath)) continue
+
+    try {
+      const content = await readFile(skillMdPath, "utf-8")
+      const name = parseSkillNameFromFrontmatter(content) || entry.name
+      if (disabled.has(name.trim().toLowerCase())) continue
+    } catch {
+      continue
+    }
+
+    const destPath = join(ENABLED_SKILLS_DIR, entry.name)
+    try {
+      await cp(join(sourceDir, entry.name), destPath, { recursive: true })
+      count++
+    } catch (e) {
+      console.warn(`[Storage] Failed to copy skill ${entry.name}:`, e)
+    }
+  }
+  return count
+}
+
+let _enabledSkillsBuildLock: Promise<string> | null = null
+
+/**
+ * Ensures ~/.openwork/enabled-skills/ exists with copies of enabled skills only.
+ * Uses async I/O to avoid blocking the main process event loop.
+ * Skips rebuild if the disabled list and source dirs haven't changed.
+ * Serialized via a Promise lock to prevent concurrent rm/mkdir/cp races.
+ */
+async function ensureEnabledSkillsDirAsync(): Promise<string> {
+  if (_enabledSkillsBuildLock) return _enabledSkillsBuildLock
+  _enabledSkillsBuildLock = _ensureEnabledSkillsDirImpl()
+  try {
+    return await _enabledSkillsBuildLock
+  } finally {
+    _enabledSkillsBuildLock = null
+  }
+}
+
+async function _ensureEnabledSkillsDirImpl(): Promise<string> {
+  getOpenworkDir()
+  const builtinDir = getSkillsDir()
+  const customDir = getCustomSkillsDir()
+  const disabled = getDisabledSkills()
+  const sourceDirs = [builtinDir, customDir]
+
+  const fingerprint = computeEnabledSkillsFingerprint(disabled, sourceDirs)
+  if (_enabledSkillsFingerprint === fingerprint && existsSync(ENABLED_SKILLS_DIR)) {
+    return ENABLED_SKILLS_DIR
+  }
+
+  if (existsSync(ENABLED_SKILLS_DIR)) {
+    await rm(ENABLED_SKILLS_DIR, { recursive: true })
+  }
+  await mkdir(ENABLED_SKILLS_DIR, { recursive: true })
+
+  const disabledSet = new Set(disabled.map((s) => s.trim().toLowerCase()))
+  let total = 0
+  if (existsSync(builtinDir)) total += await copyEnabledSkillsFromSourceAsync(builtinDir, disabledSet)
+  if (existsSync(customDir)) total += await copyEnabledSkillsFromSourceAsync(customDir, disabledSet)
+
+  _enabledSkillsFingerprint = fingerprint
+  return ENABLED_SKILLS_DIR
+}
+
+/**
+ * Invalidate the enabled-skills cache so the next call rebuilds.
+ * Should be called when disabled skills list changes.
+ */
+export function invalidateEnabledSkillsCache(): void {
+  _enabledSkillsFingerprint = null
+}
+
+/**
+ * Returns skills sources for the agent: either the filtered enabled-skills dir
+ * or the full skills dirs if no skills are disabled.
+ */
+export async function getEnabledSkillsSources(): Promise<string[]> {
+  const disabled = getDisabledSkills()
+  if (disabled.length === 0) return getSkillsSources()
+
+  await ensureEnabledSkillsDirAsync()
+  try {
+    const entries = await readdir(ENABLED_SKILLS_DIR)
+    if (entries.length > 0) return [ENABLED_SKILLS_DIR]
+  } catch { /* fall through */ }
+
+  console.warn("[Storage] No enabled skills copied; using all skills")
+  return getSkillsSources()
 }
 
 // Custom model configurations stored as JSON in ~/.openwork/custom-models.json
@@ -428,4 +598,78 @@ export function deleteAllCustomModelConfigs(): void {
     unlinkSync(CUSTOM_MODEL_FILE)
   }
   deleteAllCustomModelApiKeys()
+}
+
+// MCP Connectors
+const MCP_CONNECTORS_FILE = join(OPENWORK_DIR, "mcp-connectors.json")
+
+export function getMcpConnectorsPath(): string {
+  getOpenworkDir()
+  return MCP_CONNECTORS_FILE
+}
+
+export function getMcpConnectors(): import("./types").McpConnectorConfig[] {
+  getOpenworkDir()
+  if (!existsSync(MCP_CONNECTORS_FILE)) return []
+  try {
+    const content = readFileSync(MCP_CONNECTORS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is import("./types").McpConnectorConfig =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).url === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function getEnabledMcpConnectors(): import("./types").McpConnectorConfig[] {
+  return getMcpConnectors().filter((c) => c.enabled)
+}
+
+export function upsertMcpConnector(
+  config: import("./types").McpConnectorUpsert & { id?: string }
+): string {
+  getOpenworkDir()
+  const items = getMcpConnectors()
+  const now = new Date().toISOString()
+  const id = config.id ?? uuid()
+  const existing = items.find((i) => i.id === id)
+  const next: import("./types").McpConnectorConfig = {
+    id,
+    name: config.name.trim(),
+    url: config.url.trim(),
+    enabled: config.enabled ?? true,
+    advanced: config.advanced,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  }
+  const index = items.findIndex((i) => i.id === id)
+  if (index >= 0) {
+    items[index] = next
+  } else {
+    items.push(next)
+  }
+  writeFileSync(MCP_CONNECTORS_FILE, JSON.stringify(items, null, 2))
+  return id
+}
+
+export function deleteMcpConnector(id: string): void {
+  getOpenworkDir()
+  const items = getMcpConnectors().filter((i) => i.id !== id)
+  writeFileSync(MCP_CONNECTORS_FILE, JSON.stringify(items, null, 2))
+}
+
+export function setMcpConnectorEnabled(id: string, enabled: boolean): void {
+  getOpenworkDir()
+  const items = getMcpConnectors()
+  const target = items.find((i) => i.id === id)
+  if (!target) return
+  const next = items.map((i) => (i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i))
+  writeFileSync(MCP_CONNECTORS_FILE, JSON.stringify(next, null, 2))
 }

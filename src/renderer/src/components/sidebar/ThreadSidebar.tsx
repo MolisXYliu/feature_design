@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -132,7 +132,9 @@ export function ThreadSidebar(): React.JSX.Element {
     createThread,
     selectThread,
     deleteThread,
-    updateThread
+    updateThread,
+    showCustomizeView,
+    setShowCustomizeView
   } = useAppStore()
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
@@ -163,7 +165,7 @@ export function ThreadSidebar(): React.JSX.Element {
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-sidebar overflow-hidden">
       {/* New Thread Button - with dynamic safe area padding when zoomed out */}
-      <div className="p-2" style={{ paddingTop: "calc(8px + var(--sidebar-safe-padding, 0px))" }}>
+      <div className="p-2 space-y-1.5" style={{ paddingTop: "calc(8px + var(--sidebar-safe-padding, 0px))" }}>
         <Button
           variant="ghost"
           size="sm"
@@ -173,7 +175,21 @@ export function ThreadSidebar(): React.JSX.Element {
           <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
             <Plus className="size-3" />
           </div>
-          <span className="text-black">新任务</span>
+          <span className="text-muted-foreground">新任务</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full justify-start gap-2 text-sm font-semibold",
+            showCustomizeView && "bg-muted"
+          )}
+          onClick={() => setShowCustomizeView(!showCustomizeView)}
+        >
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <Briefcase className="size-3" />
+          </div>
+          <span className="text-muted-foreground">自定义</span>
         </Button>
       </div>
 

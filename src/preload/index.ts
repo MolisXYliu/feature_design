@@ -1,5 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision, SkillMetadata } from "../main/types"
+import type {
+  Thread,
+  ModelConfig,
+  Provider,
+  StreamEvent,
+  HITLDecision,
+  SkillMetadata,
+  McpConnectorConfig,
+  McpConnectorUpsert
+} from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
@@ -275,7 +284,46 @@ const api = {
   skills: {
     list: (): Promise<SkillMetadata[]> => {
       return ipcRenderer.invoke("skills:list")
+    },
+    read: (skillPath: string): Promise<{ success: boolean; content?: string; error?: string }> => {
+      return ipcRenderer.invoke("skills:read", skillPath)
+    },
+    readBinary: (
+      skillPath: string
+    ): Promise<{ success: boolean; content?: string; mimeType?: string; error?: string }> => {
+      return ipcRenderer.invoke("skills:readBinary", skillPath)
+    },
+    listFiles: (skillPath: string): Promise<{ success: boolean; files?: string[]; error?: string }> => {
+      return ipcRenderer.invoke("skills:listFiles", skillPath)
+    },
+    getDisabled: (): Promise<string[]> => {
+      return ipcRenderer.invoke("skills:getDisabled")
+    },
+    setDisabled: (skillNames: string[]): Promise<void> => {
+      return ipcRenderer.invoke("skills:setDisabled", skillNames)
+    },
+    upload: (buffer: ArrayBuffer, fileName: string): Promise<{ success: boolean; skillName?: string; error?: string }> => {
+      return ipcRenderer.invoke("skills:upload", { buffer, fileName })
+    },
+    delete: (skillPath: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("skills:delete", skillPath)
     }
+  },
+  mcp: {
+    list: (): Promise<McpConnectorConfig[]> => ipcRenderer.invoke("mcp:list"),
+    create: (config: McpConnectorUpsert): Promise<{ id: string }> =>
+      ipcRenderer.invoke("mcp:create", config),
+    update: (config: McpConnectorUpsert & { id: string }): Promise<{ id: string }> =>
+      ipcRenderer.invoke("mcp:update", config),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke("mcp:delete", id),
+    setEnabled: (id: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("mcp:setEnabled", { id, enabled }),
+    testConnection: (params: {
+      id?: string
+      url?: string
+      advanced?: McpConnectorConfig["advanced"]
+    }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>
+      ipcRenderer.invoke("mcp:testConnection", params)
   }
 }
 

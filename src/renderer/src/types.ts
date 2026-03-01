@@ -132,6 +132,12 @@ export interface GrepMatch {
   text: string
 }
 
+export type {
+  McpConnectorAdvanced,
+  McpConnectorConfig,
+  McpConnectorUpsert
+} from "../../main/types"
+
 export interface SkillMetadata {
   name: string
   description: string

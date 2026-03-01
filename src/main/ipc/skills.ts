@@ -1,9 +1,48 @@
+import AdmZip from "adm-zip"
 import { IpcMain } from "electron"
 import * as fs from "fs/promises"
 import * as path from "path"
-import { existsSync } from "fs"
-import { getSkillsDir } from "../storage"
+import { existsSync, mkdirSync, rmSync } from "fs"
+import { getCustomSkillsDir, getDisabledSkills, getSkillsDir, setDisabledSkills } from "../storage"
 import type { SkillMetadata } from "../types"
+
+function sanitizeSkillName(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9-_]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 64) || "skill"
+}
+
+function isPathUnderAllowedDirs(filePath: string): boolean {
+  const resolved = path.resolve(filePath)
+  const builtin = path.resolve(getSkillsDir())
+  const custom = path.resolve(getCustomSkillsDir())
+  for (const dir of [builtin, custom]) {
+    const rel = path.relative(dir, resolved)
+    if (!rel.startsWith("..") && !path.isAbsolute(rel)) return true
+  }
+  return false
+}
+
+function getMimeTypeByPath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase()
+  switch (ext) {
+    case ".png":
+      return "image/png"
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg"
+    case ".gif":
+      return "image/gif"
+    case ".webp":
+      return "image/webp"
+    case ".pdf":
+      return "application/pdf"
+    default:
+      return "application/octet-stream"
+  }
+}
 
 function parseYamlFrontmatter(content: string): Record<string, string> {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
@@ -22,7 +61,7 @@ function parseYamlFrontmatter(content: string): Record<string, string> {
   return result
 }
 
-async function loadSkills(dirPath: string): Promise<SkillMetadata[]> {
+async function loadSkills(dirPath: string, source: "project" | "user" = "project"): Promise<SkillMetadata[]> {
   const skills: SkillMetadata[] = []
 
   if (!existsSync(dirPath)) return skills
@@ -44,7 +83,7 @@ async function loadSkills(dirPath: string): Promise<SkillMetadata[]> {
           name: frontmatter.name || entry.name,
           description: frontmatter.description || "",
           path: skillMdPath,
-          source: "project",
+          source,
           license: frontmatter.license || null,
           compatibility: frontmatter.compatibility || null,
           allowedTools: frontmatter["allowed-tools"]
@@ -62,29 +101,231 @@ async function loadSkills(dirPath: string): Promise<SkillMetadata[]> {
   return skills
 }
 
+async function listSkillFiles(skillDirPath: string): Promise<string[]> {
+  const files: string[] = []
+
+  async function walk(dirPath: string): Promise<void> {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name)
+      if (entry.isDirectory()) {
+        await walk(fullPath)
+      } else {
+        files.push(fullPath)
+      }
+    }
+  }
+
+  if (!existsSync(skillDirPath)) return files
+  await walk(skillDirPath)
+  files.sort((a, b) => a.localeCompare(b))
+  return files
+}
+
 export function registerSkillsHandlers(ipcMain: IpcMain): void {
   console.log("[Skills] Registering skills handlers...")
 
   ipcMain.handle("skills:list", async (): Promise<SkillMetadata[]> => {
-    const skillsDir = getSkillsDir()
-    return loadSkills(skillsDir)
+    const [builtin, custom] = await Promise.all([
+      loadSkills(getSkillsDir(), "project"),
+      loadSkills(getCustomSkillsDir(), "user")
+    ])
+    const byName = new Map<string, SkillMetadata>()
+    for (const s of builtin) byName.set(s.name, s)
+    for (const s of custom) byName.set(s.name, s)
+    return Array.from(byName.values())
   })
+
+  ipcMain.handle("skills:getDisabled", async (): Promise<string[]> => {
+    return getDisabledSkills()
+  })
+
+  ipcMain.handle("skills:setDisabled", async (_event, skillNames: string[]) => {
+    if (!Array.isArray(skillNames)) return
+    setDisabledSkills(skillNames.filter((s): s is string => typeof s === "string"))
+  })
+
+  ipcMain.handle(
+    "skills:delete",
+    async (_event, skillPath: string): Promise<{ success: boolean; error?: string }> => {
+      if (!skillPath || typeof skillPath !== "string") {
+        return { success: false, error: "无效的技能路径" }
+      }
+      const resolved = path.resolve(skillPath)
+      const skillDir = path.dirname(resolved)
+      const customResolved = path.resolve(getCustomSkillsDir())
+      const rel = path.relative(customResolved, skillDir)
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        return { success: false, error: "只能删除自定义技能" }
+      }
+      if (!existsSync(skillDir)) {
+        return { success: false, error: "技能不存在" }
+      }
+      try {
+        rmSync(skillDir, { recursive: true })
+        return { success: true }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : "删除失败" }
+      }
+    }
+  )
 
   ipcMain.handle("skills:read", async (_event, skillPath: string) => {
     try {
-      const skillsDir = path.resolve(getSkillsDir())
       const resolvedPath = path.resolve(skillPath)
-      const relativePath = path.relative(skillsDir, resolvedPath)
-
-      // Only allow reading files under the configured skills directory.
-      if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      if (!isPathUnderAllowedDirs(resolvedPath)) {
         return { success: false, error: "Access denied: skill path outside skills directory" }
       }
-
       const content = await fs.readFile(resolvedPath, "utf-8")
       return { success: true, content }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : "Unknown error" }
     }
   })
+
+  ipcMain.handle("skills:readBinary", async (_event, skillPath: string) => {
+    try {
+      const resolvedPath = path.resolve(skillPath)
+      if (!isPathUnderAllowedDirs(resolvedPath)) {
+        return { success: false, error: "Access denied: skill path outside skills directory" }
+      }
+      const content = await fs.readFile(resolvedPath)
+      return {
+        success: true,
+        content: content.toString("base64"),
+        mimeType: getMimeTypeByPath(resolvedPath)
+      }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : "Unknown error" }
+    }
+  })
+
+  ipcMain.handle("skills:listFiles", async (_event, skillPath: string) => {
+    try {
+      const resolvedSkillFilePath = path.resolve(skillPath)
+      const skillDirPath = path.dirname(resolvedSkillFilePath)
+      if (!isPathUnderAllowedDirs(skillDirPath)) {
+        return { success: false, error: "Access denied: skill path outside skills directory" }
+      }
+
+      let files = await listSkillFiles(skillDirPath)
+      // Fallback: always expose the skill entry file if directory traversal returns empty.
+      if (files.length === 0 && existsSync(resolvedSkillFilePath)) {
+        files = [resolvedSkillFilePath]
+      }
+      return { success: true, files }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : "Unknown error" }
+    }
+  })
+
+  ipcMain.handle(
+    "skills:upload",
+    async (
+      _event,
+      payload: { buffer: ArrayBuffer; fileName: string }
+    ): Promise<{ success: boolean; skillName?: string; error?: string }> => {
+      const { buffer, fileName } = payload
+      if (!buffer || !fileName || typeof fileName !== "string") {
+        return { success: false, error: "Invalid buffer or fileName" }
+      }
+
+      const ext = path.extname(fileName).toLowerCase()
+      const customDir = getCustomSkillsDir()
+      mkdirSync(customDir, { recursive: true })
+
+      const checkNameDuplicate = async (nameToCheck: string): Promise<boolean> => {
+        const [builtin, custom] = await Promise.all([
+          loadSkills(getSkillsDir(), "project"),
+          loadSkills(getCustomSkillsDir(), "user")
+        ])
+        const existingNames = new Set([...builtin, ...custom].map((s) => s.name.trim().toLowerCase()))
+        return existingNames.has(nameToCheck.trim().toLowerCase())
+      }
+
+      const checkDirCollision = (sanitizedName: string): boolean => {
+        return existsSync(path.join(customDir, sanitizedName))
+          || existsSync(path.join(getSkillsDir(), sanitizedName))
+      }
+
+      try {
+        if (ext === ".md") {
+          const content = Buffer.from(buffer).toString("utf-8")
+          const frontmatter = parseYamlFrontmatter(content)
+          const name = frontmatter.name?.trim()
+          if (!name) {
+            return { success: false, error: "SKILL.md 必须包含 YAML frontmatter 中的 name 字段" }
+          }
+          if (await checkNameDuplicate(name)) {
+            return { success: false, error: `技能名称「${name}」已存在` }
+          }
+          const skillName = sanitizeSkillName(name)
+          if (checkDirCollision(skillName)) {
+            return { success: false, error: `技能目录「${skillName}」已存在，请换一个名称` }
+          }
+          const skillDir = path.join(customDir, skillName)
+          mkdirSync(skillDir, { recursive: true })
+          await fs.writeFile(path.join(skillDir, "SKILL.md"), content, "utf-8")
+          return { success: true, skillName }
+        }
+
+        if (ext === ".zip") {
+          const zip = new AdmZip(Buffer.from(buffer))
+          const entries = zip.getEntries()
+
+          let skillMdEntry = entries.find((e) => !e.isDirectory && e.entryName === "SKILL.md")
+          if (!skillMdEntry) {
+            const firstDir = entries.find((e) => e.isDirectory && !e.entryName.includes("/"))
+            if (firstDir) {
+              const prefix = firstDir.entryName
+              skillMdEntry = entries.find(
+                (e) => !e.isDirectory && e.entryName === `${prefix}SKILL.md`
+              )
+            }
+          }
+
+          if (!skillMdEntry) {
+            return { success: false, error: "ZIP 文件必须包含 SKILL.md" }
+          }
+
+          const content = skillMdEntry.getData().toString("utf-8")
+          const frontmatter = parseYamlFrontmatter(content)
+          const name = frontmatter.name?.trim()
+          if (!name) {
+            return { success: false, error: "SKILL.md 必须包含 YAML frontmatter 中的 name 字段" }
+          }
+          if (await checkNameDuplicate(name)) {
+            return { success: false, error: `技能名称「${name}」已存在` }
+          }
+          const skillName = sanitizeSkillName(name)
+          if (checkDirCollision(skillName)) {
+            return { success: false, error: `技能目录「${skillName}」已存在，请换一个名称` }
+          }
+          const skillDir = path.join(customDir, skillName)
+          mkdirSync(skillDir, { recursive: true })
+
+          const basePrefix = skillMdEntry.entryName.replace("SKILL.md", "")
+          for (const entry of entries) {
+            if (entry.isDirectory) continue
+            if (!entry.entryName.startsWith(basePrefix)) continue
+            const relativePath = entry.entryName.slice(basePrefix.length)
+            if (!relativePath) continue
+            const destPath = path.resolve(skillDir, relativePath)
+            if (!destPath.startsWith(path.resolve(skillDir) + path.sep) && destPath !== path.resolve(skillDir)) {
+              console.warn(`[Skills] Skipping ZIP entry with path traversal: ${entry.entryName}`)
+              continue
+            }
+            const destDir = path.dirname(destPath)
+            mkdirSync(destDir, { recursive: true })
+            await fs.writeFile(destPath, entry.getData())
+          }
+          return { success: true, skillName }
+        }
+
+        return { success: false, error: "仅支持 .md 或 .zip 文件" }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : "Unknown error" }
+      }
+    }
+  )
 }

@@ -10,16 +10,20 @@ import {
 } from "deepagents"
 import {
   getThreadCheckpointPath,
-  getSkillsSources,
+  getEnabledSkillsSources,
+  getEnabledMcpConnectors,
   getCustomModelConfigs,
   DEFAULT_MAX_TOKENS
 } from "../storage"
+import { MultiServerMCPClient } from "@langchain/mcp-adapters"
+import { buildMcpServerConfig } from "../ipc/mcp"
 
 import { ChatOpenAI } from "@langchain/openai"
 import { SqlJsSaver } from "../checkpointer/sqljs-saver"
 import { LocalSandbox } from "./local-sandbox"
 import {
   createAgent,
+  ReactAgent,
   SystemMessage,
   todoListMiddleware,
   anthropicPromptCachingMiddleware,
@@ -32,6 +36,7 @@ import type * as _lcMessages from "@langchain/core/messages"
 import type * as _lcLanggraph from "@langchain/langgraph"
 import type * as _lcZodTypes from "@langchain/core/utils/types"
 
+import { createHash } from "crypto"
 import { BASE_SYSTEM_PROMPT } from "./system-prompt"
 
 const BASE_PROMPT =
@@ -73,7 +78,7 @@ When NOT to use the task tool:
  *     (useful for custom models without a profile).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createDeepAgent(params: Record<string, any> = {}) {
+function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
   const {
     model = "claude-sonnet-4-5-20250929",
     tools = [],
@@ -205,6 +210,9 @@ function createDeepAgent(params: Record<string, any> = {}) {
   } as unknown as Parameters<typeof createAgent>[0])
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type DeepAgent = ReactAgent<any>
+
 /**
  * Generate the full system prompt for the agent.
  *
@@ -240,6 +248,24 @@ ${isWindows ? "- Use PowerShell syntax for shell commands (e.g., Get-ChildItem i
 
 // Per-thread checkpointer cache
 const checkpointers = new Map<string, SqlJsSaver>()
+
+// Global MCP tools cache: single shared client, lifecycle managed here (not per-thread)
+const MCP_TOOLS_CACHE_TTL_MS = 5 * 60 * 1000
+let _mcpToolsCache: {
+  fingerprint: string
+  tools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>>
+  client: MultiServerMCPClient
+  createdAt: number
+} | null = null
+
+// Retired MCP clients: kept alive for agents still referencing their tools.
+// Closed on app exit via closeRuntime().
+const _retiredMcpClients = new Set<MultiServerMCPClient>()
+
+function computeMcpConfigFingerprint(connectors: { id: string; url: string; advanced?: unknown }[]): string {
+  const payload = connectors.map((c) => `${c.id}:${c.url}:${JSON.stringify(c.advanced ?? {})}`).join("|")
+  return createHash("sha256").update(payload).digest("hex").slice(0, 16)
+}
 
 export async function getCheckpointer(threadId: string): Promise<SqlJsSaver> {
   let checkpointer = checkpointers.get(threadId)
@@ -301,7 +327,7 @@ export interface CreateAgentRuntimeOptions {
 // Create agent runtime with configured model and checkpointer
 export type AgentRuntime = ReturnType<typeof createAgent>
 
-export async function createAgentRuntime(options: CreateAgentRuntimeOptions) {
+export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Promise<DeepAgent> {
   const { threadId, workspacePath, modelId } = options
 
   if (!threadId) {
@@ -369,8 +395,55 @@ ${isWindows ? "- Use PowerShell syntax for shell commands (e.g., Get-ChildItem i
 
 The workspace root is: ${workspacePath}`
 
-  const skillsSources = getSkillsSources()
+  const skillsSources = await getEnabledSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
+
+  const mcpConnectors = getEnabledMcpConnectors()
+  let mcpTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
+  if (mcpConnectors.length > 0) {
+    const fingerprint = computeMcpConfigFingerprint(mcpConnectors)
+    const cached = _mcpToolsCache
+    const cacheValid = cached
+      && cached.fingerprint === fingerprint
+      && (Date.now() - cached.createdAt) < MCP_TOOLS_CACHE_TTL_MS
+
+    if (cacheValid) {
+      mcpTools = cached.tools
+      console.log("[Runtime] MCP tools from cache:", mcpTools.length)
+    } else {
+      let mcpClient: MultiServerMCPClient | null = null
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mcpServers: Record<string, any> = {}
+        for (const c of mcpConnectors) {
+          mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: c.advanced })
+        }
+        mcpClient = new MultiServerMCPClient({
+          throwOnLoadError: false,
+          onConnectionError: "ignore",
+          useStandardContentBlocks: true,
+          mcpServers
+        })
+        mcpTools = await mcpClient.getTools()
+
+        const oldClient = _mcpToolsCache?.client
+        _mcpToolsCache = { fingerprint, tools: mcpTools, client: mcpClient, createdAt: Date.now() }
+        if (oldClient && oldClient !== mcpClient) {
+          _retiredMcpClients.add(oldClient)
+        }
+        console.log("[Runtime] MCP tools loaded:", mcpTools.length)
+      } catch (e) {
+        if (mcpClient) {
+          mcpClient.close().catch(() => {})
+        }
+        console.warn("[Runtime] MCP client init failed:", e)
+      }
+    }
+  } else if (_mcpToolsCache) {
+    _retiredMcpClients.add(_mcpToolsCache.client)
+    _mcpToolsCache = null
+    console.log("[Runtime] MCP connectors disabled, retired cached client")
+  }
 
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
@@ -380,6 +453,7 @@ The workspace root is: ${workspacePath}`
 
   const agent = createDeepAgent({
     model,
+    tools: mcpTools,
     checkpointer,
     backend,
     systemPrompt,
@@ -396,11 +470,17 @@ The workspace root is: ${workspacePath}`
   return agent
 }
 
-export type DeepAgent = ReturnType<typeof createAgent>
-
-// Clean up all checkpointer resources
+// Clean up all checkpointer and MCP client resources
 export async function closeRuntime(): Promise<void> {
-  const closePromises = Array.from(checkpointers.values()).map((cp) => cp.close())
+  const closePromises: Promise<void>[] = Array.from(checkpointers.values()).map((cp) => cp.close())
+  if (_mcpToolsCache?.client) {
+    closePromises.push(_mcpToolsCache.client.close().catch(() => {}))
+    _mcpToolsCache = null
+  }
+  for (const client of _retiredMcpClients) {
+    closePromises.push(client.close().catch(() => {}))
+  }
+  _retiredMcpClients.clear()
   await Promise.all(closePromises)
   checkpointers.clear()
 }

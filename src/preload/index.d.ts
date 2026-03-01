@@ -1,4 +1,13 @@
-import type { Thread, ModelConfig, Provider, StreamEvent, HITLDecision, SkillMetadata } from "../main/types"
+import type {
+  Thread,
+  ModelConfig,
+  Provider,
+  StreamEvent,
+  HITLDecision,
+  SkillMetadata,
+  McpConnectorConfig,
+  McpConnectorUpsert
+} from "../main/types"
 
 interface ElectronAPI {
   ipcRenderer: {
@@ -132,6 +141,27 @@ interface CustomAPI {
   }
   skills: {
     list: () => Promise<SkillMetadata[]>
+    read: (skillPath: string) => Promise<{ success: boolean; content?: string; error?: string }>
+    readBinary: (
+      skillPath: string
+    ) => Promise<{ success: boolean; content?: string; mimeType?: string; error?: string }>
+    listFiles: (skillPath: string) => Promise<{ success: boolean; files?: string[]; error?: string }>
+    getDisabled: () => Promise<string[]>
+    setDisabled: (skillNames: string[]) => Promise<void>
+    upload: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
+    delete: (skillPath: string) => Promise<{ success: boolean; error?: string }>
+  }
+  mcp: {
+    list: () => Promise<McpConnectorConfig[]>
+    create: (config: McpConnectorUpsert) => Promise<{ id: string }>
+    update: (config: McpConnectorUpsert & { id: string }) => Promise<{ id: string }>
+    delete: (id: string) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<void>
+    testConnection: (params: {
+      id?: string
+      url?: string
+      advanced?: McpConnectorConfig["advanced"]
+    }) => Promise<{ success: boolean; tools?: string[]; error?: string }>
   }
 }
 

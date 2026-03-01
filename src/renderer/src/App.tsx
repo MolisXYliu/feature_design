@@ -1,22 +1,38 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
+import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 
-const LEFT_MIN = 180
-const LEFT_MAX = 350
-const LEFT_DEFAULT = 240
+async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
+  try {
+    const saved = localStorage.getItem("disabled-skills")
+    if (!saved) return
+    const parsed = JSON.parse(saved) as unknown
+    if (!Array.isArray(parsed) || parsed.length === 0) return
+    const current = await window.api.skills.getDisabled()
+    if (current.length === 0) {
+      await window.api.skills.setDisabled(parsed.filter((s): s is string => typeof s === "string"))
+    }
+    localStorage.removeItem("disabled-skills")
+  } catch { /* migration is best-effort */ }
+}
+
+const LEFT_MIN = 200
+const LEFT_MAX = 400
+const LEFT_DEFAULT = 280
 
 const RIGHT_MIN = 250
 const RIGHT_MAX = 450
 const RIGHT_DEFAULT = 300
 
 function App(): React.JSX.Element {
-  const { currentThreadId, loadThreads, createThread, showKanbanView } = useAppStore()
+  const { currentThreadId, loadThreads, createThread, showKanbanView, showCustomizeView, sidebarCollapsed, toggleSidebar, rightPanelCollapsed, toggleRightPanel } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
@@ -25,24 +41,41 @@ function App(): React.JSX.Element {
   // Track drag start widths
   const dragStartWidths = useRef<{ left: number; right: number } | null>(null)
 
-  // Track zoom level changes and update CSS custom properties for safe areas
+  // Set platform-specific titlebar insets and track zoom
   useLayoutEffect(() => {
+    const platform = window.electron?.process?.platform
+
+    const updateInsets = (zoom: number): void => {
+      if (platform === "darwin") {
+        const TRAFFIC_LIGHT_X = 16
+        const TRAFFIC_LIGHT_WIDTH = 70
+        const leftInset = Math.ceil((TRAFFIC_LIGHT_X + TRAFFIC_LIGHT_WIDTH) / zoom)
+        document.documentElement.style.setProperty("--titlebar-inset-left", `${leftInset}px`)
+        document.documentElement.style.setProperty("--titlebar-inset-right", "0px")
+      } else if (platform === "win32") {
+        const WIN_CONTROLS_WIDTH = 140
+        const rightInset = Math.ceil(WIN_CONTROLS_WIDTH / zoom)
+        document.documentElement.style.setProperty("--titlebar-inset-left", "0px")
+        document.documentElement.style.setProperty("--titlebar-inset-right", `${rightInset}px`)
+      }
+    }
+
+    // Set insets immediately with zoom=1 so they're never missing
+    updateInsets(1)
+
     const updateZoom = (): void => {
-      // Detect zoom by comparing outer/inner window dimensions
       const detectedZoom = Math.round((window.outerWidth / window.innerWidth) * 100) / 100
       if (detectedZoom > 0.5 && detectedZoom < 3) {
         setZoomLevel(detectedZoom)
 
-        // Traffic lights are at fixed screen position (y: ~28px bottom including padding)
-        // Titlebar is 36px CSS, which becomes 36*zoom screen pixels
-        // Extra padding needed when titlebar shrinks below traffic lights
-        const TRAFFIC_LIGHT_BOTTOM_SCREEN = 40 // screen pixels to clear traffic lights
+        const TRAFFIC_LIGHT_BOTTOM_SCREEN = 40
         const TITLEBAR_HEIGHT_CSS = 36
         const titlebarScreenHeight = TITLEBAR_HEIGHT_CSS * detectedZoom
         const extraPaddingScreen = Math.max(0, TRAFFIC_LIGHT_BOTTOM_SCREEN - titlebarScreenHeight)
         const extraPaddingCss = Math.round(extraPaddingScreen / detectedZoom)
-
         document.documentElement.style.setProperty("--sidebar-safe-padding", `${extraPaddingCss}px`)
+
+        updateInsets(detectedZoom)
       }
     }
 
@@ -87,8 +120,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     async function init(): Promise<void> {
       try {
+        await migrateDisabledSkillsFromLocalStorage()
         await loadThreads()
-        // Create a default thread if none exist
         const threads = useAppStore.getState().threads
         if (threads.length === 0) {
           await createThread()
@@ -113,16 +146,38 @@ function App(): React.JSX.Element {
   return (
     <ThreadProvider>
       <div className="flex flex-col h-screen overflow-hidden bg-background">
-        {/* Titlebar - spans full width */}
-        <div className="flex h-9 w-full shrink-0 app-drag-region items-center justify-center gap-1.5 border-b border-border">
+        {/* Titlebar - logo centered, right panel toggle on right */}
+        <div className="flex h-9 w-full shrink-0 app-drag-region items-center border-b border-border">
+          {/* Left: sidebar toggle */}
+          <div
+            className="flex flex-1 h-9 min-w-0 items-center"
+            style={{ marginLeft: "var(--titlebar-inset-left, 0px)" }}
+          >
+            {!showCustomizeView && (
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                onClick={toggleSidebar}
+                title={sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"}
+                aria-label={sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"}
+              >
+                {sidebarCollapsed ? (
+                  <PanelLeftOpen size={22} className="shrink-0 scale-x-[1.15]" strokeWidth={1} />
+                ) : (
+                  <PanelLeftClose size={22} className="shrink-0 scale-x-[1.15]" strokeWidth={1} />
+                )}
+              </button>
+            )}
+          </div>
+          {/* Center: logo + title */}
           <div
             style={{
               transform: `scale(${1 / zoomLevel})`,
               transformOrigin: "center center"
             }}
-            className="flex items-center gap-1.5"
+            className="flex flex-1 min-w-0 items-center justify-center gap-1.5"
           >
-            <svg className="size-5 translate-y-px" viewBox="0 0 120 120" fill="none">
+            <svg className="size-5 shrink-0" viewBox="0 0 120 120" fill="none">
               <defs>
                 <linearGradient id="title-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stopColor="#ff4d4d"/>
@@ -141,46 +196,78 @@ function App(): React.JSX.Element {
             </svg>
             <span className="app-badge-name">Cmb Cowork</span>
           </div>
+          {/* Right: right panel toggle */}
+          <div
+            className="flex flex-1 h-full items-center justify-end pl-1"
+            style={{ marginRight: "var(--titlebar-inset-right, 0px)" }}
+          >
+            {!showCustomizeView && (
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                onClick={toggleRightPanel}
+                title={rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"}
+                aria-label={rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"}
+              >
+                {rightPanelCollapsed ? (
+                  <PanelRightOpen size={22} className="shrink-0 scale-x-[1.15]" strokeWidth={1} />
+                ) : (
+                  <PanelRightClose size={22} className="shrink-0 scale-x-[1.15]" strokeWidth={1} />
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Main content below titlebar */}
-        <div className="flex flex-1 overflow-hidden bg-grid-subtle">
-          {/* Left Sidebar */}
-          <div style={{ width: leftWidth }} className="shrink-0">
-            <ThreadSidebar />
-          </div>
-
-          <ResizeHandle onDrag={handleLeftResize} />
-
-          {showKanbanView ? (
+        {showCustomizeView ? (
+          <div className="flex flex-1 overflow-hidden bg-grid-subtle">
             <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
-              <KanbanView />
+              <CustomizeView />
             </main>
-          ) : (
-            <>
-              {/* Center - Content Panel */}
-              <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
-                {currentThreadId ? (
-                  <TabbedPanel threadId={currentThreadId} showTabBar={false} />
-                ) : (
-                  <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                    选择或创建一个任务开始
-                  </div>
-                )}
-              </main>
-            </>
-          )}
+          </div>
+        ) : (
+          <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
+            {/* Left Sidebar */}
+            {!sidebarCollapsed && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0">
+                  <ThreadSidebar />
+                </div>
+                <ResizeHandle onDrag={handleLeftResize} />
+              </>
+            )}
 
-          {!showKanbanView && (
-            <>
-              <ResizeHandle onDrag={handleRightResize} />
-              {/* Right Panel - floating style */}
-              <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
-                <RightPanel />
-              </div>
-            </>
-          )}
-        </div>
+            {showKanbanView ? (
+              <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+                <KanbanView />
+              </main>
+            ) : (
+              <>
+                {/* Center - Content Panel */}
+                <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+                  {currentThreadId ? (
+                    <TabbedPanel threadId={currentThreadId} showTabBar={false} />
+                  ) : (
+                    <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                      选择或创建一个任务开始
+                    </div>
+                  )}
+                </main>
+              </>
+            )}
+
+            {!showKanbanView && !rightPanelCollapsed && (
+              <>
+                <ResizeHandle onDrag={handleRightResize} />
+                {/* Right Panel - floating style */}
+                <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
+                  <RightPanel />
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </ThreadProvider>
   )
