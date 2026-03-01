@@ -445,6 +445,26 @@ The workspace root is: ${workspacePath}`
     console.log("[Runtime] MCP connectors disabled, retired cached client")
   }
 
+  // Wrap MCP tools so that any ToolException/McpError is caught and returned
+  // as a normal error string instead of throwing. This keeps the agent loop
+  // running (same pattern as read_file returning "Error: ..." on failure).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const t of mcpTools as any[]) {
+    if (typeof t.func === "function") {
+      const originalFunc = t.func
+      t.func = async (...args: unknown[]) => {
+        try {
+          return await originalFunc(...args)
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, msg)
+          // MCP tools use responseFormat: "content_and_artifact", must return [content, artifact]
+          return [`MCP tool error: ${msg}`, []]
+        }
+      }
+    }
+  }
+
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))

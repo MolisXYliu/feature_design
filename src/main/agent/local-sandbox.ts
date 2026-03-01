@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { join } from "node:path"
+// import { join } from "node:path"
 import {
   FilesystemBackend,
   type ExecuteResponse,
@@ -79,37 +79,33 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.env = options.env ?? ({ ...process.env } as Record<string, string>)
     this.workingDir = options.rootDir ?? process.cwd()
 
-    this.patchResolvePath()
+    // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
+    // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
+    // this.patchResolvePath()
   }
 
-  /**
-   * Patch resolvePath at instance level to redirect deepagents' internal
-   * path (/large_tool_results/...) into the workspace directory.
-   * Covers ALL file operations (read, write, edit, list, grep, glob)
-   * since they all funnel through resolvePath internally.
-   */
-  private patchResolvePath(): void {
-    if (typeof (this as any).resolvePath !== "function") {
-      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
-      return
-    }
-    const original = (this as any).resolvePath.bind(this)
-    const workingDir = this.workingDir
-    const redirects: Record<string, string> = {
-      "/large_tool_results/": ".cmbcoworkagent/large_tool_results"
-    }
-    ;(this as any).resolvePath = (key: string): string => {
-      for (const [prefix, localDir] of Object.entries(redirects)) {
-        if (key.startsWith(prefix)) {
-          const redirected = join(workingDir, localDir, key.slice(prefix.length))
-          console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
-          key = redirected
-          break
-        }
-      }
-      return original(key)
-    }
-  }
+  // private patchResolvePath(): void {
+  //   if (typeof (this as any).resolvePath !== "function") {
+  //     console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
+  //     return
+  //   }
+  //   const original = (this as any).resolvePath.bind(this)
+  //   const workingDir = this.workingDir
+  //   const redirects: Record<string, string> = {
+  //     "/large_tool_results/": ".cmbcoworkagent/large_tool_results"
+  //   }
+  //   ;(this as any).resolvePath = (key: string): string => {
+  //     for (const [prefix, localDir] of Object.entries(redirects)) {
+  //       if (key.startsWith(prefix)) {
+  //         const redirected = join(workingDir, localDir, key.slice(prefix.length))
+  //         console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
+  //         key = redirected
+  //         break
+  //       }
+  //     }
+  //     return original(key)
+  //   }
+  // }
 
   private static readonly MAX_GREP_MATCHES = 200
   private static readonly MAX_GREP_CHARS = 24_000
