@@ -4,7 +4,7 @@ import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
 import { readdir, readFile, rm, mkdir, cp } from "fs/promises"
-const OPENWORK_DIR = join(homedir(), ".openwork")
+const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
 const CUSTOM_API_KEY_PREFIX = "CUSTOM_API_KEY__"
@@ -17,7 +17,7 @@ export function getOpenworkDir(): string {
 }
 
 export function getDbPath(): string {
-  return join(getOpenworkDir(), "openwork.sqlite")
+  return join(getOpenworkDir(), "cmbcoworkagent.sqlite")
 }
 
 export function getCheckpointDbPath(): string {
@@ -199,7 +199,7 @@ async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set
 let _enabledSkillsBuildLock: Promise<string> | null = null
 
 /**
- * Ensures ~/.openwork/enabled-skills/ exists with copies of enabled skills only.
+ * Ensures ~/.cmbcoworkagent/enabled-skills/ exists with copies of enabled skills only.
  * Uses async I/O to avoid blocking the main process event loop.
  * Skips rebuild if the disabled list and source dirs haven't changed.
  * Serialized via a Promise lock to prevent concurrent rm/mkdir/cp races.
@@ -266,7 +266,7 @@ export async function getEnabledSkillsSources(): Promise<string[]> {
   return getSkillsSources()
 }
 
-// Custom model configurations stored as JSON in ~/.openwork/custom-models.json
+// Custom model configurations stored as JSON in ~/.cmbcoworkagent/custom-models.json
 export interface CustomModelConfig {
   id: string
   name: string

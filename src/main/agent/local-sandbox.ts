@@ -241,9 +241,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true
-          proc.kill("SIGTERM")
-          // Give it a moment, then force kill
-          setTimeout(() => proc.kill("SIGKILL"), 1000)
+          if (isWindows && proc.pid) {
+            spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], { stdio: "ignore" })
+          } else {
+            proc.kill("SIGTERM")
+            setTimeout(() => proc.kill("SIGKILL"), 1000)
+          }
           resolve({
             output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
             exitCode: null,
