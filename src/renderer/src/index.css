@@ -489,3 +489,74 @@
   flex-shrink: 0;
   box-shadow: 0 0 0 0.5px rgba(0,0,0,0.08);
 }
+
+@keyframes thinking-shimmer {
+  0% {
+    background-position: -160% 0;
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.95;
+  }
+  88% {
+    opacity: 0.95;
+  }
+  100% {
+    background-position: 190% 0;
+    opacity: 0;
+  }
+}
+
+.thinking-shimmer-text {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: #e27b4d;
+}
+
+.thinking-shimmer-text::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 245, 236, 0) 35%,
+    rgba(255, 245, 236, 0.98) 50%,
+    rgba(255, 245, 236, 0) 65%
+  );
+  background-size: 240% 100%;
+  background-repeat: no-repeat;
+  background-position: -160% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+  filter: none;
+  pointer-events: none;
+  will-change: background-position;
+  animation: thinking-shimmer 2.2s cubic-bezier(0.35, 0.1, 0.25, 1) infinite;
+}
+
+:is(.dark *).thinking-shimmer-text {
+  color: #f0a878;
+}
+
+:is(.dark *).thinking-shimmer-text::after {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 220, 190, 0) 35%,
+    rgba(255, 220, 190, 0.55) 50%,
+    rgba(255, 220, 190, 0) 65%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer-text::after {
+    animation: none;
+    opacity: 0.35;
+    background-position: 50% 0;
+  }
+}

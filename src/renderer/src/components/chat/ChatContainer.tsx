@@ -47,6 +47,39 @@ interface ChatContainerProps {
   threadId: string
 }
 
+const THINKING_MESSAGES = [
+  "我先想想...",
+  "让我捋一捋...",
+  "我去翻翻代码...",
+  "我来找线索...",
+  "先做个判断...",
+  "我再核对一下...",
+  "先把思路摊开...",
+  "我来拼一下答案...",
+  "我再压一遍细节...",
+  "先看下上下文...",
+  "我再过一遍日志...",
+  "我来换个角度...",
+  "先把重点抓出来...",
+  "让我算一轮...",
+  "我再确认一下...",
+  "我先试条路...",
+  "我去查个依据...",
+  "我先把话说准...",
+  "我再补一刀...",
+  "我来收个尾...",
+  "先别急，快到了...",
+  "差最后一段了...",
+  "我再润一润...",
+  "再给我两秒...",
+  "我来给你个稳妥版...",
+  "我先把坑绕开...",
+  "我再压压风险...",
+  "先把答案打磨下...",
+  "马上给你结果...",
+  "就快好了..."
+]
+
 export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -56,6 +89,10 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [skillsLoading, setSkillsLoading] = useState(true)
   const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
+  const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
+  const thinkingCycleRef = useRef(-1)
+  const wasLoadingRef = useRef(false)
+  const loadingMessageCountRef = useRef(0)
 
   const { threads, models, loadThreads, generateTitleForFirstMessage } = useAppStore()
 
@@ -81,6 +118,33 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
   const isLoading = streamData.isLoading
+
+  useEffect(() => {
+    const currentMessageCount = streamData.messages.length
+
+    if (!isLoading) {
+      wasLoadingRef.current = false
+      loadingMessageCountRef.current = 0
+      return
+    }
+
+    // First entering loading for this turn.
+    if (!wasLoadingRef.current) {
+      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
+      setThinkingMessageIndex(thinkingCycleRef.current)
+      loadingMessageCountRef.current = currentMessageCount
+      wasLoadingRef.current = true
+      return
+    }
+
+    // During the same turn, if new streamed messages arrive (e.g. tool round-trip),
+    // switch to next slogan once to mimic "stage changed" feedback.
+    if (currentMessageCount > loadingMessageCountRef.current) {
+      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
+      setThinkingMessageIndex(thinkingCycleRef.current)
+      loadingMessageCountRef.current = currentMessageCount
+    }
+  }, [isLoading, streamData.messages.length])
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "reject" | "edit"): Promise<void> => {
@@ -781,9 +845,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <div className="flex items-center gap-2 text-sm">
                   <div className="rainbow-spinner" />
-                  正在思考...
+                  <span className="thinking-shimmer-text" data-text={THINKING_MESSAGES[thinkingMessageIndex]}>
+                    {THINKING_MESSAGES[thinkingMessageIndex]}
+                  </span>
                 </div>
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
