@@ -49,6 +49,9 @@ export class SqlJsSaver extends BaseCheckpointSaver {
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private dirty = false
 
+  /** Max checkpoints to keep per (thread_id, checkpoint_ns). Older ones are pruned on each put(). */
+  private maxCheckpointsPerNamespace = 3
+
   constructor(dbPath: string, serde?: SerializerProtocol) {
     super(serde)
     this.dbPath = dbPath
@@ -137,6 +140,51 @@ export class SqlJsSaver extends BaseCheckpointSaver {
 
     this.isSetup = true
     this.saveToDisk()
+  }
+
+  /**
+   * Delete old checkpoints (and their writes) beyond the retention limit.
+   * Keeps the most recent N checkpoints per (thread_id, checkpoint_ns).
+   */
+  private pruneOldCheckpoints(threadId: string, checkpointNs: string): void {
+    if (!this.db) return
+
+    const limit = this.maxCheckpointsPerNamespace
+    const countResult = this.db.exec(
+      `SELECT COUNT(*) FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ?`,
+      [threadId, checkpointNs]
+    )
+    const total = countResult[0]?.values[0]?.[0] as number
+    if (total <= limit) return
+
+    try {
+      this.db.run("BEGIN")
+
+      this.db.run(
+        `DELETE FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id IN (
+          SELECT checkpoint_id FROM checkpoints
+          WHERE thread_id = ? AND checkpoint_ns = ?
+          ORDER BY checkpoint_id DESC
+          LIMIT -1 OFFSET ?
+        )`,
+        [threadId, checkpointNs, threadId, checkpointNs, limit]
+      )
+
+      this.db.run(
+        `DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id NOT IN (
+          SELECT checkpoint_id FROM checkpoints
+          WHERE thread_id = ? AND checkpoint_ns = ?
+          ORDER BY checkpoint_id DESC
+          LIMIT ?
+        )`,
+        [threadId, checkpointNs, threadId, checkpointNs, limit]
+      )
+
+      this.db.run("COMMIT")
+    } catch (e) {
+      this.db.run("ROLLBACK")
+      console.warn("[SqlJsSaver] Failed to prune old checkpoints:", e)
+    }
   }
 
   /**
@@ -396,6 +444,7 @@ export class SqlJsSaver extends BaseCheckpointSaver {
       ]
     )
 
+    this.pruneOldCheckpoints(thread_id, checkpoint_ns)
     this.saveToDisk()
 
     return {

@@ -41,18 +41,18 @@ export interface ModelConfig {
   available: boolean
 }
 
-// Subagent types (from deepagentsjs)
-export interface Subagent {
-  id: string
-  name: string
-  description: string
-  status: "pending" | "running" | "completed" | "failed"
-  startedAt?: Date
-  completedAt?: Date
-  // Used to correlate task tool calls with their responses
-  toolCallId?: string
-  // Type of subagent (e.g., 'general-purpose', 'correctness-checker', 'final-reviewer')
-  subagentType?: string
+import type {
+  McpConnectorAdvanced,
+  McpConnectorConfig,
+  McpConnectorUpsert,
+  Subagent
+} from "../../main/types"
+
+export type {
+  McpConnectorAdvanced,
+  McpConnectorConfig,
+  McpConnectorUpsert,
+  Subagent
 }
 
 export type StreamEvent =
@@ -131,12 +131,6 @@ export interface GrepMatch {
   line: number
   text: string
 }
-
-export type {
-  McpConnectorAdvanced,
-  McpConnectorConfig,
-  McpConnectorUpsert
-} from "../../main/types"
 
 export interface SkillMetadata {
   name: string

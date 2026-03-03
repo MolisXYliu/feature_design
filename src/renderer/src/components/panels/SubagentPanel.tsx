@@ -28,7 +28,6 @@ function SubagentTypeIcon({
     case "correctness-checker":
       return <FileCheck className={className} />
     case "final-reviewer":
-      return <Search className={className} />
     case "research":
       return <Search className={className} />
     default:
@@ -107,7 +106,7 @@ export function SubagentPanel(): React.JSX.Element {
   )
 }
 
-function SubagentCard({ subagent }: { subagent: Subagent }): React.JSX.Element {
+export function SubagentCard({ subagent }: { subagent: Subagent }): React.JSX.Element {
   const getStatusConfig = (): {
     icon: React.ElementType
     badge: "outline" | "info" | "nominal" | "critical"
@@ -128,7 +127,6 @@ function SubagentCard({ subagent }: { subagent: Subagent }): React.JSX.Element {
   const config = getStatusConfig()
   const StatusIcon = config.icon
 
-  // Calculate duration only for completed subagents (to avoid impure Date.now() during render)
   const getDuration = (): string | null => {
     if (!subagent.startedAt || !subagent.completedAt) return null
     const start = new Date(subagent.startedAt).getTime()
@@ -168,9 +166,10 @@ function SubagentCard({ subagent }: { subagent: Subagent }): React.JSX.Element {
           </Badge>
         )}
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-2">
         <p className="text-sm text-muted-foreground line-clamp-2">{subagent.description}</p>
-        <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
           {subagent.startedAt && (
             <span className="flex items-center gap-1">
               <Clock className="size-3" />

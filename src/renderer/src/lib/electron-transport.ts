@@ -41,6 +41,12 @@ interface SerializedMessageChunk {
     tool_call_chunks?: ToolCallChunk[]
     tool_call_id?: string
     name?: string
+    status?: string
+    is_error?: boolean
+    additional_kwargs?: {
+      is_error?: boolean
+      [key: string]: unknown
+    }
     usage_metadata?: UsageMetadata
     response_metadata?: {
       usage?: UsageMetadata
@@ -389,12 +395,6 @@ export class ElectronIPCTransport implements UseStreamTransport {
         break
     }
 
-    console.log(
-      "[Transport] convertToSDKEvents total:",
-      events.length,
-      "events",
-      events.map((e) => e.event)
-    )
     return events
   }
 
@@ -414,6 +414,11 @@ export class ElectronIPCTransport implements UseStreamTransport {
       const classId = Array.isArray(msgChunk?.id) ? msgChunk.id : []
       const className = classId[classId.length - 1] || ""
 
+      // Detect if this message comes from a subagent via checkpoint namespace
+      const checkpointNs =
+        metadata?.langgraph_checkpoint_ns || metadata?.checkpoint_ns
+      const isFromSubagent = this.isSubagentNamespace(checkpointNs)
+
       // Check if this is a ToolMessage (class name contains 'ToolMessage')
       const isToolMessage = className.includes("ToolMessage") && !!kwargs.tool_call_id
 
@@ -421,110 +426,127 @@ export class ElectronIPCTransport implements UseStreamTransport {
       const isAIMessage = className.includes("AI") || className.includes("AIMessageChunk")
 
       if (isAIMessage) {
-        const content = this.extractContent(kwargs.content)
-        const msgId = kwargs.id || this.currentMessageId || crypto.randomUUID()
-        this.currentMessageId = msgId
+        if (isFromSubagent) {
+          // Silently drop subagent messages — we only show status from task tool calls
+        } else {
+          // Main agent message
+          const content = this.extractContent(kwargs.content)
+          const msgId = kwargs.id || this.currentMessageId || crypto.randomUUID()
+          this.currentMessageId = msgId
 
-        if (content || kwargs.tool_calls?.length) {
+          if (content || kwargs.tool_calls?.length) {
+            events.push({
+              event: "messages",
+              data: [
+                {
+                  id: msgId,
+                  type: "ai",
+                  content: content || "",
+                  ...(kwargs.tool_calls?.length && { tool_calls: kwargs.tool_calls })
+                },
+                {
+                  langgraph_node: metadata?.langgraph_node || "agent",
+                  langgraph_checkpoint_ns: metadata?.langgraph_checkpoint_ns,
+                  checkpoint_ns: metadata?.checkpoint_ns
+                }
+              ]
+            })
+          }
+
+          // Handle tool call chunks (streaming) - these have args as strings
+          if (kwargs.tool_call_chunks?.length) {
+            const subagentDetectEvents = this.processToolCallChunks(kwargs.tool_call_chunks)
+            events.push(...subagentDetectEvents)
+
+            events.push({
+              event: "custom",
+              data: {
+                type: "tool_call",
+                messageId: this.currentMessageId,
+                tool_calls: kwargs.tool_call_chunks
+              }
+            })
+          }
+
+          // Handle complete tool calls (non-streaming) - these have args as objects
+          if (kwargs.tool_calls?.length) {
+            const subagentDetectEvents = this.processCompletedToolCalls(kwargs.tool_calls)
+            events.push(...subagentDetectEvents)
+
+            // Track tool calls for HITL matching
+            for (const tc of kwargs.tool_calls) {
+              if (tc.id && tc.name) {
+                const existing = this.completedToolCallsByName.get(tc.name) || []
+                existing.push({ id: tc.id, name: tc.name, args: tc.args || {} })
+                this.completedToolCallsByName.set(tc.name, existing)
+              }
+            }
+          }
+
+          // Extract usage_metadata for context window tracking
+          const usageMetadata = kwargs.usage_metadata || kwargs.response_metadata?.usage
+          if (usageMetadata) {
+            console.log("[ElectronTransport] Found usage_metadata:", {
+              input_tokens: usageMetadata.input_tokens,
+              output_tokens: usageMetadata.output_tokens,
+              total_tokens: usageMetadata.total_tokens,
+              has_cache_details: !!usageMetadata.input_token_details
+            })
+
+            if (usageMetadata.input_tokens !== undefined && usageMetadata.input_tokens > 0) {
+              events.push({
+                event: "custom",
+                data: {
+                  type: "token_usage",
+                  usage: {
+                    inputTokens: usageMetadata.input_tokens,
+                    outputTokens: usageMetadata.output_tokens,
+                    totalTokens: usageMetadata.total_tokens,
+                    cacheReadTokens: usageMetadata.input_token_details?.cache_read,
+                    cacheCreationTokens: usageMetadata.input_token_details?.cache_creation
+                  }
+                }
+              })
+            }
+          }
+        }
+      }
+
+      // Handle ToolMessage
+      if (isToolMessage && kwargs.tool_call_id) {
+        if (isFromSubagent) {
+          // Silently drop subagent tool messages
+        } else {
+          // Main agent tool message
+          const content = this.extractContent(kwargs.content)
+          const msgId = kwargs.id || crypto.randomUUID()
+
           events.push({
             event: "messages",
             data: [
               {
                 id: msgId,
-                type: "ai",
-                content: content || "",
-                // Include tool_calls if present
-                ...(kwargs.tool_calls?.length && { tool_calls: kwargs.tool_calls })
+                type: "tool",
+                content,
+                tool_call_id: kwargs.tool_call_id,
+                name: kwargs.name
               },
-              { langgraph_node: metadata?.langgraph_node || "agent" }
+              {
+                langgraph_node: metadata?.langgraph_node || "tools",
+                langgraph_checkpoint_ns: metadata?.langgraph_checkpoint_ns,
+                checkpoint_ns: metadata?.checkpoint_ns
+              }
             ]
           })
-        }
 
-        // Handle tool call chunks (streaming) - these have args as strings
-        if (kwargs.tool_call_chunks?.length) {
-          const subagentEvents = this.processToolCallChunks(kwargs.tool_call_chunks)
-          events.push(...subagentEvents)
-
-          events.push({
-            event: "custom",
-            data: {
-              type: "tool_call",
-              messageId: this.currentMessageId,
-              tool_calls: kwargs.tool_call_chunks
-            }
-          })
-        }
-
-        // Handle complete tool calls (non-streaming) - these have args as objects
-        if (kwargs.tool_calls?.length) {
-          const subagentEvents = this.processCompletedToolCalls(kwargs.tool_calls)
-          events.push(...subagentEvents)
-
-          // Track tool calls for HITL matching
-          for (const tc of kwargs.tool_calls) {
-            if (tc.id && tc.name) {
-              const existing = this.completedToolCallsByName.get(tc.name) || []
-              existing.push({ id: tc.id, name: tc.name, args: tc.args || {} })
-              this.completedToolCallsByName.set(tc.name, existing)
-            }
+          // Handle subagent task completion (task ToolMessage from main agent)
+          if (kwargs.name === "task") {
+            const completionEvents = this.processToolMessage(
+              kwargs.tool_call_id,
+              this.isToolMessageError(kwargs)
+            )
+            events.push(...completionEvents)
           }
-        }
-
-        // Extract usage_metadata for context window tracking
-        // Usage metadata is present on completed AI messages (not streaming chunks)
-        const usageMetadata = kwargs.usage_metadata || kwargs.response_metadata?.usage
-        if (usageMetadata) {
-          console.log("[ElectronTransport] Found usage_metadata:", {
-            input_tokens: usageMetadata.input_tokens,
-            output_tokens: usageMetadata.output_tokens,
-            total_tokens: usageMetadata.total_tokens,
-            has_cache_details: !!usageMetadata.input_token_details
-          })
-
-          // Only emit if we have actual token counts (not on every chunk)
-          if (usageMetadata.input_tokens !== undefined && usageMetadata.input_tokens > 0) {
-            events.push({
-              event: "custom",
-              data: {
-                type: "token_usage",
-                usage: {
-                  inputTokens: usageMetadata.input_tokens,
-                  outputTokens: usageMetadata.output_tokens,
-                  totalTokens: usageMetadata.total_tokens,
-                  cacheReadTokens: usageMetadata.input_token_details?.cache_read,
-                  cacheCreationTokens: usageMetadata.input_token_details?.cache_creation
-                }
-              }
-            })
-          }
-        }
-      }
-
-      // Handle ToolMessage - emit as message event and handle subagent completion
-      if (isToolMessage && kwargs.tool_call_id) {
-        const content = this.extractContent(kwargs.content)
-        const msgId = kwargs.id || crypto.randomUUID()
-
-        // Emit tool message to the stream
-        events.push({
-          event: "messages",
-          data: [
-            {
-              id: msgId,
-              type: "tool",
-              content,
-              tool_call_id: kwargs.tool_call_id,
-              name: kwargs.name
-            },
-            { langgraph_node: metadata?.langgraph_node || "tools" }
-          ]
-        })
-
-        // Handle subagent task completion
-        if (kwargs.name === "task") {
-          const completionEvents = this.processToolMessage(kwargs.tool_call_id)
-          events.push(...completionEvents)
         }
       }
     } else if (mode === "values") {
@@ -560,8 +582,7 @@ export class ElectronIPCTransport implements UseStreamTransport {
               ) {
                 const args = toolCall.args || {}
                 if (args.subagent_type || args.description) {
-                  const subagent = this.createSubagentFromTask(toolCall.id, args)
-                  this.activeSubagents.set(toolCall.id, subagent)
+                  this.registerSubagent(toolCall.id, args)
                 }
               }
             }
@@ -571,7 +592,7 @@ export class ElectronIPCTransport implements UseStreamTransport {
           if (className.includes("ToolMessage") && kwargs.tool_call_id && kwargs.name === "task") {
             const subagent = this.activeSubagents.get(kwargs.tool_call_id)
             if (subagent && subagent.status === "running") {
-              subagent.status = "completed"
+              subagent.status = this.isToolMessageError(kwargs) ? "failed" : "completed"
               subagent.completedAt = new Date()
             }
           }
@@ -702,6 +723,31 @@ export class ElectronIPCTransport implements UseStreamTransport {
   }
 
   /**
+   * Check if a checkpoint namespace indicates a subagent message.
+   * Subagent namespaces contain "tools:" segments.
+   */
+  private isSubagentNamespace(ns?: string): boolean {
+    return !!ns && ns.includes("tools:")
+  }
+
+  /**
+   * Register a subagent from a task tool call.
+   */
+  private registerSubagent(toolCallId: string, args: Record<string, unknown>): void {
+    const subagent = this.createSubagentFromTask(toolCallId, args)
+    this.activeSubagents.set(toolCallId, subagent)
+  }
+
+  private isToolMessageError(kwargs: SerializedMessageChunk["kwargs"]): boolean {
+    if (!kwargs) return false
+    return (
+      kwargs.status === "error" ||
+      kwargs.is_error === true ||
+      kwargs.additional_kwargs?.is_error === true
+    )
+  }
+
+  /**
    * Extract text content from message content (string or content blocks)
    */
   private extractContent(
@@ -754,8 +800,7 @@ export class ElectronIPCTransport implements UseStreamTransport {
           const args = JSON.parse(accumulated.args)
           // Only process if we haven't already created a subagent for this tool call
           if (!this.activeSubagents.has(chunk.id) && args.subagent_type) {
-            const subagent = this.createSubagentFromTask(chunk.id, args)
-            this.activeSubagents.set(chunk.id, subagent)
+            this.registerSubagent(chunk.id, args)
             events.push(this.createSubagentEvent())
           }
         } catch {
@@ -782,8 +827,7 @@ export class ElectronIPCTransport implements UseStreamTransport {
       if (toolCall.name === "task" && !this.activeSubagents.has(toolCall.id)) {
         const args = toolCall.args || {}
         if (args.subagent_type || args.description) {
-          const subagent = this.createSubagentFromTask(toolCall.id, args)
-          this.activeSubagents.set(toolCall.id, subagent)
+          this.registerSubagent(toolCall.id, args)
           events.push(this.createSubagentEvent())
         }
       }
@@ -795,13 +839,13 @@ export class ElectronIPCTransport implements UseStreamTransport {
   /**
    * Process a ToolMessage which signals subagent completion
    */
-  private processToolMessage(toolCallId: string): StreamEvent[] {
+  private processToolMessage(toolCallId: string, isError = false): StreamEvent[] {
     const events: StreamEvent[] = []
 
     // Check if this tool_call_id corresponds to an active subagent
     const subagent = this.activeSubagents.get(toolCallId)
     if (subagent) {
-      subagent.status = "completed"
+      subagent.status = isError ? "failed" : "completed"
       subagent.completedAt = new Date()
       events.push(this.createSubagentEvent())
     }
@@ -847,7 +891,7 @@ export class ElectronIPCTransport implements UseStreamTransport {
   }
 
   /**
-   * Create a custom event with current subagent state
+   * Create a custom event with current subagent state.
    */
   private createSubagentEvent(): StreamEvent {
     return {

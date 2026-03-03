@@ -128,11 +128,13 @@ interface CustomEventData {
   path?: string
   subagents?: Array<{
     id?: string
+    toolCallId?: string
     name?: string
     description?: string
     status?: string
     startedAt?: Date
     completedAt?: Date
+    subagentType?: string
   }>
   usage?: {
     inputTokens?: number
@@ -388,11 +390,13 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             updateThreadState(threadId, () => ({
               subagents: data.subagents!.map((s) => ({
                 id: s.id || crypto.randomUUID(),
+                toolCallId: s.toolCallId,
                 name: s.name || "Subagent",
                 description: s.description || "",
                 status: (s.status || "pending") as "pending" | "running" | "completed" | "failed",
                 startedAt: s.startedAt,
-                completedAt: s.completedAt
+                completedAt: s.completedAt,
+                subagentType: s.subagentType
               }))
             }))
           }

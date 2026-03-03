@@ -97,10 +97,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
         // Forward raw stream events - transport layer handles parsing
         // Serialize to plain objects for IPC (class instances don't transfer)
+        const serialized = JSON.parse(JSON.stringify(data))
+
         window.webContents.send(channel, {
           type: "stream",
           mode,
-          data: JSON.parse(JSON.stringify(data))
+          data: serialized
         })
       }
 
@@ -164,6 +166,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     const abortController = new AbortController()
     activeRuns.set(threadId, abortController)
 
+    const onWindowClosed = (): void => {
+      console.log("[Agent] Window closed, aborting resume stream for thread:", threadId)
+      abortController.abort()
+    }
+    window.once("closed", onWindowClosed)
+
     try {
       const effectiveModelId = modelId || (metadata.model as string | undefined)
       const agent = await createAgentRuntime({
@@ -174,11 +182,11 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
-      streamMode: ["messages", "values"] as ("messages" | "values")[],
-      recursionLimit: 1000
-    }
+        streamMode: ["messages", "values"] as ("messages" | "values")[],
+        recursionLimit: 1000
+      }
 
-    // Resume from checkpoint by streaming with Command containing the decision
+      // Resume from checkpoint by streaming with Command containing the decision
       // The HITL middleware expects { decisions: [{ type: 'approve' | 'reject' | 'edit' }] }
       const decisionType = command?.resume?.decision || "approve"
       const resumeValue = { decisions: [{ type: decisionType }] }
@@ -213,6 +221,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
     } finally {
+      window.removeListener("closed", onWindowClosed)
       activeRuns.delete(threadId)
     }
   })
@@ -251,16 +260,22 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     const abortController = new AbortController()
     activeRuns.set(threadId, abortController)
 
+    const onWindowClosed = (): void => {
+      console.log("[Agent] Window closed, aborting interrupt stream for thread:", threadId)
+      abortController.abort()
+    }
+    window.once("closed", onWindowClosed)
+
     try {
       const agent = await createAgentRuntime({ threadId, workspacePath, modelId })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
-      streamMode: ["messages", "values"] as ("messages" | "values")[],
-      recursionLimit: 1000
-    }
+        streamMode: ["messages", "values"] as ("messages" | "values")[],
+        recursionLimit: 1000
+      }
 
-    if (decision.type === "approve") {
+      if (decision.type === "approve") {
         // Resume execution by invoking with null (continues from checkpoint)
         const stream = await agent.stream(null, config)
 
@@ -299,6 +314,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
     } finally {
+      window.removeListener("closed", onWindowClosed)
       activeRuns.delete(threadId)
     }
   })

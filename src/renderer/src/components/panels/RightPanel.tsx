@@ -30,6 +30,7 @@ import { useThreadState } from "@/lib/thread-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { Todo, SkillMetadata } from "@/types"
+import { SubagentCard } from "@/components/panels/SubagentPanel"
 
 const HEADER_HEIGHT = 52 // px
 const HANDLE_HEIGHT = 6 // px
@@ -1057,28 +1058,9 @@ function AgentsContent(): React.JSX.Element {
   }
 
   return (
-    <div className="p-3 space-y-2">
+    <div className="p-3 space-y-3">
       {subagents.map((agent) => (
-        <div key={agent.id} className="p-3 rounded-sm border border-border">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <GitBranch className="size-3.5 text-status-info" />
-            <span className="flex-1">{agent.name}</span>
-            <span
-              className={cn(
-                "text-[10px] px-1.5 py-0.5 rounded",
-                agent.status === "pending" && "bg-muted text-muted-foreground",
-                agent.status === "running" && "bg-status-info/20 text-status-info",
-                agent.status === "completed" && "bg-status-nominal/20 text-status-nominal",
-                agent.status === "failed" && "bg-status-critical/20 text-status-critical"
-              )}
-            >
-              {agent.status.toUpperCase()}
-            </span>
-          </div>
-          {agent.description && (
-            <p className="text-xs text-muted-foreground mt-1">{agent.description}</p>
-          )}
-        </div>
+        <SubagentCard key={agent.id} subagent={agent} />
       ))}
     </div>
   )

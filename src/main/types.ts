@@ -98,6 +98,8 @@ export interface Subagent {
   status: "pending" | "running" | "completed" | "failed"
   startedAt?: Date
   completedAt?: Date
+  toolCallId?: string
+  subagentType?: string
 }
 
 // Stream events from agent
