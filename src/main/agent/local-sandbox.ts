@@ -11,14 +11,22 @@
 
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-// import { join } from "node:path"
+import { constants as fsConstants } from "node:fs"
+import fs from "node:fs/promises"
+import path from "node:path"
 import {
   FilesystemBackend,
+  type EditResult,
   type ExecuteResponse,
   type SandboxBackendProtocol,
   type GrepMatch,
   type FileInfo
 } from "deepagents"
+import fg from "fast-glob"
+import * as iconv from "iconv-lite"
+import * as chardet from "jschardet"
+import micromatch from "micromatch"
+import { replace } from "./replace"
 
 /**
  * Options for LocalSandbox configuration.
@@ -82,6 +90,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
     // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
     // this.patchResolvePath()
+
   }
 
   // private patchResolvePath(): void {
@@ -113,17 +122,49 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private static readonly MAX_LS_ENTRIES = 300
 
   /**
-   * Override grepRaw to cap results for codebase exploration.
-   * In this LocalSandbox path (FilesystemBackend-based), grep results can
-   * otherwise grow very large and pressure small model context windows.
+   * Override grepRaw to:
+   * 1. Fall back to encoding-aware search when parent returns no results
+   *    (parent's literalSearch is hardcoded UTF-8, misses non-UTF-8 files)
+   * 2. Cap results for codebase exploration to avoid pressuring small context windows
    */
   async grepRaw(
     pattern: string,
-    path?: string,
+    dirPath?: string,
     glob?: string | null
   ): Promise<GrepMatch[] | string> {
-    const results = await super.grepRaw(pattern, path ?? "/", glob)
+    const resolved = dirPath ?? "/"
+    const t0 = Date.now()
+    let results = await super.grepRaw(pattern, resolved, glob)
+    const parentMs = Date.now() - t0
     if (typeof results === "string") return results
+
+    let source = results.length > 0 ? "ripgrep" : "none"
+
+    if (results.length === 0) {
+      let baseFull: string
+      try {
+        baseFull = (this as any).resolvePath(resolved === "/" ? "." : resolved)
+      } catch {
+        return results
+      }
+      const t1 = Date.now()
+      const rawResults = await this.encodingAwareLiteralSearch(pattern, baseFull, glob ?? null)
+      const fallbackMs = Date.now() - t1
+      for (const [fpath, items] of Object.entries(rawResults)) {
+        for (const [lineNum, lineText] of items) {
+          results.push({ path: fpath, line: lineNum, text: lineText })
+        }
+      }
+      if (results.length > 0) source = "encoding-aware-fallback"
+      console.log(
+        `[LocalSandbox] grepRaw fallback: pattern="${pattern}", results=${results.length}, fallbackMs=${fallbackMs}`
+      )
+    }
+
+    console.log(
+      `[LocalSandbox] grepRaw: source=${source}, pattern="${pattern}", results=${results.length}, parentMs=${parentMs}`
+    )
+
     if (results.length === 0) return results
 
     const capped: GrepMatch[] = []
@@ -197,19 +238,300 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return capped
   }
 
+  private static readonly LINE_NUMBER_WIDTH = 6
+  private static readonly MAX_LINE_LENGTH = 10_000
+
+  private static readonly SUPPORTS_NOFOLLOW =
+    typeof fsConstants.O_NOFOLLOW === "number"
+
+  private static readonly KNOWN_BINARY_EXTENSIONS = new Set([
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+    ".mp3", ".mp4", ".wav", ".mov", ".avi", ".mkv",
+    ".zip", ".gz", ".tar", ".rar", ".7z",
+    ".exe", ".dll", ".so", ".dylib",
+    ".woff", ".woff2", ".ttf", ".otf",
+    ".pyc", ".class", ".o", ".obj",
+    ".sqlite", ".db",
+    ".pdf", ".doc", ".xls", ".ppt",
+    ".docx", ".xlsx", ".pptx"
+  ])
+
+  /**
+   * Detect file encoding from raw buffer (same as Cline's detectEncoding):
+   * 0. Fast reject known binary extensions before any I/O-heavy detection
+   * 1. Try jschardet — if it returns a valid encoding, use it
+   * 2. If detection fails, check for binary via null-byte sampling
+   * 3. Fallback to utf-8 for plain text
+   */
+  private detectEncoding(buffer: Buffer, ext?: string): string {
+    if (ext && LocalSandbox.KNOWN_BINARY_EXTENSIONS.has(ext)) {
+      throw new Error(`Cannot read binary file type: ${ext}`)
+    }
+
+    const detected = chardet.detect(buffer)
+    if (detected && detected.encoding && iconv.encodingExists(detected.encoding)) {
+      return detected.encoding
+    }
+
+    // jschardet could not determine encoding — check if it's binary
+    const sampleLen = Math.min(8192, buffer.length)
+    for (let i = 0; i < sampleLen; i++) {
+      if (buffer[i] === 0) {
+        throw new Error(`Cannot read text for file type: ${ext || "unknown"}`)
+      }
+    }
+    return "utf-8"
+  }
+
+  /**
+   * Format lines with line numbers (compatible with deepagents' format).
+   * Long lines are chunked with continuation markers (e.g. 5.1, 5.2).
+   */
+  private formatLines(lines: string[], startLine: number): string {
+    const result: string[] = []
+    const w = LocalSandbox.LINE_NUMBER_WIDTH
+    const maxLen = LocalSandbox.MAX_LINE_LENGTH
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      const lineNum = i + startLine
+      if (line.length <= maxLen) {
+        result.push(`${lineNum.toString().padStart(w)}\t${line}`)
+      } else {
+        const numChunks = Math.ceil(line.length / maxLen)
+        for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
+          const start = chunkIdx * maxLen
+          const chunk = line.slice(start, start + maxLen)
+          if (chunkIdx === 0) {
+            result.push(`${lineNum.toString().padStart(w)}\t${chunk}`)
+          } else {
+            result.push(`${`${lineNum}.${chunkIdx}`.padStart(w)}\t${chunk}`)
+          }
+        }
+      }
+    }
+    return result.join("\n")
+  }
+
+  /**
+   * Override read to auto-detect file encoding (GBK, Shift_JIS, etc.)
+   * instead of hardcoded UTF-8. Uses jschardet + iconv-lite, same as Cline.
+   *
+   * Preserves original FilesystemBackend features:
+   *  - resolvePath() for virtual mode / security
+   *  - O_NOFOLLOW / symlink protection
+   *  - offset/limit pagination
+   *  - long-line chunking with continuation markers
+   *
+   * Adds (same as Cline):
+   *  - Automatic encoding detection via jschardet
+   *  - Multi-encoding decoding via iconv-lite
+   *  - Binary file detection as fallback when jschardet fails
+   */
+  async read(filePath: string, offset = 0, limit = 500): Promise<string> {
+    try {
+      const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
+
+      const ext = path.extname(resolvedPath).toLowerCase()
+      const encoding = this.detectEncoding(buffer, ext)
+      const content = iconv.decode(buffer, encoding)
+
+      if (!content || content.trim() === "") return "System reminder: File exists but has empty contents"
+
+      const lines = content.split("\n")
+      if (offset >= lines.length) {
+        return `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`
+      }
+
+      const end = Math.min(offset + limit, lines.length)
+      return this.formatLines(lines.slice(offset, end), offset + 1)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return `Error reading file '${filePath}': ${msg}`
+    }
+  }
+
+  /**
+   * Read a file as a raw Buffer with symlink protection.
+   * Shared helper for read(), edit(), and other encoding-aware operations.
+   */
+  private async readFileBuffer(filePath: string): Promise<{ buffer: Buffer; resolvedPath: string }> {
+    const resolvedPath: string = (this as any).resolvePath(filePath)
+
+    let buffer: Buffer
+    if (LocalSandbox.SUPPORTS_NOFOLLOW) {
+      if (!(await fs.lstat(resolvedPath)).isFile()) {
+        throw new Error(`File '${filePath}' not found`)
+      }
+      const fd = await fs.open(
+        resolvedPath,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+      )
+      try {
+        buffer = await fd.readFile()
+      } finally {
+        await fd.close()
+      }
+    } else {
+      const stat = await fs.lstat(resolvedPath)
+      if (stat.isSymbolicLink()) throw new Error(`Symlinks are not allowed: ${filePath}`)
+      if (!stat.isFile()) throw new Error(`File '${filePath}' not found`)
+      buffer = await fs.readFile(resolvedPath)
+    }
+
+    return { buffer, resolvedPath }
+  }
+
+  /**
+   * Write content back to a file with symlink protection.
+   * Encodes the content with the given encoding via iconv-lite.
+   */
+  private async writeFileEncoded(
+    resolvedPath: string,
+    content: string,
+    encoding: string
+  ): Promise<void> {
+    const encoded = iconv.encode(content, encoding)
+    if (LocalSandbox.SUPPORTS_NOFOLLOW) {
+      const flags =
+        fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+      const fd = await fs.open(resolvedPath, flags)
+      try {
+        await fd.writeFile(encoded)
+      } finally {
+        await fd.close()
+      }
+    } else {
+      await fs.writeFile(resolvedPath, encoded)
+    }
+  }
+
+  /**
+   * Override edit to:
+   * 1. Auto-detect file encoding (GBK, Shift_JIS, etc.) — same as read()
+   * 2. Use OpenCode's 9-layer progressive string replacement for better
+   *    tolerance of LLM-generated oldString variations (whitespace, indent, escapes)
+   * 3. Write back in the original encoding to avoid corrupting non-UTF-8 files
+   */
+  async edit(
+    filePath: string,
+    oldString: string,
+    newString: string,
+    replaceAll = false
+  ): Promise<EditResult> {
+    try {
+      const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
+      const ext = path.extname(resolvedPath).toLowerCase()
+      const encoding = this.detectEncoding(buffer, ext)
+      const content = iconv.decode(buffer, encoding)
+
+      if (content === "" && oldString === "") {
+        await this.writeFileEncoded(resolvedPath, newString, encoding)
+        return { path: filePath, filesUpdate: null, occurrences: 0 }
+      }
+
+      const { newContent, occurrences } = replace(content, oldString, newString, replaceAll)
+
+      await this.writeFileEncoded(resolvedPath, newContent, encoding)
+
+      return { path: filePath, filesUpdate: null, occurrences }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { error: `Error editing file '${filePath}': ${msg}` }
+    }
+  }
+
+  /**
+   * Detect encoding for command output (Windows console uses system code page).
+   * Falls back to UTF-8 if detection is inconclusive.
+   */
+  private detectCmdEncoding(buf: Buffer): string {
+    if (buf.length === 0) return "utf-8"
+    const detected = chardet.detect(buf)
+    const enc = typeof detected === "string" ? detected : detected?.encoding
+    if (enc && iconv.encodingExists(enc)) return enc
+    return "utf-8"
+  }
+
+  private static readonly SEARCH_IGNORE = [
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/__pycache__/**"
+  ]
+
+  /**
+   * Encoding-aware fallback for grep when ripgrep is unavailable.
+   * Called from grepRaw override when parent's search returns no results,
+   * to handle non-UTF-8 files via jschardet + iconv-lite.
+   */
+  private async encodingAwareLiteralSearch(
+    pattern: string,
+    baseFull: string,
+    includeGlob: string | null
+  ): Promise<Record<string, Array<[number, string]>>> {
+    const results: Record<string, Array<[number, string]>> = {}
+    const cwd = (await fs.stat(baseFull)).isDirectory()
+      ? baseFull
+      : path.dirname(baseFull)
+    const files = await fg("**/*", {
+      cwd, absolute: true, onlyFiles: true, dot: true,
+      ignore: LocalSandbox.SEARCH_IGNORE
+    })
+    const maxBytes = ((this as any).maxFileSizeBytes as number) ?? 10 * 1024 * 1024
+    const virtualMode = (this as any).virtualMode as boolean | undefined
+    const cwdDir = virtualMode ? ((this as any).cwd as string) : ""
+
+    for (const fp of files) {
+      try {
+        if (includeGlob && !micromatch.isMatch(path.basename(fp), includeGlob)) continue
+        if ((await fs.stat(fp)).size > maxBytes) continue
+
+        const buf = await fs.readFile(fp)
+        const ext = path.extname(fp).toLowerCase()
+
+        let encoding: string
+        try {
+          encoding = this.detectEncoding(buf, ext)
+        } catch {
+          continue
+        }
+
+        const content = iconv.decode(buf, encoding)
+        const lines = content.split("\n")
+
+        let virtPath: string | null = null
+        if (virtualMode) {
+          try {
+            const relative = path.relative(cwdDir, fp)
+            if (relative.startsWith("..")) continue
+            virtPath = "/" + relative.split(path.sep).join("/")
+          } catch {
+            continue
+          }
+        } else {
+          virtPath = fp
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i].includes(pattern)) continue
+          if (!results[virtPath!]) results[virtPath!] = []
+          results[virtPath!].push([i + 1, lines[i]])
+        }
+      } catch {
+        continue
+      }
+    }
+    return results
+  }
+
   /**
    * Execute a shell command in the workspace directory.
    *
-   * @param command - Shell command string to execute
-   * @returns ExecuteResponse with combined output, exit code, and truncation flag
-   *
-   * @example
-   * ```typescript
-   * const result = await sandbox.execute('echo "Hello World"');
-   * // result.output: "Hello World\n"
-   * // result.exitCode: 0
-   * // result.truncated: false
-   * ```
+   * On Windows, command output is decoded with auto-detected encoding
+   * (e.g. GBK/CP936) instead of assuming UTF-8, preventing garbled Chinese text.
    */
   async execute(command: string): Promise<ExecuteResponse> {
     if (!command || typeof command !== "string") {
@@ -221,12 +543,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     return new Promise<ExecuteResponse>((resolve) => {
-      const outputParts: string[] = []
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
       let totalBytes = 0
-      let truncated = false
+      let byteCapReached = false
       let resolved = false
 
-      // Determine shell based on platform
       const isWindows = process.platform === "win32"
       const shell = isWindows ? "cmd.exe" : "/bin/sh"
       const shellArgs = isWindows ? ["/c", command] : ["-c", command]
@@ -237,7 +559,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         stdio: ["ignore", "pipe", "pipe"]
       })
 
-      // Handle timeout
+      let killTimerId: ReturnType<typeof setTimeout> | null = null
+
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true
@@ -245,7 +568,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
             spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], { stdio: "ignore" })
           } else {
             proc.kill("SIGTERM")
-            setTimeout(() => proc.kill("SIGKILL"), 1000)
+            killTimerId = setTimeout(() => {
+              try { proc.kill("SIGKILL") } catch { /* already exited */ }
+            }, 1000)
           }
           resolve({
             output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
@@ -255,88 +580,66 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         }
       }, this.timeout)
 
-      // Collect stdout
-      proc.stdout.on("data", (data: Buffer) => {
-        if (truncated) return
-
-        const chunk = data.toString()
-        const newTotal = totalBytes + chunk.length
-
-        if (newTotal > this.maxOutputBytes) {
-          // Truncate to fit within limit
-          const remaining = this.maxOutputBytes - totalBytes
-          if (remaining > 0) {
-            outputParts.push(chunk.slice(0, remaining))
-          }
-          truncated = true
-          totalBytes = this.maxOutputBytes
-        } else {
-          outputParts.push(chunk)
-          totalBytes = newTotal
-        }
+      proc.stdout.on("data", (chunk: Buffer) => {
+        if (byteCapReached) return
+        stdoutChunks.push(chunk)
+        totalBytes += chunk.length
+        if (totalBytes >= this.maxOutputBytes) byteCapReached = true
       })
 
-      // Collect stderr with [stderr] prefix per line
-      proc.stderr.on("data", (data: Buffer) => {
-        if (truncated) return
-
-        const chunk = data.toString()
-        // Prefix each line with [stderr]
-        const prefixedLines = chunk
-          .split("\n")
-          .filter((line) => line.length > 0)
-          .map((line) => `[stderr] ${line}`)
-          .join("\n")
-
-        if (prefixedLines.length === 0) return
-
-        const withNewline = prefixedLines + (chunk.endsWith("\n") ? "\n" : "")
-        const newTotal = totalBytes + withNewline.length
-
-        if (newTotal > this.maxOutputBytes) {
-          const remaining = this.maxOutputBytes - totalBytes
-          if (remaining > 0) {
-            outputParts.push(withNewline.slice(0, remaining))
-          }
-          truncated = true
-          totalBytes = this.maxOutputBytes
-        } else {
-          outputParts.push(withNewline)
-          totalBytes = newTotal
-        }
+      proc.stderr.on("data", (chunk: Buffer) => {
+        if (byteCapReached) return
+        stderrChunks.push(chunk)
+        totalBytes += chunk.length
+        if (totalBytes >= this.maxOutputBytes) byteCapReached = true
       })
 
-      // Handle process exit
       proc.on("close", (code, signal) => {
         if (resolved) return
         resolved = true
         clearTimeout(timeoutId)
+        if (killTimerId) clearTimeout(killTimerId)
 
-        let output = outputParts.join("")
+        const stdoutBuf = Buffer.concat(stdoutChunks)
+        const stderrBuf = Buffer.concat(stderrChunks)
 
-        // Add truncation notice if needed
-        if (truncated) {
-          output += `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+        const enc = isWindows
+          ? this.detectCmdEncoding(stdoutBuf.length > 0 ? stdoutBuf : stderrBuf)
+          : "utf-8"
+
+        let output = ""
+        if (stdoutBuf.length > 0) {
+          output += iconv.decode(stdoutBuf, enc)
+        }
+        if (stderrBuf.length > 0) {
+          const stderrText = iconv.decode(stderrBuf, enc)
+          const prefixed = stderrText
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map((line) => `[stderr] ${line}`)
+            .join("\n")
+          if (prefixed) {
+            output += (output ? "\n" : "") + prefixed + (stderrText.endsWith("\n") ? "\n" : "")
+          }
         }
 
-        // If no output, show placeholder
+        let truncated = false
+        if (output.length > this.maxOutputBytes) {
+          output = output.slice(0, this.maxOutputBytes)
+          output += `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+          truncated = true
+        }
         if (!output.trim()) {
           output = "<no output>"
         }
 
-        resolve({
-          output,
-          exitCode: signal ? null : code,
-          truncated
-        })
+        resolve({ output, exitCode: signal ? null : code, truncated })
       })
 
-      // Handle spawn errors
       proc.on("error", (err) => {
         if (resolved) return
         resolved = true
         clearTimeout(timeoutId)
-
         resolve({
           output: `Error: Failed to execute command: ${err.message}`,
           exitCode: 1,

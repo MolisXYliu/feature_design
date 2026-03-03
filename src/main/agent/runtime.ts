@@ -37,6 +37,9 @@ import type * as _lcLanggraph from "@langchain/langgraph"
 import type * as _lcZodTypes from "@langchain/core/utils/types"
 
 import { createHash } from "crypto"
+import { join, delimiter } from "path"
+import { existsSync } from "fs"
+import { app } from "electron"
 import { BASE_SYSTEM_PROMPT } from "./system-prompt"
 
 const BASE_PROMPT =
@@ -365,11 +368,26 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const maxTokens = customConfig?.maxTokens ?? DEFAULT_MAX_TOKENS
   // Tune shell output cap for 32K~64K context windows to reduce context pressure.
   const maxOutputBytes = Math.max(30_000, Math.min(80_000, Math.floor(maxTokens * 4 * 0.2)))
+
+  // Inject bundled ripgrep into PATH so deepagents' ripgrepSearch can find it
+  const rgDir = join(
+    app.isPackaged ? process.resourcesPath : join(__dirname, "../../resources"),
+    "bin",
+    process.platform
+  )
+  const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
+  const rgExists = existsSync(rgBin)
+  const env = rgExists
+    ? { ...process.env, PATH: `${rgDir}${delimiter}${process.env.PATH ?? ""}` }
+    : undefined
+  console.log(`[Runtime] ripgrep bin: ${rgBin}, exists: ${rgExists}, platform: ${process.platform}`)
+
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
     timeout: 120_000,
-    maxOutputBytes
+    maxOutputBytes,
+    env
   })
 
   const systemPrompt = getSystemPrompt(workspacePath)
