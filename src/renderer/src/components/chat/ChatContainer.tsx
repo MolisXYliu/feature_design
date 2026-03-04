@@ -484,7 +484,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           "输出：大纲、页面建议、可交付稿件。"
         ].join("\n"),
         "skill-creator": [
-          "请帮我创建一个新技能包。",
+          "请使用skill-creator技能帮我创建一个新技能包。",
           "技能用途与触发场景：<请补充>",
           "输出：技能结构、说明文档、示例。"
         ].join("\n"),
