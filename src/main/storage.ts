@@ -4,6 +4,7 @@ import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
 import { readdir, readFile, rm, mkdir, copyFile, stat, chmod } from "fs/promises"
+import { app } from "electron"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -79,6 +80,22 @@ function writeEnvFile(env: Record<string, string>): void {
 
 // Skills directory — bundled with the app at project root /skills/
 export function getSkillsDir(): string {
+
+  // 1) Packaged: skills 在 app.asar 的 /out/skills（你已经验证过）
+  if (app?.isPackaged) {
+    // app.getAppPath() => .../Contents/Resources/app.asar
+    const asarOutSkills = join(app.getAppPath(), "out", "skills");
+    if (existsSync(asarOutSkills)) return asarOutSkills;
+
+    // 有些打包方式会把 out 放在 Resources 目录下（非 asar）
+    const resourcesOutSkills = join(process.resourcesPath, "out", "skills");
+    if (existsSync(resourcesOutSkills)) return resourcesOutSkills;
+
+    // 如果你未来改成 extraResources: Resources/skills
+    const resourcesSkills = join(process.resourcesPath, "skills");
+    if (existsSync(resourcesSkills)) return resourcesSkills;
+  }
+
   // Prefer workspace root /skills in development (cwd is project root in electron-vite dev).
   const workspaceSkillsDir = join(process.cwd(), "skills")
   if (existsSync(workspaceSkillsDir)) return workspaceSkillsDir

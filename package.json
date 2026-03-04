@@ -1,5 +1,5 @@
 {
-  "name": "openwork",
+  "name": "CMBDevClaw",
   "version": "0.1.0",
   "description": "A tactical agent interface for deepagentsjs",
   "main": "./out/main/index.js",
@@ -44,61 +44,28 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "build": "electron-vite build",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
-    "appId": "com.cmbcowork.agent",
-    "productName": "CmbCoworkAgent",
+    "appId": "com.langchain.openwork",
+    "productName": "CMBDevClaw",
     "directories": {
-      "output": "release"
+      "output": "dist"
     },
-    "extraResources": [
-      {
-        "from": "skills",
-        "to": "skills"
-      }
+    "files": [
+      "out/",
+      "node_modules/",
+      "package.json"
     ],
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "extraResources": [
-        {
-          "from": "resources/bin/darwin",
-          "to": "bin/darwin"
-        }
-      ]
+      "target": "dmg"
     },
     "win": {
-      "target": [
-        "nsis",
-        "zip"
-      ],
-      "extraResources": [
-        {
-          "from": "resources/bin/win32",
-          "to": "bin/win32"
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "extraResources": [
-        {
-          "from": "resources/bin/linux",
-          "to": "bin/linux"
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "target": "nsis",
+      "icon": "build/icon.ico"
     }
   },
   "dependencies": {
@@ -128,7 +95,6 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "deepagents": "^1.8.1",
-    "electron": "^39.2.6",
     "electron-store": "^8.2.0",
     "fast-glob": "^3.3.3",
     "iconv-lite": "^0.7.2",
@@ -156,7 +122,6 @@
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^5.1.1",
-    "electron": "^39.2.6",
     "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react": "^7.37.5",
@@ -167,6 +132,8 @@
     "react-dom": "^19.2.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.6"
+    "vite": "^7.2.6",
+    "electron-builder": "^26.8.1",
+    "electron": "^39.2.6"
   }
 }
