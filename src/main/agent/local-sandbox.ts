@@ -188,7 +188,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       capped.push({
         path: "(truncated)",
         line: 0,
-        text: `... ${omitted} more matches omitted. Refine pattern/path/glob and run grep again.`
+        text: `Found ${results.length} total matches, showing first ${capped.length}. ${omitted} omitted — refine pattern/path/glob.`
       })
     }
 
@@ -211,7 +211,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       `for pattern=${pattern}`
     )
     capped.push({
-      path: `(truncated) ... ${omitted} more files omitted. Use a more specific glob pattern or path.`,
+      path: `(truncated) Found ${infos.length} total, showing first ${capped.length}. ${omitted} omitted — use a more specific glob pattern or path.`,
       is_dir: false
     } as FileInfo)
     return capped
@@ -232,7 +232,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       `for path=${path}`
     )
     capped.push({
-      path: `(truncated) ... ${omitted} more entries omitted. Use a more specific path.`,
+      path: `(truncated) Found ${infos.length} total, showing first ${capped.length}. ${omitted} omitted — use a more specific path.`,
       is_dir: false
     } as FileInfo)
     return capped
@@ -343,8 +343,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         return `Error: Line offset ${offset} exceeds file length (${lines.length} lines)`
       }
 
-      const end = Math.min(offset + limit, lines.length)
-      return this.formatLines(lines.slice(offset, end), offset + 1)
+      const total = lines.length
+      const hasMore = offset + limit < total
+      const end = Math.min(offset + (hasMore ? limit - 1 : limit), total)
+      const formatted = this.formatLines(lines.slice(offset, end), offset + 1)
+      if (hasMore) {
+        return `[Lines ${offset + 1}-${end} of ${total}. Use offset=${end} to read more.]\n` + formatted
+      }
+      return formatted
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Error reading file '${filePath}': ${msg}`
