@@ -566,10 +566,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       let killTimerId: ReturnType<typeof setTimeout> | null = null
+      // Used on Windows to resolve after the main process exits,
+      // even if child processes still hold pipe handles open.
+      let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
 
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
           if (isWindows && proc.pid) {
             spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], { stdio: "ignore" })
           } else {
@@ -600,11 +604,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         if (totalBytes >= this.maxOutputBytes) byteCapReached = true
       })
 
-      proc.on("close", (code, signal) => {
+      const collectAndResolve = (code: number | null, signal: string | null): void => {
         if (resolved) return
         resolved = true
         clearTimeout(timeoutId)
         if (killTimerId) clearTimeout(killTimerId)
+        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
@@ -640,6 +645,23 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         }
 
         resolve({ output, exitCode: signal ? null : code, truncated })
+      }
+
+      // On Windows, .bat files may spawn child processes that inherit pipe handles.
+      // The 'close' event waits for all pipe handles to close (including those held
+      // by orphaned children), which can block indefinitely. Instead, listen for
+      // 'exit' (the main cmd.exe process itself exits) and resolve after a short
+      // grace period to collect any remaining buffered output.
+      if (isWindows) {
+        proc.on("exit", (code, signal) => {
+          windowsExitTimerId = setTimeout(() => {
+            collectAndResolve(code, signal as string | null)
+          }, 500)
+        })
+      }
+
+      proc.on("close", (code, signal) => {
+        collectAndResolve(code, signal as string | null)
       })
 
       proc.on("error", (err) => {
