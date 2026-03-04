@@ -1095,7 +1095,8 @@ function SkillsContent({
     "planning-with-files",
     "mcp-builder",
     "webapp-testing",
-    "frontend-design"
+    "frontend-design",
+    "git-diff"
   ])
   const isProgrammingSkill = (skill: SkillMetadata): boolean => {
     return programmingSkillIds.has(skill.name.trim().toLowerCase())

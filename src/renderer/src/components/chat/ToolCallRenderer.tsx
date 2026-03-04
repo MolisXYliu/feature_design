@@ -19,6 +19,7 @@ import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
+import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -217,7 +218,7 @@ function FileEditSummary({ args }: { args: Record<string, unknown> }): React.JSX
           </span>
         </div>
         <div className="flex items-center gap-1.5 text-status-nominal">
-          <span className="font-mono bg-status-nominal/10 px-1.5 py-0.5 rounded">
+          <span className="font-mono bg-nominal/10 px-1.5 py-0.5 rounded">
             + {newStr.split("\n").length} lines
           </span>
         </div>
@@ -285,6 +286,53 @@ function TaskDisplay({
           {description}
         </p>
       )}
+    </div>
+  )
+}
+
+// Render git diff nicely
+export function DiffDisplay({ diff }: { diff: string }): React.JSX.Element {
+  // Parse git diff to extract old and new content
+  const parseGitDiff = (diffText: string) => {
+    const lines = diffText.split('\n')
+    let oldContent = ''
+    let newContent = ''
+    let inHunk = false
+
+    for (const line of lines) {
+      if (line.startsWith('@@')) {
+        inHunk = true
+        continue
+      }
+
+      if (inHunk) {
+        if (line.startsWith('-')) {
+          oldContent += line.substring(1) + '\n'
+        } else if (line.startsWith('+')) {
+          newContent += line.substring(1) + '\n'
+        } else if (line.startsWith(' ')) {
+          oldContent += line.substring(1) + '\n'
+          newContent += line.substring(1) + '\n'
+        }
+      }
+    }
+
+    return { oldContent: oldContent.trim(), newContent: newContent.trim() }
+  }
+
+  const { oldContent, newContent } = parseGitDiff(diff)
+
+  return (
+    <div className="text-xs font-mono bg-background rounded-sm overflow-hidden w-full">
+      <ReactDiffViewer
+        oldValue={oldContent}
+        newValue={newContent}
+        splitView={true}
+        hideLineNumbers={false}
+        useDarkTheme={false}
+        disableWordDiff={false}
+        compareMethod={DiffMethod.WORDS}
+      />
     </div>
   )
 }
@@ -359,6 +407,20 @@ export function ToolCallRenderer({
       case "execute": {
         const command = args.command as string
         const output = typeof result === "string" ? result : undefined
+
+        // Special handling for git diff commands
+        if (command && command.includes("git diff") && output && isExpanded) {
+          return (
+            <div className="text-xs space-y-2 w-full overflow-hidden">
+              <div className="font-mono bg-background rounded-sm p-2 flex items-center gap-2 min-w-0">
+                <span className="text-status-info shrink-0">$</span>
+                <span className="truncate">{command}</span>
+              </div>
+              <DiffDisplay diff={output} />
+            </div>
+          )
+        }
+
         return <CommandDisplay command={command} output={isExpanded ? output : undefined} />
       }
 
@@ -460,6 +522,30 @@ export function ToolCallRenderer({
         // When expanded, output is shown in CommandDisplay - just show status
         // When collapsed, show the output preview
         const output = typeof result === "string" ? result : JSON.stringify(result)
+        const command = args.command as string
+
+        // Special handling for git diff commands
+        if (command && command.includes("git diff") && output.trim()) {
+          if (isExpanded) {
+            return (
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>Git diff completed</span>
+              </div>
+            )
+          }
+          // Collapsed view - show diff preview
+          return (
+            <div className="space-y-2">
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>Git diff completed</span>
+              </div>
+              <DiffDisplay diff={output} />
+            </div>
+          )
+        }
+
         if (isExpanded) {
           return (
             <div className="text-xs text-status-nominal flex items-center gap-1.5">
