@@ -267,6 +267,52 @@ const api = {
     }> => {
       return ipcRenderer.invoke("workspace:readBinaryFile", { threadId, filePath })
     },
+    clearWorktreeContext: (threadId: string): Promise<void> => {
+      return ipcRenderer.invoke("workspace:clearWorktreeContext", threadId) as Promise<void>
+    },
+    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string): Promise<void> => {
+      return ipcRenderer.invoke("workspace:saveWorktreeContext", { threadId, gitRoot, branch, baseBranch }) as Promise<void>
+    },
+    isGit: (
+      folderPath: string
+    ): Promise<{
+      isGit: boolean
+      gitRoot: string | null
+      worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
+      isWorktreePath: boolean
+    }> => {
+      return ipcRenderer.invoke("workspace:isGit", folderPath) as Promise<{
+        isGit: boolean
+        gitRoot: string | null
+        worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
+        isWorktreePath: boolean
+      }>
+    },
+    listWorktrees: (
+      gitRoot: string
+    ): Promise<Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>> => {
+      return ipcRenderer.invoke("workspace:listWorktrees", gitRoot) as Promise<
+        Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
+      >
+    },
+    createWorktree: (
+      gitRoot: string,
+      branch: string
+    ): Promise<{ success: boolean; path?: string; branch?: string; baseBranch?: string; error?: string }> => {
+      return ipcRenderer.invoke("workspace:createWorktree", { gitRoot, branch }) as Promise<{
+        success: boolean
+        path?: string
+        branch?: string
+        baseBranch?: string
+        error?: string
+      }>
+    },
+    commitWorktree: (worktreePath: string, message: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:commitWorktree", { worktreePath, message }) as Promise<{
+        success: boolean
+        error?: string
+      }>
+    },
     // Listen for file changes in the workspace
     onFilesChanged: (
       callback: (data: { threadId: string; workspacePath: string }) => void

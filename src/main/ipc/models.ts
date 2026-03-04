@@ -2,6 +2,8 @@ import { IpcMain, dialog, app } from "electron"
 import Store from "electron-store"
 import * as fs from "fs/promises"
 import * as path from "path"
+import { execFile } from "child_process"
+import { promisify } from "util"
 import type {
   ModelConfig,
   Provider,
@@ -10,6 +12,56 @@ import type {
   WorkspaceFileParams
 } from "../types"
 import { startWatching, stopWatching } from "../services/workspace-watcher"
+
+const execFileAsync = promisify(execFile)
+
+const MAX_WORKTREES = 10
+
+export interface WorktreeInfo {
+  path: string
+  branch: string
+  isMain: boolean
+  createdAt?: Date
+}
+
+async function getGitRoot(folderPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--show-toplevel"])
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
+async function listWorktrees(gitRoot: string): Promise<WorktreeInfo[]> {
+  const { stdout } = await execFileAsync("git", ["-C", gitRoot, "worktree", "list", "--porcelain"])
+  const worktrees: WorktreeInfo[] = []
+  const blocks = stdout.trim().split(/\n\n+/)
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]
+    if (!block.trim()) continue
+    const lines = block.trim().split("\n")
+    const worktreePath = lines.find((l) => l.startsWith("worktree "))?.slice(9).trim() ?? ""
+    const branch = lines.find((l) => l.startsWith("branch "))?.slice(7).trim().replace("refs/heads/", "") ?? "(detached)"
+    const isMain = lines.some((l) => l === "bare") || i === 0
+
+    let createdAt: Date | undefined
+    try {
+      const stat = await fs.stat(worktreePath)
+      createdAt = stat.birthtime
+    } catch {
+      createdAt = undefined
+    }
+
+    if (worktreePath) {
+      worktrees.push({ path: worktreePath, branch, isMain, createdAt })
+    }
+  }
+
+  return worktrees
+}
+
 import {
   getOpenworkDir,
   getCustomModelPublicConfigById,
@@ -319,6 +371,146 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           success: false,
           error: e instanceof Error ? e.message : "Unknown error"
         }
+      }
+    }
+  )
+
+  // Check if a folder is a git repo and return root path + worktrees
+  ipcMain.handle("workspace:isGit", async (_event, folderPath: string) => {
+    const gitRoot = await getGitRoot(folderPath)
+    if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
+
+    // Detect if folderPath is itself a worktree (not the main repo).
+    // In a worktree, "git rev-parse --git-dir" returns a path like /repo/.git/worktrees/<name>
+    let isWorktreePath = false
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--git-dir"])
+      isWorktreePath = stdout.trim().includes(`${path.sep}worktrees${path.sep}`) ||
+                       stdout.trim().includes("/.git/worktrees/")
+    } catch { /* ignore */ }
+
+    const worktrees = await listWorktrees(gitRoot)
+    return { isGit: true, gitRoot, worktrees, isWorktreePath }
+  })
+
+  // List worktrees for a git repo
+  ipcMain.handle("workspace:listWorktrees", async (_event, gitRoot: string) => {
+    try {
+      return await listWorktrees(gitRoot)
+    } catch {
+      return []
+    }
+  })
+
+  // Create a new worktree; enforces MAX_WORKTREES limit
+  ipcMain.handle(
+    "workspace:createWorktree",
+    async (_event, { gitRoot, branch }: { gitRoot: string; branch: string }) => {
+      const worktrees = await listWorktrees(gitRoot)
+      const nonMain = worktrees.filter((w) => !w.isMain)
+
+      if (nonMain.length >= MAX_WORKTREES) {
+        return {
+          success: false,
+          error: `已达到 Worktree 数量上限（${MAX_WORKTREES} 个），请先删除不用的 Worktree 后再创建。`
+        }
+      }
+
+      const safeBranch = branch.replace(/[^a-zA-Z0-9\-_./]/g, "-")
+
+      // Check if branch is already checked out in an existing worktree
+      const branchConflict = worktrees.find((w) => w.branch === safeBranch)
+      if (branchConflict) {
+        return {
+          success: false,
+          error: `分支 "${safeBranch}" 已在 Worktree 中使用（${branchConflict.path}），同一分支不能同时被两个 Worktree 检出。`
+        }
+      }
+
+      const repoName = path.basename(gitRoot)
+      const baseDir = path.join(gitRoot, "..")
+      const baseName = `${repoName}-wt-${safeBranch.replace(/\//g, "-")}`
+
+      // Resolve unique path by appending -2, -3... if directory already exists
+      let worktreePath = path.join(baseDir, baseName)
+      let suffix = 2
+      while (true) {
+        try {
+          await fs.access(worktreePath)
+          worktreePath = path.join(baseDir, `${baseName}-${suffix}`)
+          suffix++
+        } catch {
+          break
+        }
+      }
+
+      try {
+        // Get the current branch of the main repo as the base branch
+        let baseBranch = "main"
+        try {
+          const r = await execFileAsync("git", ["-C", gitRoot, "branch", "--show-current"])
+          baseBranch = r.stdout.trim() || "main"
+        } catch { /* ignore */ }
+
+        await execFileAsync("git", ["-C", gitRoot, "worktree", "add", "-b", safeBranch, worktreePath])
+        return { success: true, path: worktreePath, branch: safeBranch, baseBranch }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "创建 Worktree 失败"
+        }
+      }
+    }
+  )
+
+  // Save worktree context (gitRoot, branch, baseBranch) into thread metadata
+  ipcMain.handle(
+    "workspace:saveWorktreeContext",
+    async (
+      _event,
+      { threadId, gitRoot, branch, baseBranch }: { threadId: string; gitRoot: string; branch: string; baseBranch?: string }
+    ) => {
+      const { getThread, updateThread } = await import("../db")
+      const thread = getThread(threadId)
+      if (!thread) return
+      let metadata: Record<string, unknown> = {}
+      try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { /* corrupted, reset */ }
+      metadata.gitRoot = gitRoot
+      metadata.isWorktree = true
+      metadata.worktreeBranch = branch
+      if (baseBranch) metadata.worktreeBaseBranch = baseBranch
+      updateThread(threadId, { metadata: JSON.stringify(metadata) })
+    }
+  )
+
+  // Clear worktree context from thread metadata
+  ipcMain.handle("workspace:clearWorktreeContext", async (_event, threadId: string) => {
+    const { getThread, updateThread } = await import("../db")
+    const thread = getThread(threadId)
+    if (!thread) return
+    let metadata: Record<string, unknown> = {}
+    try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { /* corrupted, reset */ }
+    delete metadata.isWorktree
+    delete metadata.gitRoot
+    delete metadata.worktreeBranch
+    delete metadata.worktreeBaseBranch
+    updateThread(threadId, { metadata: JSON.stringify(metadata) })
+  })
+
+  // Commit all changes in a worktree with a user-provided message
+  ipcMain.handle(
+    "workspace:commitWorktree",
+    async (_event, { worktreePath, message }: { worktreePath: string; message: string }) => {
+      try {
+        const status = await execFileAsync("git", ["-C", worktreePath, "status", "--porcelain"])
+        if (!status.stdout.trim()) {
+          return { success: false, error: "没有需要提交的改动" }
+        }
+        await execFileAsync("git", ["-C", worktreePath, "add", "-A"])
+        await execFileAsync("git", ["-C", worktreePath, "commit", "-m", message])
+        return { success: true }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : "提交失败" }
       }
     }
   )

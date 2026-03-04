@@ -135,6 +135,28 @@ interface CustomAPI {
       modified_at?: string
       error?: string
     }>
+    clearWorktreeContext: (threadId: string) => Promise<void>
+    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string) => Promise<void>
+    isGit: (folderPath: string) => Promise<{
+      isGit: boolean
+      gitRoot: string | null
+      worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
+      isWorktreePath: boolean
+    }>
+    listWorktrees: (gitRoot: string) => Promise<
+      Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
+    >
+    createWorktree: (gitRoot: string, branch: string) => Promise<{
+      success: boolean
+      path?: string
+      branch?: string
+      baseBranch?: string
+      error?: string
+    }>
+    commitWorktree: (worktreePath: string, message: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
     onFilesChanged: (
       callback: (data: { threadId: string; workspacePath: string }) => void
     ) => () => void
