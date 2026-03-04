@@ -199,7 +199,6 @@ function App(): React.JSX.Element {
           {/* Right: right panel toggle */}
           <div
             className="flex flex-1 h-full items-center justify-end pl-1"
-            style={{ marginRight: "var(--titlebar-inset-right, 0px)" }}
           >
             {!showCustomizeView && (
               <button
