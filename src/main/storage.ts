@@ -3,7 +3,7 @@ import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
-import { readdir, readFile, rm, mkdir, cp } from "fs/promises"
+import { readdir, readFile, rm, mkdir, copyFile, stat, chmod } from "fs/promises"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -168,6 +168,30 @@ function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: str
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 16)
 }
 
+/**
+ * Recursively copy a directory tree from src to dest.
+ * Uses copyFile + mkdir instead of fs.promises.cp (experimental in Node < 22).
+ */
+async function copyDirRecursive(src: string, dest: string): Promise<void> {
+  await mkdir(dest, { recursive: true })
+  const entries = await readdir(src, { withFileTypes: true })
+  for (const entry of entries) {
+    const srcPath = join(src, entry.name)
+    const destPath = join(dest, entry.name)
+    if (entry.isDirectory()) {
+      await copyDirRecursive(srcPath, destPath)
+    } else if (entry.isFile()) {
+      await copyFile(srcPath, destPath)
+      // Preserve executable permission bits (e.g. .py / .sh scripts in skills)
+      // chmod is a no-op on Windows but harmless
+      try {
+        const srcStat = await stat(srcPath)
+        await chmod(destPath, srcStat.mode)
+      } catch { /* ignore permission errors on restricted filesystems */ }
+    }
+  }
+}
+
 async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set<string>): Promise<number> {
   let count = 0
   const entries = await readdir(sourceDir, { withFileTypes: true })
@@ -185,12 +209,15 @@ async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set
       continue
     }
 
+    const srcSkillDir = join(sourceDir, entry.name)
     const destPath = join(ENABLED_SKILLS_DIR, entry.name)
     try {
-      await cp(join(sourceDir, entry.name), destPath, { recursive: true })
+      await copyDirRecursive(srcSkillDir, destPath)
       count++
     } catch (e) {
       console.warn(`[Storage] Failed to copy skill ${entry.name}:`, e)
+      // Clean up partial directory so it doesn't look like a valid skill
+      try { await rm(destPath, { recursive: true, force: true }) } catch { /* ignore */ }
     }
   }
   return count
@@ -202,7 +229,7 @@ let _enabledSkillsBuildLock: Promise<string> | null = null
  * Ensures ~/.cmbcoworkagent/enabled-skills/ exists with copies of enabled skills only.
  * Uses async I/O to avoid blocking the main process event loop.
  * Skips rebuild if the disabled list and source dirs haven't changed.
- * Serialized via a Promise lock to prevent concurrent rm/mkdir/cp races.
+ * Serialized via a Promise lock to prevent concurrent rm/mkdir/copyFile races.
  */
 async function ensureEnabledSkillsDirAsync(): Promise<string> {
   if (_enabledSkillsBuildLock) return _enabledSkillsBuildLock
