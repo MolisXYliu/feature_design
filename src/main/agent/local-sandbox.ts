@@ -9,9 +9,9 @@
  * handled via HITL configuration.
  */
 
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { constants as fsConstants } from "node:fs"
+import { constants as fsConstants, existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
@@ -533,11 +533,134 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return results
   }
 
+  private static readonly SHELL_BLACKLIST = new Set(["fish", "nu"])
+
+  /**
+   * Resolve the best shell for command execution.
+   * All platforms: check $SHELL first (skip non-POSIX shells like fish/nu).
+   * Windows fallback: GIT_BASH_PATH env > detect git install > COMSPEC (cmd.exe)
+   * macOS fallback: /bin/zsh
+   * Linux fallback: /bin/sh
+   */
+  private static resolveShell(): string {
+    const isWindows = process.platform === "win32"
+    const userShell = process.env.SHELL
+    if (userShell) {
+      const basename = isWindows
+        ? path.win32.basename(userShell)
+        : path.basename(userShell)
+      if (!LocalSandbox.SHELL_BLACKLIST.has(basename)) return userShell
+    }
+
+    if (isWindows) {
+      const envBash = process.env.GIT_BASH_PATH
+      if (envBash) return envBash
+
+      // Derive bash.exe from git.exe install location:
+      // git.exe is typically at C:\Program Files\Git\cmd\git.exe
+      // bash.exe is at C:\Program Files\Git\bin\bash.exe
+      const gitExe = LocalSandbox.whichSync("git")
+      if (gitExe) {
+        const bash = path.join(gitExe, "..", "..", "bin", "bash.exe")
+        try {
+          if (existsSync(bash)) return bash
+        } catch { /* ignore */ }
+      }
+
+      // Fallback: check common install paths
+      for (const base of [
+        process.env["ProgramFiles"],
+        process.env["ProgramFiles(x86)"],
+        "C:\\Program Files"
+      ]) {
+        if (!base) continue
+        const bash = path.join(base, "Git", "bin", "bash.exe")
+        try {
+          if (existsSync(bash)) return bash
+        } catch { /* ignore */ }
+      }
+
+      return process.env.COMSPEC || "cmd.exe"
+    }
+
+    if (process.platform === "darwin") return "/bin/zsh"
+    return "/bin/sh"
+  }
+
+  /** Synchronous `which` — locate an executable on PATH. */
+  private static whichSync(name: string): string | null {
+    const isWindows = process.platform === "win32"
+    const pathEnv = process.env.PATH || ""
+    const sep = isWindows ? ";" : ":"
+    const extensions = isWindows ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";") : [""]
+    for (const dir of pathEnv.split(sep)) {
+      if (!dir) continue
+      for (const ext of extensions) {
+        const full = path.join(dir, name + ext)
+        try {
+          if (existsSync(full)) return full
+        } catch { /* ignore */ }
+      }
+    }
+    return null
+  }
+
+  /** Track all active child processes for cleanup on app quit. */
+  private static readonly activeProcesses = new Set<ChildProcess>()
+
+  /** Kill all active child processes. Call from app 'will-quit' hook. */
+  static killAll(): void {
+    for (const proc of LocalSandbox.activeProcesses) {
+      void LocalSandbox.killTree(proc, () => false)
+    }
+    LocalSandbox.activeProcesses.clear()
+  }
+
+  private static readonly SIGKILL_TIMEOUT_MS = 200
+
+  /**
+   * Kill a process tree in a platform-aware manner.
+   * Windows: taskkill /T /F (tree kill), awaits completion.
+   * Unix: SIGTERM the process group, escalate to SIGKILL after 200ms.
+   */
+  private static async killTree(proc: ChildProcess, exited: () => boolean): Promise<void> {
+    const pid = proc.pid
+    if (!pid || exited()) return
+
+    if (process.platform === "win32") {
+      await new Promise<void>((res) => {
+        const killer = spawn("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" })
+        killer.once("exit", () => res())
+        killer.once("error", () => res())
+      })
+      return
+    }
+
+    try {
+      process.kill(-pid, "SIGTERM")
+    } catch {
+      try { proc.kill("SIGTERM") } catch { /* already exited */ }
+    }
+    await new Promise<void>((res) => setTimeout(res, LocalSandbox.SIGKILL_TIMEOUT_MS))
+    if (!exited()) {
+      try { process.kill(-pid, "SIGKILL") } catch {
+        try { proc.kill("SIGKILL") } catch { /* already exited */ }
+      }
+    }
+  }
+
   /**
    * Execute a shell command in the workspace directory.
    *
-   * On Windows, command output is decoded with auto-detected encoding
-   * (e.g. GBK/CP936) instead of assuming UTF-8, preventing garbled Chinese text.
+   * Key design decisions (aligned with OpenCode's bash tool):
+   * - Uses spawn(command, { shell }) pattern — Node.js handles platform-specific
+   *   shell invocation, so pipes, redirects, and chaining just work.
+   * - Smart shell selection: Git Bash on Windows (if available) > cmd.exe,
+   *   user's $SHELL on Unix > platform fallback.
+   * - detached process group on Unix for clean tree kill via negative PID.
+   * - Platform-aware kill tree: taskkill /T on Windows, process group signals on Unix.
+   * - Windows encoding auto-detection (GBK/CP936) to prevent garbled Chinese text.
+   * - Windows exit-event grace period to handle .bat child process pipe handle leaks.
    */
   async execute(command: string): Promise<ExecuteResponse> {
     if (!command || typeof command !== "string") {
@@ -548,40 +671,41 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
+    const isWindows = process.platform === "win32"
+    const shell = LocalSandbox.resolveShell()
+
     return new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
       let totalBytes = 0
       let byteCapReached = false
       let resolved = false
+      let exited = false
 
-      const isWindows = process.platform === "win32"
-      const shell = isWindows ? "cmd.exe" : "/bin/sh"
-      const shellArgs = isWindows ? ["/c", command] : ["-c", command]
-
-      const proc = spawn(shell, shellArgs, {
+      const proc = spawn(command, {
+        shell,
         cwd: this.workingDir,
         env: this.env,
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: !isWindows
       })
 
-      let killTimerId: ReturnType<typeof setTimeout> | null = null
-      // Used on Windows to resolve after the main process exits,
-      // even if child processes still hold pipe handles open.
+      LocalSandbox.activeProcesses.add(proc)
+
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+
+      // Intentionally fire-and-forget: timeout/error already resolved,
+      // kill is best-effort cleanup (same pattern as OpenCode's abort handler).
+      const killProc = (): void => {
+        void LocalSandbox.killTree(proc, () => exited)
+      }
 
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true
+          LocalSandbox.activeProcesses.delete(proc)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          if (isWindows && proc.pid) {
-            spawn("taskkill", ["/T", "/F", "/PID", String(proc.pid)], { stdio: "ignore" })
-          } else {
-            proc.kill("SIGTERM")
-            killTimerId = setTimeout(() => {
-              try { proc.kill("SIGKILL") } catch { /* already exited */ }
-            }, 1000)
-          }
+          killProc()
           resolve({
             output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
             exitCode: null,
@@ -607,8 +731,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const collectAndResolve = (code: number | null, signal: string | null): void => {
         if (resolved) return
         resolved = true
+        exited = true
+        LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
-        if (killTimerId) clearTimeout(killTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
@@ -648,12 +773,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       // On Windows, .bat files may spawn child processes that inherit pipe handles.
-      // The 'close' event waits for all pipe handles to close (including those held
-      // by orphaned children), which can block indefinitely. Instead, listen for
-      // 'exit' (the main cmd.exe process itself exits) and resolve after a short
-      // grace period to collect any remaining buffered output.
+      // The 'close' event waits for all handles to close (including orphaned children),
+      // which can block indefinitely. Listen for 'exit' and resolve after a grace period.
       if (isWindows) {
         proc.on("exit", (code, signal) => {
+          exited = true
           windowsExitTimerId = setTimeout(() => {
             collectAndResolve(code, signal as string | null)
           }, 500)
@@ -661,12 +785,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       proc.on("close", (code, signal) => {
+        exited = true
         collectAndResolve(code, signal as string | null)
       })
 
       proc.on("error", (err) => {
         if (resolved) return
         resolved = true
+        exited = true
+        LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
         resolve({
           output: `Error: Failed to execute command: ${err.message}`,

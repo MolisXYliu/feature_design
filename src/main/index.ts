@@ -8,6 +8,7 @@ import { registerMcpHandlers } from "./ipc/mcp"
 import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
+import { LocalSandbox } from "./agent/local-sandbox"
 
 let mainWindow: BrowserWindow | null = null
 
@@ -112,6 +113,7 @@ app.on("window-all-closed", () => {
 })
 
 app.on("will-quit", () => {
+  LocalSandbox.killAll()
   stopScheduler()
   flush()
 })
