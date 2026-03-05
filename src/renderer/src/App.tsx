@@ -8,7 +8,6 @@ import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
-import { DiffTest } from "@/components/chat/DiffTest"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -38,7 +37,6 @@ function App(): React.JSX.Element {
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
   const [zoomLevel, setZoomLevel] = useState(1)
-  const [showDiffTest, setShowDiffTest] = useState(false)
 
   // Track drag start widths
   const dragStartWidths = useRef<{ left: number; right: number } | null>(null)
@@ -202,16 +200,6 @@ function App(): React.JSX.Element {
           <div
             className="flex flex-1 h-full items-center justify-end pl-1 gap-1"
           >
-            {/* Diff Test Button */}
-            {/*todo diff测试*/}
-            <button
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors text-xs"
-              onClick={() => setShowDiffTest(!showDiffTest)}
-              title="显示 Diff 测试"
-            >
-              🧪
-            </button>
             {!showCustomizeView && (
               <button
                 type="button"
@@ -235,12 +223,6 @@ function App(): React.JSX.Element {
           <div className="flex flex-1 overflow-hidden bg-grid-subtle">
             <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
               <CustomizeView />
-            </main>
-          </div>
-        ) : showDiffTest ? (
-          <div className="flex flex-1 overflow-hidden bg-grid-subtle">
-            <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
-              <DiffTest />
             </main>
           </div>
         ) : (

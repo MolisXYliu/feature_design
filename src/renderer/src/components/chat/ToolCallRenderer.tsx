@@ -323,7 +323,7 @@ export function DiffDisplay({ diff }: { diff: string }): React.JSX.Element {
   const { oldContent, newContent } = parseGitDiff(diff)
 
   return (
-    <div className="text-xs font-mono bg-background rounded-sm overflow-hidden w-full">
+    <div className="text-xs font-mono bg-background rounded-sm overflow-hidden w-full overflow-auto">
       <ReactDiffViewer
         oldValue={oldContent}
         newValue={newContent}
