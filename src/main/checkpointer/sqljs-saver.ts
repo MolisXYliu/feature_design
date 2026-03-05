@@ -49,8 +49,10 @@ export class SqlJsSaver extends BaseCheckpointSaver {
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private dirty = false
 
-  /** Max checkpoints to keep per (thread_id, checkpoint_ns). Older ones are pruned on each put(). */
-  private maxCheckpointsPerNamespace = 3
+  /** Max checkpoints to keep per (thread_id, checkpoint_ns). Older ones are pruned on each put().
+   * Kept at 1 because sql.js loads the entire DB file into memory — retaining more checkpoints
+   * increases memory usage without benefit since we don't use LangGraph's time-travel feature. */
+  private maxCheckpointsPerNamespace = 1
 
   constructor(dbPath: string, serde?: SerializerProtocol) {
     super(serde)
