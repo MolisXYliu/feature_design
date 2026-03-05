@@ -31,6 +31,12 @@ function ThreadStatusIcon({ threadId }: { threadId: string }): React.JSX.Element
 }
 
 // Individual thread list item component
+function useIsThreadRunning(threadId: string): boolean {
+  const { isLoading } = useThreadStream(threadId)
+  const { scheduledTaskLoading } = useCurrentThread(threadId)
+  return isLoading || scheduledTaskLoading
+}
+
 function ThreadListItem({
   thread,
   isSelected,
@@ -54,6 +60,7 @@ function ThreadListItem({
   onCancelEditing: () => void
   onEditingTitleChange: (value: string) => void
 }): React.JSX.Element {
+  const isRunning = useIsThreadRunning(thread.thread_id)
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -107,17 +114,20 @@ function ThreadListItem({
               </>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="opacity-0 group-hover:opacity-100 shrink-0"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete()
-            }}
-          >
-            <Trash2 className="size-3" />
-          </Button>
+          <span className="shrink-0" title={isRunning ? "任务运行中，无法删除" : undefined}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn("opacity-0 group-hover:opacity-100", isRunning && "cursor-not-allowed !opacity-30")}
+              disabled={isRunning}
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete()
+              }}
+            >
+              <Trash2 className="size-3" />
+            </Button>
+          </span>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -126,9 +136,9 @@ function ThreadListItem({
           重命名
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onClick={onDelete}>
+        <ContextMenuItem variant="destructive" onClick={onDelete} disabled={isRunning}>
           <Trash2 className="size-4 mr-2" />
-          删除
+          {isRunning ? "运行中，无法删除" : "删除"}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

@@ -236,6 +236,15 @@ export function CustomModelDialog({
     if (!config.id) return
     setDeleting(true)
     try {
+      const tasks = await window.api.scheduledTasks.list()
+      const modelKey = `custom:${config.id}`
+      const usingTasks = tasks.filter((t) => t.modelId === modelKey)
+      if (usingTasks.length > 0) {
+        const names = usingTasks.map((t) => `「${t.name}」`).join("、")
+        setFormError(`无法删除：定时任务 ${names} 正在使用此模型`)
+        setDeleting(false)
+        return
+      }
       await window.api.models.deleteCustomConfig(config.id)
       const refreshed = await window.api.models.getCustomConfigs()
       setAllConfigs(refreshed)
