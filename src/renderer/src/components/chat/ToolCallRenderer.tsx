@@ -13,7 +13,9 @@ import {
   Clock,
   XCircle,
   File,
-  Folder
+  Folder,
+  Maximize2,
+  X
 } from "lucide-react"
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
@@ -291,28 +293,56 @@ function TaskDisplay({
 }
 
 // Render git diff nicely
-export function DiffDisplay({ diff }: { diff: string }): React.JSX.Element {
+export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Mock data for when no diff is provided
+  const mockDiff = [
+    'diff --git a/src/components/example.tsx b/src/components/example.tsx',
+    'index 1234567..abcdefg 100644',
+    '--- a/src/components/example.tsx',
+    '+++ b/src/components/example.tsx',
+    '@@ -1,8 +1,12 @@',
+    ' import React from \'react\'',
+    '+import { useState } from \'react\'',
+    ' ',
+    ' export function ExampleComponent() {',
+    '+  const [count, setCount] = useState(0)',
+    '+',
+    '   return (',
+    '     <div className="container">',
+    '-      <h1>Hello World</h1>',
+    '+      <h1>Hello World - {count}</h1>',
+    '+      <button onClick={() => setCount(count + 1)}>Click me</button>',
+    '     </div>',
+    '   )',
+    ' }'
+  ].join('\n')
+
+  // Use provided diff or fallback to mock data
+  const diffToUse = diff || mockDiff
+
   // Parse git diff to extract old and new content
   const parseGitDiff = (diffText: string) => {
-    const lines = diffText.split('\n')
-    let oldContent = ''
-    let newContent = ''
+    const lines = diffText.split("\n")
+    let oldContent = ""
+    let newContent = ""
     let inHunk = false
 
     for (const line of lines) {
-      if (line.startsWith('@@')) {
+      if (line.startsWith("@@")) {
         inHunk = true
         continue
       }
 
       if (inHunk) {
-        if (line.startsWith('-')) {
-          oldContent += line.substring(1) + '\n'
-        } else if (line.startsWith('+')) {
-          newContent += line.substring(1) + '\n'
-        } else if (line.startsWith(' ')) {
-          oldContent += line.substring(1) + '\n'
-          newContent += line.substring(1) + '\n'
+        if (line.startsWith("-")) {
+          oldContent += line.substring(1) + "\n"
+        } else if (line.startsWith("+")) {
+          newContent += line.substring(1) + "\n"
+        } else if (line.startsWith(" ")) {
+          oldContent += line.substring(1) + "\n"
+          newContent += line.substring(1) + "\n"
         }
       }
     }
@@ -320,20 +350,72 @@ export function DiffDisplay({ diff }: { diff: string }): React.JSX.Element {
     return { oldContent: oldContent.trim(), newContent: newContent.trim() }
   }
 
-  const { oldContent, newContent } = parseGitDiff(diff)
+  const { oldContent, newContent } = parseGitDiff(diffToUse)
+
+  const DiffViewer = (
+    <ReactDiffViewer
+      oldValue={oldContent}
+      newValue={newContent}
+      splitView={true}
+      hideLineNumbers={false}
+      useDarkTheme={false}
+      disableWordDiff={false}
+      compareMethod={DiffMethod.WORDS}
+      styles={{
+        diffContainer: {
+          maxHeight: isFullscreen ? "100%" : "24rem",
+          minHeight: isFullscreen ? "100%" : "10rem",
+          overflow: "auto",
+          height: isFullscreen ? "100%" : "auto"
+        },
+        line: {
+          fontSize: "11px",
+          lineHeight: "1.4"
+        }
+      }}
+    />
+  )
 
   return (
-    <div className="text-xs font-mono bg-background rounded-sm overflow-hidden w-full overflow-auto">
-      <ReactDiffViewer
-        oldValue={oldContent}
-        newValue={newContent}
-        splitView={true}
-        hideLineNumbers={false}
-        useDarkTheme={false}
-        disableWordDiff={false}
-        compareMethod={DiffMethod.WORDS}
-      />
-    </div>
+    <>
+      <div className="relative text-xs font-mono bg-background rounded-sm overflow-hidden w-full max-h-96 min-h-40">
+        {/* Fullscreen button */}
+
+        <button
+          onClick={() => setIsFullscreen(true)}
+          className="absolute top-0 right-2 z-10 p-1.5 bg-background/80 hover:bg-background border border-border rounded-sm transition-colors"
+          title="全屏查看diff"
+        >
+          <Maximize2 className="size-3" />
+        </button>
+        {DiffViewer}
+      </div>
+      {/* Fullscreen Modal */}
+      {isFullscreen && (
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm mt-10">
+          <div className="flex flex-col h-full">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-border">
+              <h3 className="text-sm font-medium">Git Diff - 全屏视图</h3>
+              <button
+                onClick={() => setIsFullscreen(false)}
+                className="p-1.5 hover:bg-background-interactive border border-border rounded-sm transition-colors"
+                title="退出全屏"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Full content */}
+            <div className="flex-1 p-4 overflow-hidden">
+              <div className="h-full text-sm font-mono bg-background rounded-sm border border-border overflow-hidden">
+                {DiffViewer}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
