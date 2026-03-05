@@ -567,11 +567,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           "请使用文件驱动规划方式管理当前复杂任务。",
           "任务目标：<请补充>",
           "输出：task_plan.md、findings.md、progress.md 三份规划文档。"
-        ].join("\n"),
-        "git-diff": [
-          "请帮我显示 git diff。",
-          "具体需求：<unstaged/staged/branch比较/commit比较>",
-          "输出：差异内容、关键变更说明。"
         ].join("\n")
       }
       return (
@@ -616,8 +611,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "api-design-principles": "API 设计原则",
         "architecture-patterns": "架构模式设计",
         "error-handling-patterns": "错误处理模式",
-        "planning-with-files": "文件驱动规划",
-        "git-diff": "显示 git diff"
+        "planning-with-files": "文件驱动规划"
       }
       return summaryMap[skillId] || "完成专项任务"
     },
@@ -654,8 +648,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "api-design-principles": <Layers className="size-4" />,
         "architecture-patterns": <Layers className="size-4" />,
         "error-handling-patterns": <AlertCircle className="size-4" />,
-        "planning-with-files": <FileText className="size-4" />,
-        "git-diff": <Code2 className="size-4" />
+        "planning-with-files": <FileText className="size-4" />
       }
       return iconMap[skillId] || <Search className="size-4" />
     },
@@ -677,8 +670,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         "planning-with-files",
         "mcp-builder",
         "webapp-testing",
-        "frontend-design",
-        "git-diff"
+        "frontend-design"
       ]),
     []
   )

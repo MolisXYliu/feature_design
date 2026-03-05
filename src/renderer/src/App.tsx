@@ -194,7 +194,7 @@ function App(): React.JSX.Element {
               <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
               <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
             </svg>
-            <span className="app-badge-name">Cmb Cowork</span>
+            <span className="app-badge-name">Cmb Dev Claw</span>
           </div>
           {/* Right: right panel toggle */}
           <div

@@ -110,7 +110,7 @@ export function MessageBubble({
           <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
           <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
         </svg>
-        <span className="text-xs font-medium text-muted-foreground">Cowork</span>
+        <span className="text-xs font-medium text-muted-foreground">Cmb Dev Claw</span>
       </div>
 
       <div className="flex-1 min-w-0 space-y-2 overflow-hidden pl-7">
