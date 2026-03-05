@@ -106,6 +106,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     tokenUsage,
     currentModel,
     draftInput: input,
+    scheduledTaskLoading,
+    scheduledTaskId,
     setTodos,
     setPendingApproval,
     appendMessage,
@@ -117,7 +119,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   // Get the stream data via subscription - reactive updates without re-rendering provider
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
-  const isLoading = streamData.isLoading
+  const isLoading = streamData.isLoading || scheduledTaskLoading
 
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
@@ -393,7 +395,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [input])
 
   const handleCancel = async (): Promise<void> => {
-    await stream?.stop()
+    if (scheduledTaskLoading && scheduledTaskId) {
+      try {
+        await window.api.scheduledTasks.cancel(scheduledTaskId)
+      } catch (err) {
+        console.error("[ChatContainer] Failed to cancel scheduled task:", err)
+      }
+    } else {
+      await stream?.stop()
+    }
   }
 
   useEffect(() => {

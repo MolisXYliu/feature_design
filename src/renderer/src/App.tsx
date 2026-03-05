@@ -135,6 +135,19 @@ function App(): React.JSX.Element {
     init()
   }, [loadThreads, createThread])
 
+  // Reload thread list when main process signals a change (e.g. scheduled task created a thread).
+  // Only update the list without auto-selecting (which would navigate away from customize view).
+  useEffect(() => {
+    return window.api.threads.onThreadsChanged(async () => {
+      try {
+        const threads = await window.api.threads.list()
+        useAppStore.setState({ threads })
+      } catch (err) {
+        console.error("[App] Failed to reload threads:", err)
+      }
+    })
+  }, [])
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">

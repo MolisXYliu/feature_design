@@ -5,7 +5,9 @@ import { registerThreadHandlers } from "./ipc/threads"
 import { registerModelHandlers } from "./ipc/models"
 import { registerSkillsHandlers } from "./ipc/skills"
 import { registerMcpHandlers } from "./ipc/mcp"
-import { initializeDatabase } from "./db"
+import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
+import { initializeDatabase, flush } from "./db"
+import { startScheduler, stopScheduler } from "./services/scheduler"
 
 let mainWindow: BrowserWindow | null = null
 
@@ -89,9 +91,12 @@ app.whenReady().then(async () => {
   registerModelHandlers(ipcMain)
   registerSkillsHandlers(ipcMain)
   registerMcpHandlers(ipcMain)
-
+  registerScheduledTaskHandlers(ipcMain)
 
   createWindow()
+
+  // Start scheduled task scheduler
+  startScheduler()
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -104,4 +109,9 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit()
   }
+})
+
+app.on("will-quit", () => {
+  stopScheduler()
+  flush()
 })

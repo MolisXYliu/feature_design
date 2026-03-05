@@ -207,6 +207,40 @@ export interface McpConnectorUpsert {
   advanced?: McpConnectorAdvanced
 }
 
+// Scheduled Task types
+export type ScheduledTaskFrequency = "manual" | "hourly" | "daily" | "weekdays" | "weekly"
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  modelId: string | null
+  workDir: string | null
+  frequency: ScheduledTaskFrequency
+  runAtTime: string | null       // "HH:mm" 格式，如 "09:00"
+  weekday: number | null          // 0=周日, 1=周一, ..., 6=周六 (仅 weekly 使用)
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+  lastRunAt: string | null
+  lastRunStatus: "ok" | "error" | null
+  lastRunError: string | null
+  nextRunAt: string | null
+}
+
+export interface ScheduledTaskUpsert {
+  name: string
+  description: string
+  prompt: string
+  modelId: string | null
+  workDir: string | null
+  frequency: ScheduledTaskFrequency
+  runAtTime?: string | null
+  weekday?: number | null
+  enabled?: boolean
+}
+
 // Skills types
 export interface SkillMetadata {
   name: string

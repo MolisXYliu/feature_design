@@ -45,14 +45,20 @@ import type {
   McpConnectorAdvanced,
   McpConnectorConfig,
   McpConnectorUpsert,
-  Subagent
+  Subagent,
+  ScheduledTask,
+  ScheduledTaskUpsert,
+  ScheduledTaskFrequency
 } from "../../main/types"
 
 export type {
   McpConnectorAdvanced,
   McpConnectorConfig,
   McpConnectorUpsert,
-  Subagent
+  Subagent,
+  ScheduledTask,
+  ScheduledTaskUpsert,
+  ScheduledTaskFrequency
 }
 
 export type StreamEvent =

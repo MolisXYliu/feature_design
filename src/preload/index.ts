@@ -7,7 +7,9 @@ import type {
   HITLDecision,
   SkillMetadata,
   McpConnectorConfig,
-  McpConnectorUpsert
+  McpConnectorUpsert,
+  ScheduledTask,
+  ScheduledTaskUpsert
 } from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
@@ -130,6 +132,11 @@ const api = {
     },
     generateTitle: (message: string): Promise<string> => {
       return ipcRenderer.invoke("threads:generateTitle", message)
+    },
+    onThreadsChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => { callback() }
+      ipcRenderer.on("threads:changed", handler)
+      return () => { ipcRenderer.removeListener("threads:changed", handler) }
     }
   },
   models: {
@@ -370,6 +377,33 @@ const api = {
       advanced?: McpConnectorConfig["advanced"]
     }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>
       ipcRenderer.invoke("mcp:testConnection", params)
+  },
+  scheduledTasks: {
+    list: (): Promise<ScheduledTask[]> => ipcRenderer.invoke("scheduledTasks:list"),
+    create: (config: ScheduledTaskUpsert): Promise<{ id: string }> =>
+      ipcRenderer.invoke("scheduledTasks:create", config),
+    update: (config: ScheduledTaskUpsert & { id: string }): Promise<{ id: string }> =>
+      ipcRenderer.invoke("scheduledTasks:update", config),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke("scheduledTasks:delete", id),
+    setEnabled: (id: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("scheduledTasks:setEnabled", { id, enabled }),
+    runNow: (id: string): Promise<void> => ipcRenderer.invoke("scheduledTasks:runNow", id),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke("scheduledTasks:cancel", id),
+    isRunning: (id: string): Promise<boolean> => ipcRenderer.invoke("scheduledTasks:isRunning", id),
+    onChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => { callback() }
+      ipcRenderer.on("scheduledTasks:changed", handler)
+      return () => { ipcRenderer.removeListener("scheduledTasks:changed", handler) }
+    },
+    listenToStream: (
+      threadId: string,
+      callback: (event: { type: string; [key: string]: unknown }) => void
+    ): (() => void) => {
+      const channel = `scheduler:stream:${threadId}`
+      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    }
   }
 }
 

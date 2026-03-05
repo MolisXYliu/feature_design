@@ -1,12 +1,13 @@
 import { useState } from "react"
-import { ArrowLeft, Plug, Puzzle, Sparkles } from "lucide-react"
+import { ArrowLeft, Clock, Plug, Puzzle, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { SkillsPanel } from "./SkillsPanel"
 import { McpPanel } from "./McpPanel"
+import { ScheduledPanel } from "./ScheduledPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugin"
+type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView } = useAppStore()
@@ -52,6 +53,16 @@ export function CustomizeView(): React.JSX.Element {
             <Puzzle className="size-4 shrink-0" />
             Plugins
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "scheduled" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("scheduled")}
+          >
+            <Clock className="size-4 shrink-0" />
+            Scheduled
+          </button>
         </nav>
       </div>
 
@@ -59,6 +70,8 @@ export function CustomizeView(): React.JSX.Element {
         <SkillsPanel />
       ) : activeTab === "connectors" ? (
         <McpPanel />
+      ) : activeTab === "scheduled" ? (
+        <ScheduledPanel />
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           <div className="text-center space-y-2">

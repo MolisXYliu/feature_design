@@ -47,6 +47,8 @@ export interface ThreadState {
   fileContents: Record<string, string>
   tokenUsage: TokenUsage | null
   draftInput: string
+  scheduledTaskLoading: boolean
+  scheduledTaskId: string | null
 }
 
 // Stream instance type
@@ -109,7 +111,9 @@ const createDefaultThreadState = (): ThreadState => ({
   activeTab: "agent",
   fileContents: {},
   tokenUsage: null,
-  draftInput: ""
+  draftInput: "",
+  scheduledTaskLoading: false,
+  scheduledTaskId: null
 })
 
 const defaultStreamData: StreamData = {
@@ -557,8 +561,19 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             }
           }
           if (metadata.model) {
-            // Update state directly to avoid triggering persistence in setCurrentModel
             updateThreadState(threadId, () => ({ currentModel: metadata.model as string }))
+          }
+          if (metadata.scheduledTaskId) {
+            const taskId = metadata.scheduledTaskId as string
+            updateThreadState(threadId, () => ({ scheduledTaskId: taskId }))
+            window.api.scheduledTasks
+              .isRunning(taskId)
+              .then((running) => {
+                if (running) {
+                  updateThreadState(threadId, () => ({ scheduledTaskLoading: true }))
+                }
+              })
+              .catch(() => {})
           }
         }
       } catch (error) {
@@ -686,6 +701,161 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     [getThreadActions, updateThreadState]
   )
 
+  // Track passive scheduler stream listeners per thread
+  const schedulerListenerCleanups = useRef<Record<string, () => void>>({})
+
+  // Track streaming AI message state per thread (for token-by-token accumulation)
+  const schedulerStreamingRef = useRef<
+    Record<string, { currentMsgId: string | null; accumulatedContent: string }>
+  >({})
+
+  // Process standardised events from scheduler (produced by StreamConverter)
+  const processSchedulerEvent = useCallback(
+    (threadId: string, event: { type: string; [key: string]: unknown }) => {
+      // Lifecycle events
+      if (event.type === "done") {
+        delete schedulerStreamingRef.current[threadId]
+        updateThreadState(threadId, () => ({ scheduledTaskLoading: false }))
+        loadThreadHistory(threadId)
+        return
+      }
+      if (event.type === "error") {
+        delete schedulerStreamingRef.current[threadId]
+        updateThreadState(threadId, () => ({
+          scheduledTaskLoading: false,
+          error: (event.error as string) || "Scheduled task failed"
+        }))
+        return
+      }
+
+      // "started" fires before agent runtime creation — show loading immediately
+      if (event.type === "started") {
+        updateThreadState(threadId, () => ({ scheduledTaskLoading: true }))
+        return
+      }
+
+      // Mark as loading on first data event
+      updateThreadState(threadId, (prev) => {
+        if (prev.scheduledTaskLoading) return {}
+        return { scheduledTaskLoading: true }
+      })
+
+      switch (event.type) {
+        // Reuse handleCustomEvent for workspace / subagents / token_usage / interrupt
+        case "custom":
+          handleCustomEvent(threadId, event.data as CustomEventData)
+          break
+
+        // Full message list from a values snapshot
+        case "full-messages": {
+          delete schedulerStreamingRef.current[threadId]
+          const msgs = event.messages as Array<{
+            id: string
+            role: string
+            content: string
+            tool_calls?: unknown[]
+            tool_call_id?: string
+            name?: string
+          }>
+          updateThreadState(threadId, () => ({
+            messages: msgs.map((m) => ({ ...m, created_at: new Date() }) as Message)
+          }))
+          break
+        }
+
+        // Todos from a values snapshot
+        case "todos": {
+          const todos = event.todos as Array<{
+            id?: string
+            content?: string
+            status?: string
+          }>
+          updateThreadState(threadId, () => ({
+            todos: todos.map((t) => ({
+              id: t.id || crypto.randomUUID(),
+              content: t.content || "",
+              status: (t.status || "pending") as
+                | "pending"
+                | "in_progress"
+                | "completed"
+                | "cancelled"
+            }))
+          }))
+          break
+        }
+
+        // Incremental AI message token
+        case "message-delta": {
+          const id = event.id as string
+          const content = event.content as string
+          const toolCalls = event.toolCalls as Message["tool_calls"] | undefined
+          const tracker = (schedulerStreamingRef.current[threadId] ||= {
+            currentMsgId: null,
+            accumulatedContent: ""
+          })
+          if (id !== tracker.currentMsgId) {
+            tracker.currentMsgId = id
+            tracker.accumulatedContent = content
+          } else {
+            tracker.accumulatedContent += content
+          }
+          const finalContent = tracker.accumulatedContent
+          updateThreadState(threadId, (prev) => {
+            const idx = prev.messages.findIndex((m) => m.id === id)
+            if (idx >= 0) {
+              const updated = [...prev.messages]
+              updated[idx] = {
+                ...updated[idx],
+                content: finalContent,
+                ...(toolCalls?.length && { tool_calls: toolCalls })
+              }
+              return { messages: updated }
+            }
+            return {
+              messages: [
+                ...prev.messages,
+                {
+                  id,
+                  role: "assistant" as const,
+                  content: finalContent,
+                  ...(toolCalls?.length && { tool_calls: toolCalls }),
+                  created_at: new Date()
+                }
+              ]
+            }
+          })
+          break
+        }
+
+        // Tool result message
+        case "tool-message": {
+          const id = event.id as string
+          const content = event.content as string
+          const toolCallId = event.toolCallId as string
+          const name = event.name as string | undefined
+          updateThreadState(threadId, (prev) => {
+            if (prev.messages.some((m) => m.id === id)) return {}
+            return {
+              messages: [
+                ...prev.messages,
+                {
+                  id,
+                  role: "tool" as const,
+                  content,
+                  tool_call_id: toolCallId,
+                  name,
+                  created_at: new Date()
+                }
+              ]
+            }
+          })
+          break
+        }
+      }
+    },
+    [updateThreadState, loadThreadHistory, handleCustomEvent]
+  )
+
   const initializeThread = useCallback(
     (threadId: string) => {
       if (initializedThreadsRef.current.has(threadId)) return
@@ -700,11 +870,21 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       })
 
       loadThreadHistory(threadId)
+
+      // Register listener synchronously so no stream events are missed
+      const cleanup = window.api.scheduledTasks.listenToStream(threadId, (event) => {
+        processSchedulerEvent(threadId, event)
+      })
+      schedulerListenerCleanups.current[threadId] = cleanup
     },
-    [loadThreadHistory]
+    [loadThreadHistory, processSchedulerEvent]
   )
 
   const cleanupThread = useCallback((threadId: string) => {
+    schedulerListenerCleanups.current[threadId]?.()
+    delete schedulerListenerCleanups.current[threadId]
+    delete schedulerStreamingRef.current[threadId]
+
     initializedThreadsRef.current.delete(threadId)
     delete actionsCache.current[threadId]
     delete streamDataRef.current[threadId]

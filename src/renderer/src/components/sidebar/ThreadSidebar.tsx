@@ -3,7 +3,7 @@ import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase } 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
-import { useThreadStream, useCurrentThread } from "@/lib/thread-context"
+import { useThreadStream, useCurrentThread, useThreadContext } from "@/lib/thread-context"
 import { cn, formatRelativeTime, truncate } from "@/lib/utils"
 import {
   ContextMenu,
@@ -17,9 +17,9 @@ import type { Thread } from "@/types"
 // Thread status indicator that shows loading, interrupted, or default state
 function ThreadStatusIcon({ threadId }: { threadId: string }): React.JSX.Element {
   const { isLoading } = useThreadStream(threadId)
-  const { pendingApproval } = useCurrentThread(threadId)
+  const { pendingApproval, scheduledTaskLoading } = useCurrentThread(threadId)
 
-  if (isLoading) {
+  if (isLoading || scheduledTaskLoading) {
     return <Loader2 className="size-4 shrink-0 text-status-info animate-spin" />
   }
   
@@ -88,8 +88,18 @@ function ThreadListItem({
               />
             ) : (
               <>
-                <div className="text-sm truncate block">
-                  {thread.title || truncate(thread.thread_id, 20)}
+                <div
+                  className="text-sm truncate block flex items-center gap-1"
+                  title={thread.title || thread.thread_id}
+                >
+                  {thread.title?.startsWith("[定时]") ? (
+                    <>
+                      <span className="shrink-0 text-[10px] px-1 py-px rounded bg-primary/15 text-primary font-medium">定时</span>
+                      <span className="truncate">{thread.title.slice(5)}</span>
+                    </>
+                  ) : (
+                    <span className="truncate">{thread.title || truncate(thread.thread_id, 20)}</span>
+                  )}
                 </div>
                 <div className="text-[10px] text-muted-foreground truncate">
                   {formatRelativeTime(thread.updated_at)}
@@ -136,6 +146,8 @@ export function ThreadSidebar(): React.JSX.Element {
     showCustomizeView,
     setShowCustomizeView
   } = useAppStore()
+
+  const { cleanupThread } = useThreadContext()
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState("")
@@ -204,7 +216,10 @@ export function ThreadSidebar(): React.JSX.Element {
               isEditing={editingThreadId === thread.thread_id}
               editingTitle={editingTitle}
               onSelect={() => selectThread(thread.thread_id)}
-              onDelete={() => deleteThread(thread.thread_id)}
+              onDelete={() => {
+                cleanupThread(thread.thread_id)
+                deleteThread(thread.thread_id)
+              }}
               onStartEditing={() => startEditing(thread.thread_id, thread.title || "")}
               onSaveTitle={saveTitle}
               onCancelEditing={cancelEditing}

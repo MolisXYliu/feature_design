@@ -6,7 +6,9 @@ import type {
   HITLDecision,
   SkillMetadata,
   McpConnectorConfig,
-  McpConnectorUpsert
+  McpConnectorUpsert,
+  ScheduledTask,
+  ScheduledTaskUpsert
 } from "../main/types"
 
 interface ElectronAPI {
@@ -52,6 +54,7 @@ interface CustomAPI {
     delete: (threadId: string) => Promise<void>
     getHistory: (threadId: string) => Promise<unknown[]>
     generateTitle: (message: string) => Promise<string>
+    onThreadsChanged: (callback: () => void) => () => void
   }
   models: {
     list: () => Promise<ModelConfig[]>
@@ -184,6 +187,21 @@ interface CustomAPI {
       url?: string
       advanced?: McpConnectorConfig["advanced"]
     }) => Promise<{ success: boolean; tools?: string[]; error?: string }>
+  }
+  scheduledTasks: {
+    list: () => Promise<ScheduledTask[]>
+    create: (config: ScheduledTaskUpsert) => Promise<{ id: string }>
+    update: (config: ScheduledTaskUpsert & { id: string }) => Promise<{ id: string }>
+    delete: (id: string) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<void>
+    runNow: (id: string) => Promise<void>
+    cancel: (id: string) => Promise<void>
+    isRunning: (id: string) => Promise<boolean>
+    onChanged: (callback: () => void) => () => void
+    listenToStream: (
+      threadId: string,
+      callback: (event: { type: string; [key: string]: unknown }) => void
+    ) => () => void
   }
 }
 

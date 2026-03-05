@@ -717,3 +717,177 @@ export function setMcpConnectorEnabled(id: string, enabled: boolean): void {
   const next = items.map((i) => (i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i))
   writeFileSync(MCP_CONNECTORS_FILE, JSON.stringify(next, null, 2))
 }
+
+// Scheduled Tasks
+const SCHEDULED_TASKS_FILE = join(OPENWORK_DIR, "scheduled-tasks.json")
+
+function parseTime(timeStr: string | null | undefined): { hour: number; minute: number } {
+  if (!timeStr) return { hour: 9, minute: 0 }
+  const [h, m] = timeStr.split(":").map(Number)
+  const hour = Number.isFinite(h) && h >= 0 && h <= 23 ? h : 9
+  const minute = Number.isFinite(m) && m >= 0 && m <= 59 ? m : 0
+  return { hour, minute }
+}
+
+export function computeNextRunAt(
+  frequency: import("./types").ScheduledTaskFrequency,
+  from: Date = new Date(),
+  runAtTime?: string | null,
+  weekday?: number | null
+): string | null {
+  if (frequency === "manual") return null
+  const { hour, minute } = parseTime(runAtTime)
+
+  if (frequency === "hourly") {
+    const next = new Date(from)
+    next.setHours(next.getHours() + 1, minute, 0, 0)
+    return next.toISOString()
+  }
+
+  // Try today's candidate first; only advance if it's already past
+  const today = new Date(from)
+  today.setHours(hour, minute, 0, 0)
+
+  if (frequency === "daily") {
+    if (today >= from) return today.toISOString()
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return tomorrow.toISOString()
+  }
+
+  if (frequency === "weekdays") {
+    const isWeekday = (d: Date): boolean => d.getDay() !== 0 && d.getDay() !== 6
+    if (today >= from && isWeekday(today)) return today.toISOString()
+    const next = new Date(from)
+    do {
+      next.setDate(next.getDate() + 1)
+    } while (next.getDay() === 0 || next.getDay() === 6)
+    next.setHours(hour, minute, 0, 0)
+    return next.toISOString()
+  }
+
+  if (frequency === "weekly") {
+    const raw = weekday ?? from.getDay()
+    const targetDay = raw >= 0 && raw <= 6 ? raw : from.getDay()
+    if (today >= from && from.getDay() === targetDay) return today.toISOString()
+    const next = new Date(from)
+    for (let i = 0; i < 7; i++) {
+      next.setDate(next.getDate() + 1)
+      if (next.getDay() === targetDay) break
+    }
+    next.setHours(hour, minute, 0, 0)
+    return next.toISOString()
+  }
+
+  return null
+}
+
+export function getScheduledTasks(): import("./types").ScheduledTask[] {
+  getOpenworkDir()
+  if (!existsSync(SCHEDULED_TASKS_FILE)) return []
+  try {
+    const content = readFileSync(SCHEDULED_TASKS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is import("./types").ScheduledTask =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).prompt === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function upsertScheduledTask(
+  config: import("./types").ScheduledTaskUpsert & { id?: string }
+): string {
+  getOpenworkDir()
+  const items = getScheduledTasks()
+  const now = new Date().toISOString()
+  const id = config.id ?? uuid()
+  const existing = items.find((i) => i.id === id)
+  const next: import("./types").ScheduledTask = {
+    id,
+    name: config.name.trim(),
+    description: config.description.trim(),
+    prompt: config.prompt.trim(),
+    modelId: config.modelId,
+    workDir: config.workDir,
+    frequency: config.frequency,
+    runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
+    weekday: config.weekday ?? existing?.weekday ?? null,
+    enabled: config.enabled ?? existing?.enabled ?? true,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    lastRunAt: existing?.lastRunAt ?? null,
+    lastRunStatus: existing?.lastRunStatus ?? null,
+    lastRunError: existing?.lastRunError ?? null,
+    nextRunAt: computeNextRunAt(
+      config.frequency,
+      new Date(),
+      config.runAtTime ?? existing?.runAtTime ?? null,
+      config.weekday ?? existing?.weekday ?? null
+    )
+  }
+  const index = items.findIndex((i) => i.id === id)
+  if (index >= 0) {
+    items[index] = next
+  } else {
+    items.push(next)
+  }
+  writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(items, null, 2))
+  return id
+}
+
+export function deleteScheduledTask(id: string): void {
+  getOpenworkDir()
+  const items = getScheduledTasks().filter((i) => i.id !== id)
+  writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(items, null, 2))
+}
+
+export function setScheduledTaskEnabled(id: string, enabled: boolean): void {
+  getOpenworkDir()
+  const items = getScheduledTasks()
+  const target = items.find((i) => i.id === id)
+  if (!target) return
+  const now = new Date()
+  const next = items.map((i) => {
+    if (i.id !== id) return i
+    const updated = { ...i, enabled, updatedAt: now.toISOString() }
+    // Recompute nextRunAt when enabling to avoid stale past timestamps
+    if (enabled && i.frequency !== "manual") {
+      updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday)
+    }
+    return updated
+  })
+  writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(next, null, 2))
+}
+
+export function updateScheduledTaskRunResult(
+  id: string,
+  status: "ok" | "error",
+  error: string | null
+): void {
+  getOpenworkDir()
+  const items = getScheduledTasks()
+  const target = items.find((i) => i.id === id)
+  if (!target) return
+  const now = new Date()
+  const next = items.map((i) =>
+    i.id === id
+      ? {
+          ...i,
+          lastRunAt: now.toISOString(),
+          lastRunStatus: status,
+          lastRunError: error,
+          nextRunAt: computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday),
+          updatedAt: now.toISOString()
+        }
+      : i
+  )
+  writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(next, null, 2))
+}
