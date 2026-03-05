@@ -542,6 +542,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * macOS fallback: /bin/zsh
    * Linux fallback: /bin/sh
    */
+  /** Public accessor for the resolved shell path (used by system prompt). */
+  static resolvedShell(): string {
+    return LocalSandbox.resolveShell()
+  }
+
   private static resolveShell(): string {
     const isWindows = process.platform === "win32"
     const userShell = process.env.SHELL

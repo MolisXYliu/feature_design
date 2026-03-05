@@ -37,6 +37,7 @@ import type * as _lcLanggraph from "@langchain/langgraph"
 import type * as _lcZodTypes from "@langchain/core/utils/types"
 
 import { createHash } from "crypto"
+import path from "path"
 import { join, delimiter } from "path"
 import { existsSync } from "fs"
 import { app } from "electron"
@@ -222,19 +223,30 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
+function getShellInfo(): { name: string; isBashLike: boolean } {
+  const resolved = LocalSandbox.resolvedShell()
+  const base = path.basename(resolved).replace(/\.exe$/i, "")
+  const isBashLike = ["bash", "sh", "zsh"].includes(base)
+  return { name: base, isBashLike }
+}
+
 function getSystemPrompt(workspacePath: string): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const shell = isWindows ? "cmd.exe" : process.env.SHELL?.split("/").pop() || "bash"
+  const { name: shell, isBashLike } = getShellInfo()
   const examplePath = isWindows
     ? `${workspacePath}\\src\\index.ts`
     : `${workspacePath}/src/index.ts`
+
+  const shellGuidance = isBashLike
+    ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
+    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const workingDirSection = `
 ### System Environment
 - Operating system: ${platform} (${process.arch})
 - Default shell: ${shell}
-${isWindows ? "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables" : "- Use Unix commands for shell operations (ls, cat, grep, etc.)"}
+${shellGuidance}
 
 ### File System and Paths
 
@@ -394,14 +406,18 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
 
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const shell = isWindows ? "cmd.exe" : process.env.SHELL?.split("/").pop() || "bash"
+  const { name: shell, isBashLike } = getShellInfo()
+
+  const subagentShellGuidance = isBashLike
+    ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
+    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
 
 ### System Environment
 - Operating system: ${platform} (${process.arch})
 - Default shell: ${shell}
-${isWindows ? "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables" : "- Use Unix commands for shell operations (ls, cat, grep, etc.)"}
+${subagentShellGuidance}
 
 ### Available Tools
 - ls: list files in a directory (e.g., ls("${workspacePath}"))
