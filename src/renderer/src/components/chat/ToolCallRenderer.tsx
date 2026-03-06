@@ -385,7 +385,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
 
             {/* Full content */}
             <div className="flex-1 p-4 overflow-hidden">
-              <div className="h-full text-sm font-mono bg-background rounded-sm border border-border overflow-hidden">
+              <div className="h-full text-sm font-mono bg-background rounded-sm border border-border overflow-scroll">
                 {DiffViewer}
               </div>
             </div>
