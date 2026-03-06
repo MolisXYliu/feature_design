@@ -295,9 +295,10 @@ function TaskDisplay({
 // Render git diff nicely
 export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [renderMode, setRenderMode] = useState<"preview" | "full">("preview")
 
   // Use provided diff or fallback to mock data
-  const diffToUse = diff
+  const diffToUse = diff || ""
 
   // Parse git diff to extract old and new content
   const parseGitDiff = (diffText: string) => {
@@ -305,6 +306,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
     let oldContent = ""
     let newContent = ""
     let inHunk = false
+    let totalLines = 0
 
     for (const line of lines) {
       if (line.startsWith("@@")) {
@@ -313,6 +315,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
       }
 
       if (inHunk) {
+        totalLines++
         if (line.startsWith("-")) {
           oldContent += line.substring(1) + "\n"
         } else if (line.startsWith("+")) {
@@ -324,20 +327,51 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
       }
     }
 
-    return { oldContent: oldContent.trim(), newContent: newContent.trim() }
+    return {
+      oldContent: oldContent.trim(),
+      newContent: newContent.trim(),
+      totalLines
+    }
   }
 
-  const { oldContent, newContent } = parseGitDiff(diffToUse)
+  const { oldContent, newContent, totalLines } = parseGitDiff(diffToUse)
+
+  // Performance optimization: only show preview for large diffs
+  const isLargeDiff = totalLines > 100
+  const maxPreviewLines = 50
+
+  // Get preview content (first N lines)
+  const getPreviewContent = (content: string, maxLines: number) => {
+    const lines = content.split("\n")
+    if (lines.length <= maxLines) return content
+    return (
+      lines.slice(0, maxLines).join("\n") +
+      "\n...(显示前 " +
+      maxLines +
+      " 行，共 " +
+      lines.length +
+      " 行)"
+    )
+  }
+
+  // Use preview content if not expanded and diff is large
+  const shouldUsePreview = isLargeDiff && renderMode === "preview"
+  const displayOldContent = shouldUsePreview
+    ? getPreviewContent(oldContent, maxPreviewLines)
+    : oldContent
+  const displayNewContent = shouldUsePreview
+    ? getPreviewContent(newContent, maxPreviewLines)
+    : newContent
 
   const DiffViewer = (
     <ReactDiffViewer
-      oldValue={oldContent}
-      newValue={newContent}
+      oldValue={displayOldContent}
+      newValue={displayNewContent}
       splitView={true}
       hideLineNumbers={false}
       useDarkTheme={false}
-      disableWordDiff={false}
-      compareMethod={DiffMethod.WORDS}
+      disableWordDiff={shouldUsePreview} // Disable word diff for better performance with large content
+      compareMethod={shouldUsePreview ? DiffMethod.LINES : DiffMethod.WORDS}
       styles={{
         diffContainer: {
           maxHeight: isFullscreen ? "100%" : "24rem",
@@ -355,37 +389,77 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
 
   return (
     <>
-      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll  w-full max-h-96 min-h-40">
-        {/* Fullscreen button */}
-        <button
-          onClick={() => setIsFullscreen(true)}
-          className="cursor-pointer absolute top-0 right-2 z-10 p-1.5
-          bg-background/80 hover:bg-gray-200 border border-border rounded-sm transition-colors"
-          title="全屏查看diff"
-        >
-          <Maximize2 className="size-3" />
-        </button>
-          {DiffViewer}
+      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll w-full max-h-96 min-h-40">
+        {/* Header with controls */}
+        <div className="absolute top-0 right-0 z-10 flex items-center gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
+          {isLargeDiff && (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-muted-foreground mr-1">
+                {totalLines} 行
+              </span>
+              <button
+                onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
+                className="cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
+                title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
+              >
+                {renderMode === "preview" ? "显示全部" : "显示预览"}
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => setIsFullscreen(true)}
+            className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
+            title="全屏查看diff"
+          >
+            <Maximize2 className="size-3" />
+          </button>
+        </div>
+
+        {/* Performance warning for large diffs */}
+        {isLargeDiff && renderMode === "full" && (
+          <div className="absolute bottom-0 left-0 right-0 z-10 p-2 bg-amber-50/90 dark:bg-amber-950/90 border-t border-amber-200 dark:border-amber-800">
+            <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
+              <div className="size-2 bg-amber-500 rounded-full animate-pulse" />
+              大文件可能影响性能，建议在全屏模式下查看
+            </div>
+          </div>
+        )}
+
+        {DiffViewer}
       </div>
+
       {/* Fullscreen Modal */}
       {isFullscreen && (
         <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm mt-10">
           <div className="flex flex-col h-full">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-border">
-              <h3 className="text-sm font-medium">Git Diff - 全屏视图</h3>
-              <button
-                onClick={() => setIsFullscreen(false)}
-                className="cursor-pointer p-1.5 hover:bg-background-interactive border border-border rounded-sm transition-colors"
-                title="退出全屏"
-              >
-                <X className="size-4" />
-              </button>
+              <div className="flex items-center gap-4">
+                <h3 className="text-sm font-medium">Git Diff - 全屏视图</h3>
+                <span className="text-xs text-muted-foreground">
+                  {totalLines} 行更改
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
+                  className="cursor-pointer px-3 py-1.5 text-xs bg-background hover:bg-muted border border-border rounded transition-colors"
+                >
+                  {renderMode === "preview" ? "显示全部" : "显示预览"}
+                </button>
+                <button
+                  onClick={() => setIsFullscreen(false)}
+                  className="cursor-pointer p-1.5 hover:bg-muted border border-border rounded transition-colors"
+                  title="退出全屏"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
             </div>
 
             {/* Full content */}
             <div className="flex-1 p-4 overflow-hidden">
-              <div className="h-full text-sm font-mono bg-background rounded-sm border border-border overflow-scroll">
+              <div className="h-full text-sm font-mono bg-background rounded border border-border overflow-scroll">
                 {DiffViewer}
               </div>
             </div>
