@@ -448,14 +448,27 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   /**
-   * Detect encoding for command output (Windows console uses system code page).
-   * Falls back to UTF-8 if detection is inconclusive.
+   * Detect encoding for command output (Windows cmd.exe/PowerShell uses system code page).
+   * Only meaningful for non-bash shells; bash-like shells (Git Bash) always output UTF-8.
+   * Requires high confidence from jschardet to override UTF-8 default, because short
+   * Chinese text in UTF-8 is often misidentified as GB2312/GBK.
    */
+  private static readonly CHARDET_CONFIDENCE_THRESHOLD = 0.8
+
   private detectCmdEncoding(buf: Buffer): string {
     if (buf.length === 0) return "utf-8"
     const detected = chardet.detect(buf)
-    const enc = typeof detected === "string" ? detected : detected?.encoding
-    if (enc && iconv.encodingExists(enc)) return enc
+    if (!detected) return "utf-8"
+    const enc = typeof detected === "string" ? detected : detected.encoding
+    const confidence = typeof detected === "object" ? detected.confidence : 1
+    if (
+      enc
+      && confidence >= LocalSandbox.CHARDET_CONFIDENCE_THRESHOLD
+      && enc.toLowerCase() !== "ascii"
+      && iconv.encodingExists(enc)
+    ) {
+      return enc
+    }
     return "utf-8"
   }
 
@@ -678,6 +691,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     const isWindows = process.platform === "win32"
     const shell = LocalSandbox.resolveShell()
+    const shellBase = path.basename(shell).replace(/\.exe$/i, "")
+    const isBashLikeShell = ["bash", "sh", "zsh"].includes(shellBase)
 
     return new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
@@ -744,7 +759,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
 
-        const enc = isWindows
+        // Git Bash (and other bash-like shells) output UTF-8 even on Windows.
+        // Only probe encoding for native Windows shells (cmd.exe, PowerShell).
+        const enc = isWindows && !isBashLikeShell
           ? this.detectCmdEncoding(stdoutBuf.length > 0 ? stdoutBuf : stderrBuf)
           : "utf-8"
 
