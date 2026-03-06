@@ -1,0 +1,380 @@
+import initSqlJs, { Database as SqlJsDatabase } from "sql.js"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "fs"
+import { join, dirname } from "path"
+import { createHash } from "crypto"
+import { homedir } from "os"
+
+const MEMORY_DIR = join(homedir(), ".cmbcoworkagent", "memory")
+const INDEX_DB_PATH = join(MEMORY_DIR, "index.sqlite")
+
+const CHUNK_MAX_CHARS = 1500
+const CHUNK_OVERLAP_CHARS = 200
+
+export interface MemoryChunk {
+  id: number
+  path: string
+  startLine: number
+  endLine: number
+  text: string
+  createdAt: number
+}
+
+export interface SearchResult {
+  text: string
+  path: string
+  startLine: number
+  endLine: number
+}
+
+function chunkMarkdown(content: string, filePath: string): Omit<MemoryChunk, "id" | "createdAt">[] {
+  const lines = content.split("\n")
+  const chunks: Omit<MemoryChunk, "id" | "createdAt">[] = []
+  let currentText = ""
+  let startLine = 1
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (currentText.length + line.length + 1 > CHUNK_MAX_CHARS && currentText.length > 0) {
+      chunks.push({
+        path: filePath,
+        startLine,
+        endLine: i, // 0-indexed line before current
+        text: currentText.trim()
+      })
+      // Overlap: keep tail of current chunk
+      const overlapStart = Math.max(0, currentText.length - CHUNK_OVERLAP_CHARS)
+      currentText = currentText.slice(overlapStart)
+      startLine = Math.max(1, i - currentText.split("\n").length + 1)
+    }
+    currentText += (currentText ? "\n" : "") + line
+  }
+
+  if (currentText.trim()) {
+    chunks.push({
+      path: filePath,
+      startLine,
+      endLine: lines.length,
+      text: currentText.trim()
+    })
+  }
+
+  return chunks
+}
+
+const CJK_RANGE = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/
+
+const STOP_WORDS_ZH = new Set([
+  "我", "你", "他", "她", "它", "我们", "你们", "他们",
+  "的", "了", "在", "是", "有", "和", "与", "或",
+  "这", "那", "就", "也", "都", "把", "被", "让",
+  "什么", "怎么", "哪个", "为什么", "可以", "一下",
+  "之前", "今天", "昨天", "请", "帮", "吗", "呢", "吧"
+])
+
+function tokenize(query: string): string[] {
+  const cleaned = query.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ")
+  const rawTokens = cleaned.split(/\s+/).filter((w) => w.length > 0)
+
+  const tokens: string[] = []
+  for (const tok of rawTokens) {
+    if (CJK_RANGE.test(tok)) {
+      const chars = Array.from(tok).filter((c) => CJK_RANGE.test(c))
+      for (const ch of chars) {
+        if (!STOP_WORDS_ZH.has(ch)) tokens.push(ch)
+      }
+      for (let i = 0; i < chars.length - 1; i++) {
+        const bigram = chars[i] + chars[i + 1]
+        if (!STOP_WORDS_ZH.has(bigram)) tokens.push(bigram)
+      }
+    } else if (tok.length > 1) {
+      tokens.push(tok)
+    }
+  }
+  return [...new Set(tokens)]
+}
+
+// BM25 scoring from FTS3 matchinfo('pcnalx') buffer
+// Format: [numPhrases, numColumns, ...per-phrase-per-col(hits_this_row, hits_all_rows, docs_with_hits, avg_hits, doc_length, total_docs)]
+function bm25FromMatchinfo(buf: Uint8Array, k1 = 1.2, b = 0.75): number {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const numPhrases = view.getUint32(0, true)
+  const numCols = view.getUint32(4, true)
+  // 'pcnalx' gives 6 values per phrase-column pair, starting at offset 8
+  let score = 0
+  for (let p = 0; p < numPhrases; p++) {
+    for (let c = 0; c < numCols; c++) {
+      const base = 8 + (p * numCols + c) * 6 * 4
+      const tf = view.getUint32(base, true)          // hits in this row
+      const docsWithHits = view.getUint32(base + 8, true)
+      const docLen = view.getUint32(base + 16, true)  // tokens in this doc col
+      const totalDocs = view.getUint32(base + 20, true)
+
+      if (tf === 0 || docsWithHits === 0 || totalDocs === 0) continue
+
+      const avgDl = view.getUint32(base + 12, true) || 1
+      const idf = Math.log((totalDocs - docsWithHits + 0.5) / (docsWithHits + 0.5) + 1)
+      score += idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * docLen / avgDl))
+    }
+  }
+  return score
+}
+
+export class MemoryStore {
+  private db: SqlJsDatabase | null = null
+  private saveTimer: ReturnType<typeof setTimeout> | null = null
+
+  async init(): Promise<void> {
+    if (this.db) return
+
+    if (!existsSync(MEMORY_DIR)) {
+      mkdirSync(MEMORY_DIR, { recursive: true })
+    }
+
+    const SQL = await initSqlJs()
+
+    if (existsSync(INDEX_DB_PATH)) {
+      try {
+        const buffer = readFileSync(INDEX_DB_PATH)
+        this.db = new SQL.Database(buffer)
+      } catch {
+        this.db = new SQL.Database()
+      }
+    } else {
+      this.db = new SQL.Database()
+    }
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS file_hashes (
+        path TEXT PRIMARY KEY,
+        hash TEXT NOT NULL
+      )
+    `)
+
+    this.db.run(`
+      CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path)
+    `)
+
+    // FTS3 content table — separate from chunks, linked by rowid
+    try {
+      this.db.run(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts3(text)
+      `)
+    } catch (e) {
+      console.warn("[MemoryStore] FTS3 table creation failed — search will be unavailable:", e)
+    }
+  }
+
+  addDocument(filePath: string, content: string): void {
+    if (!this.db) throw new Error("MemoryStore not initialized")
+    if (!content.trim()) return
+
+    const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+
+    // Remove old chunks for this path
+    const oldRows = this.db.exec(
+      `SELECT rowid FROM chunks WHERE path = ?`,
+      [filePath]
+    )
+    if (oldRows.length > 0 && oldRows[0].values.length > 0) {
+      for (const row of oldRows[0].values) {
+        this.db.run(`DELETE FROM chunks_fts WHERE rowid = ?`, [row[0]])
+      }
+      this.db.run(`DELETE FROM chunks WHERE path = ?`, [filePath])
+    }
+
+    const chunks = chunkMarkdown(content, filePath)
+    const now = Date.now()
+
+    for (const chunk of chunks) {
+      this.db.run(
+        `INSERT INTO chunks (path, start_line, end_line, text, created_at) VALUES (?, ?, ?, ?, ?)`,
+        [chunk.path, chunk.startLine, chunk.endLine, chunk.text, now]
+      )
+      const result = this.db.exec(`SELECT last_insert_rowid()`)
+      const rowid = result[0]?.values[0]?.[0] as number
+      this.db.run(
+        `INSERT INTO chunks_fts (rowid, text) VALUES (?, ?)`,
+        [rowid, chunk.text]
+      )
+    }
+
+    // Store file content hash for change detection
+    this.db.run(
+      `INSERT OR REPLACE INTO file_hashes (path, hash) VALUES (?, ?)`,
+      [filePath, contentHash]
+    )
+
+    this.scheduleSave()
+  }
+
+  search(query: string, limit = 5): SearchResult[] {
+    if (!this.db) return []
+
+    const tokens = tokenize(query)
+    if (tokens.length === 0) return []
+
+    const hasCJK = CJK_RANGE.test(query)
+
+    try {
+      let results
+      if (hasCJK) {
+        // OR + scoring: rank by how many tokens match, require at least 1
+        const scoreExpr = tokens
+          .map(() => `(CASE WHEN c.text LIKE ? THEN 1 ELSE 0 END)`)
+          .join(" + ")
+        const likeParams = tokens.map((t) => `%${t}%`)
+        // params needed twice: once for WHERE, once for ORDER BY
+        const params = [...likeParams, ...likeParams, limit]
+        results = this.db.exec(
+          `SELECT c.text, c.path, c.start_line, c.end_line
+           FROM chunks c
+           WHERE (${scoreExpr}) > 0
+           ORDER BY (${scoreExpr}) DESC, c.created_at DESC
+           LIMIT ?`,
+          params
+        )
+      } else {
+        const ftsQuery = tokens.join(" ")
+        results = this.db.exec(
+          `SELECT c.text, c.path, c.start_line, c.end_line, matchinfo(chunks_fts, 'pcnalx') as info
+           FROM chunks_fts f
+           JOIN chunks c ON c.id = f.rowid
+           WHERE chunks_fts MATCH ?`,
+          [ftsQuery]
+        )
+      }
+
+      if (results.length === 0 || results[0].values.length === 0) return []
+
+      let rows = results[0].values.map((row) => ({
+        text: row[0] as string,
+        path: row[1] as string,
+        startLine: row[2] as number,
+        endLine: row[3] as number,
+        score: row[4] instanceof Uint8Array ? bm25FromMatchinfo(row[4]) : 0
+      }))
+
+      // Sort by BM25 score descending, then recency
+      rows.sort((a, b) => b.score - a.score)
+
+      return rows.slice(0, limit).map(({ text, path, startLine, endLine }) => ({
+        text, path, startLine, endLine
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  syncMemoryFiles(): void {
+    if (!this.db) return
+
+    if (!existsSync(MEMORY_DIR)) return
+
+    const files = readdirSync(MEMORY_DIR).filter((f) => f.endsWith(".md"))
+
+    for (const file of files) {
+      const filePath = join(MEMORY_DIR, file)
+      try {
+        const content = readFileSync(filePath, "utf-8")
+        const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+
+        const existing = this.db!.exec(
+          `SELECT hash FROM file_hashes WHERE path = ?`,
+          [filePath]
+        )
+        const storedHash = existing.length > 0 && existing[0].values.length > 0
+          ? (existing[0].values[0][0] as string)
+          : ""
+
+        if (storedHash !== contentHash) {
+          this.addDocument(filePath, content)
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+  }
+
+  readMemoryFile(filePath: string, from?: number, lines?: number): string {
+    const fullPath = filePath.startsWith("/") ? filePath : join(MEMORY_DIR, filePath)
+    if (!existsSync(fullPath)) return `Error: file not found: ${filePath}`
+
+    try {
+      const content = readFileSync(fullPath, "utf-8")
+      if (from == null && lines == null) return content
+
+      const allLines = content.split("\n")
+      const start = Math.max(0, (from ?? 1) - 1)
+      const count = lines ?? allLines.length
+      return allLines.slice(start, start + count).join("\n")
+    } catch (e) {
+      return `Error reading file: ${e instanceof Error ? e.message : String(e)}`
+    }
+  }
+
+  getMemoryDir(): string {
+    return MEMORY_DIR
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => {
+      this.saveToDisk()
+      this.saveTimer = null
+    }, 500)
+  }
+
+  private saveToDisk(): void {
+    if (!this.db) return
+    try {
+      const dir = dirname(INDEX_DB_PATH)
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      const data = this.db.export()
+      writeFileSync(INDEX_DB_PATH, Buffer.from(data))
+    } catch (e) {
+      console.error("[MemoryStore] Failed to save index:", e)
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    if (this.db) {
+      this.saveToDisk()
+      this.db.close()
+      this.db = null
+    }
+  }
+}
+
+// Global singleton
+let _memoryStore: MemoryStore | null = null
+
+export async function getMemoryStore(): Promise<MemoryStore> {
+  if (!_memoryStore) {
+    _memoryStore = new MemoryStore()
+    await _memoryStore.init()
+    _memoryStore.syncMemoryFiles()
+  }
+  return _memoryStore
+}
+
+export async function closeMemoryStore(): Promise<void> {
+  if (_memoryStore) {
+    await _memoryStore.close()
+    _memoryStore = null
+  }
+}

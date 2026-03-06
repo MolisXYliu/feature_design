@@ -3,6 +3,10 @@ import { HumanMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
 import { createAgentRuntime } from "../agent/runtime"
 import { getThread } from "../db"
+import { summarizeAndSave } from "../memory/summarizer"
+import { getMemoryStore } from "../memory/store"
+import { ChatOpenAI } from "@langchain/openai"
+import { getCustomModelConfigs } from "../storage"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -89,11 +93,32 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         }
       )
 
+      let assistantText = ""
+
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
 
         // With multiple stream modes, chunks are tuples: [mode, data]
         const [mode, data] = chunk as [string, unknown]
+
+        // Collect assistant response text for memory summarization
+        if (mode === "messages") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const msgData = data as any
+          const msg = msgData?.[0]
+          if (msg && (msg._getType?.() === "ai" || msg.type === "ai")) {
+            const content = msg.content
+            if (typeof content === "string") {
+              assistantText += content
+            } else if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block?.type === "text" && typeof block.text === "string") {
+                  assistantText += block.text
+                }
+              }
+            }
+          }
+        }
 
         // Forward raw stream events - transport layer handles parsing
         // Serialize to plain objects for IPC (class instances don't transfer)
@@ -109,6 +134,25 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       // Send done event (only if not aborted)
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
+
+        // Background: summarize conversation and save to memory
+        const memoryStore = await getMemoryStore()
+        const allConfigs = getCustomModelConfigs()
+        const config = allConfigs.find((c) => c.id === (modelId?.replace("custom:", "") ?? "")) || allConfigs[0]
+        if (!config) {
+          console.warn("[Agent] No model config available — skipping memory summarization")
+        } else if (config?.apiKey) {
+          summarizeAndSave({
+            model: new ChatOpenAI({
+              model: config.model,
+              apiKey: config.apiKey,
+              configuration: { baseURL: config.baseUrl }
+            }),
+            userMessage: message,
+            assistantResponse: assistantText,
+            memoryDir: memoryStore.getMemoryDir()
+          }).catch((e) => console.warn("[Agent] Memory summarize failed:", e))
+        }
       }
     } catch (error) {
       // Ignore abort-related errors (expected when stream is cancelled)

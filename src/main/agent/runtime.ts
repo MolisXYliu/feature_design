@@ -42,6 +42,8 @@ import { join, delimiter } from "path"
 import { existsSync } from "fs"
 import { app } from "electron"
 import { BASE_SYSTEM_PROMPT } from "./system-prompt"
+import { getMemoryStore, closeMemoryStore } from "../memory/store"
+import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -432,6 +434,16 @@ The workspace root is: ${workspacePath}`
   const skillsSources = await getEnabledSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
 
+  // Initialize memory system
+  const memoryStore = await getMemoryStore()
+  const memoryDir = memoryStore.getMemoryDir()
+  const memoryTools = [
+    createMemorySearchTool(memoryStore),
+    createMemoryGetTool(memoryStore)
+  ]
+  const memorySources = [join(memoryDir, "MEMORY.md")]
+  console.log("[Runtime] Memory initialized, dir:", memoryDir)
+
   const mcpConnectors = getEnabledMcpConnectors()
   let mcpTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
   if (mcpConnectors.length > 0) {
@@ -507,12 +519,13 @@ The workspace root is: ${workspacePath}`
 
   const agent = createDeepAgent({
     model,
-    tools: mcpTools,
+    tools: [...mcpTools, ...memoryTools],
     checkpointer,
     backend,
     systemPrompt,
     filesystemSystemPrompt,
     skills: skillsSources.length > 0 ? skillsSources : undefined,
+    memory: memorySources,
     // TODO: 后续改回来，恢复 execute 审批
     // interruptOn: { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
@@ -525,7 +538,7 @@ The workspace root is: ${workspacePath}`
   return agent
 }
 
-// Clean up all checkpointer and MCP client resources
+// Clean up all checkpointer, MCP client, and memory store resources
 export async function closeRuntime(): Promise<void> {
   const closePromises: Promise<void>[] = Array.from(checkpointers.values()).map((cp) => cp.close())
   if (_mcpToolsCache?.client) {
@@ -536,6 +549,7 @@ export async function closeRuntime(): Promise<void> {
     closePromises.push(client.close().catch(() => {}))
   }
   _retiredMcpClients.clear()
+  closePromises.push(closeMemoryStore())
   await Promise.all(closePromises)
   checkpointers.clear()
 }
