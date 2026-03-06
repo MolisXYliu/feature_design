@@ -1,13 +1,14 @@
 import { useState } from "react"
-import { ArrowLeft, Clock, Plug, Puzzle, Sparkles } from "lucide-react"
+import { ArrowLeft, Brain, Clock, Plug, Puzzle, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import { SkillsPanel } from "./SkillsPanel"
 import { McpPanel } from "./McpPanel"
 import { ScheduledPanel } from "./ScheduledPanel"
+import { MemoryPanel } from "./MemoryPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled"
+type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "memory"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView } = useAppStore()
@@ -63,6 +64,16 @@ export function CustomizeView(): React.JSX.Element {
             <Clock className="size-4 shrink-0" />
             Scheduled
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "memory" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("memory")}
+          >
+            <Brain className="size-4 shrink-0" />
+            Memory
+          </button>
         </nav>
       </div>
 
@@ -72,6 +83,8 @@ export function CustomizeView(): React.JSX.Element {
         <McpPanel />
       ) : activeTab === "scheduled" ? (
         <ScheduledPanel />
+      ) : activeTab === "memory" ? (
+        <MemoryPanel />
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           <div className="text-center space-y-2">

@@ -7,8 +7,9 @@ import { homedir } from "os"
 const MEMORY_DIR = join(homedir(), ".cmbcoworkagent", "memory")
 const INDEX_DB_PATH = join(MEMORY_DIR, "index.sqlite")
 
-const CHUNK_MAX_CHARS = 1500
-const CHUNK_OVERLAP_CHARS = 200
+const CHUNK_MAX_CHARS = 600
+const CHUNK_OVERLAP_CHARS = 120
+const CHUNK_VERSION = `${CHUNK_MAX_CHARS}:${CHUNK_OVERLAP_CHARS}`
 
 export interface MemoryChunk {
   id: number
@@ -79,12 +80,14 @@ function tokenize(query: string): string[] {
   for (const tok of rawTokens) {
     if (CJK_RANGE.test(tok)) {
       const chars = Array.from(tok).filter((c) => CJK_RANGE.test(c))
-      for (const ch of chars) {
-        if (!STOP_WORDS_ZH.has(ch)) tokens.push(ch)
-      }
-      for (let i = 0; i < chars.length - 1; i++) {
-        const bigram = chars[i] + chars[i + 1]
-        if (!STOP_WORDS_ZH.has(bigram)) tokens.push(bigram)
+      // Only bigrams for LIKE search — unigrams are too broad and match everything
+      if (chars.length === 1 && !STOP_WORDS_ZH.has(chars[0])) {
+        tokens.push(chars[0])
+      } else {
+        for (let i = 0; i < chars.length - 1; i++) {
+          const bigram = chars[i] + chars[i + 1]
+          if (!STOP_WORDS_ZH.has(bigram)) tokens.push(bigram)
+        }
       }
     } else if (tok.length > 1) {
       tokens.push(tok)
@@ -179,7 +182,7 @@ export class MemoryStore {
     if (!this.db) throw new Error("MemoryStore not initialized")
     if (!content.trim()) return
 
-    const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+    const contentHash = createHash("sha256").update(CHUNK_VERSION + content).digest("hex").slice(0, 16)
 
     // Remove old chunks for this path
     const oldRows = this.db.exec(
@@ -218,57 +221,98 @@ export class MemoryStore {
     this.scheduleSave()
   }
 
+  removeDocument(filePath: string): void {
+    if (!this.db) return
+    const oldRows = this.db.exec(
+      `SELECT rowid FROM chunks WHERE path = ?`,
+      [filePath]
+    )
+    if (oldRows.length > 0 && oldRows[0].values.length > 0) {
+      for (const row of oldRows[0].values) {
+        this.db.run(`DELETE FROM chunks_fts WHERE rowid = ?`, [row[0]])
+      }
+      this.db.run(`DELETE FROM chunks WHERE path = ?`, [filePath])
+    }
+    this.db.run(`DELETE FROM file_hashes WHERE path = ?`, [filePath])
+    this.scheduleSave()
+  }
+
   search(query: string, limit = 5): SearchResult[] {
     if (!this.db) return []
 
     const tokens = tokenize(query)
     if (tokens.length === 0) return []
 
-    const hasCJK = CJK_RANGE.test(query)
+    type ScoredRow = { text: string; path: string; startLine: number; endLine: number; score: number }
+    const seen = new Set<string>()
+    const allRows: ScoredRow[] = []
+
+    const addRows = (rows: ScoredRow[]): void => {
+      for (const row of rows) {
+        const key = `${row.path}:${row.startLine}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          allRows.push(row)
+        }
+      }
+    }
 
     try {
-      let results
-      if (hasCJK) {
-        // OR + scoring: rank by how many tokens match, require at least 1
-        const scoreExpr = tokens
-          .map(() => `(CASE WHEN c.text LIKE ? THEN 1 ELSE 0 END)`)
-          .join(" + ")
-        const likeParams = tokens.map((t) => `%${t}%`)
-        // params needed twice: once for WHERE, once for ORDER BY
-        const params = [...likeParams, ...likeParams, limit]
-        results = this.db.exec(
-          `SELECT c.text, c.path, c.start_line, c.end_line
-           FROM chunks c
-           WHERE (${scoreExpr}) > 0
-           ORDER BY (${scoreExpr}) DESC, c.created_at DESC
-           LIMIT ?`,
-          params
-        )
-      } else {
-        const ftsQuery = tokens.join(" ")
-        results = this.db.exec(
-          `SELECT c.text, c.path, c.start_line, c.end_line, matchinfo(chunks_fts, 'pcnalx') as info
-           FROM chunks_fts f
-           JOIN chunks c ON c.id = f.rowid
-           WHERE chunks_fts MATCH ?`,
-          [ftsQuery]
-        )
+      // Path 1: FTS3 MATCH (good for English tokens)
+      const englishTokens = tokens.filter((t) => !CJK_RANGE.test(t))
+      if (englishTokens.length > 0) {
+        const ftsQuery = englishTokens.join(" ")
+        try {
+          const results = this.db.exec(
+            `SELECT c.text, c.path, c.start_line, c.end_line, matchinfo(chunks_fts, 'pcnalx') as info
+             FROM chunks_fts f
+             JOIN chunks c ON c.id = f.rowid
+             WHERE chunks_fts MATCH ?`,
+            [ftsQuery]
+          )
+          if (results.length > 0 && results[0].values.length > 0) {
+            addRows(results[0].values.map((row) => ({
+              text: row[0] as string,
+              path: row[1] as string,
+              startLine: row[2] as number,
+              endLine: row[3] as number,
+              score: row[4] instanceof Uint8Array ? bm25FromMatchinfo(row[4]) : 0
+            })))
+          }
+        } catch { /* FTS match may fail on special chars */ }
       }
 
-      if (results.length === 0 || results[0].values.length === 0) return []
+      // Path 2: LIKE search (good for CJK and as fallback for English)
+      if (tokens.length > 0) {
+        const scoreExpr = tokens
+          .map(() => `(CASE WHEN text LIKE ? THEN 1 ELSE 0 END)`)
+          .join(" + ")
+        const likeParams = tokens.map((t) => `%${t}%`)
+        const results = this.db.exec(
+          `SELECT text, path, start_line, end_line, score FROM (
+             SELECT text, path, start_line, end_line, created_at, (${scoreExpr}) as score
+             FROM chunks
+           ) WHERE score > 0
+           ORDER BY score DESC, created_at DESC
+           LIMIT ?`,
+          [...likeParams, limit]
+        )
+        if (results.length > 0 && results[0].values.length > 0) {
+          addRows(results[0].values.map((row) => ({
+            text: row[0] as string,
+            path: row[1] as string,
+            startLine: row[2] as number,
+            endLine: row[3] as number,
+            score: (row[4] as number) ?? 0
+          })))
+        }
+      }
 
-      let rows = results[0].values.map((row) => ({
-        text: row[0] as string,
-        path: row[1] as string,
-        startLine: row[2] as number,
-        endLine: row[3] as number,
-        score: row[4] instanceof Uint8Array ? bm25FromMatchinfo(row[4]) : 0
-      }))
+      if (allRows.length === 0) return []
 
-      // Sort by BM25 score descending, then recency
-      rows.sort((a, b) => b.score - a.score)
+      allRows.sort((a, b) => b.score - a.score)
 
-      return rows.slice(0, limit).map(({ text, path, startLine, endLine }) => ({
+      return allRows.slice(0, limit).map(({ text, path, startLine, endLine }) => ({
         text, path, startLine, endLine
       }))
     } catch {
@@ -283,11 +327,14 @@ export class MemoryStore {
 
     const files = readdirSync(MEMORY_DIR).filter((f) => f.endsWith(".md"))
 
+    const diskPaths = new Set<string>()
+
     for (const file of files) {
       const filePath = join(MEMORY_DIR, file)
+      diskPaths.add(filePath)
       try {
         const content = readFileSync(filePath, "utf-8")
-        const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16)
+        const contentHash = createHash("sha256").update(CHUNK_VERSION + content).digest("hex").slice(0, 16)
 
         const existing = this.db!.exec(
           `SELECT hash FROM file_hashes WHERE path = ?`,
@@ -302,6 +349,15 @@ export class MemoryStore {
         }
       } catch {
         // Skip unreadable files
+      }
+    }
+
+    // Clean up stale index entries for files deleted outside the app
+    const indexed = this.db!.exec(`SELECT path FROM file_hashes`)
+    if (indexed.length > 0) {
+      for (const row of indexed[0].values) {
+        const p = row[0] as string
+        if (!diskPaths.has(p)) this.removeDocument(p)
       }
     }
   }

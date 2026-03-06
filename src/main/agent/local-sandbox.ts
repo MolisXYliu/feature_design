@@ -680,6 +680,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * - Windows encoding auto-detection (GBK/CP936) to prevent garbled Chinese text.
    * - Windows exit-event grace period to handle .bat child process pipe handle leaks.
    */
+  private static readonly SPAWN_RETRY_COUNT = 2
+  private static readonly SPAWN_RETRY_DELAY_MS = 300
+
   async execute(command: string): Promise<ExecuteResponse> {
     if (!command || typeof command !== "string") {
       return {
@@ -694,6 +697,33 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const shellBase = path.basename(shell).replace(/\.exe$/i, "")
     const isBashLikeShell = ["bash", "sh", "zsh"].includes(shellBase)
 
+    // On Windows, spawn can transiently fail with EPERM (antivirus file lock, handle
+    // contention). Retry up to SPAWN_RETRY_COUNT times with a short delay.
+    const maxAttempts = isWindows ? LocalSandbox.SPAWN_RETRY_COUNT + 1 : 1
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const result = await this.executeOnce(command, shell, isBashLikeShell, isWindows)
+      const isSpawnEperm =
+        result.exitCode === 1
+        && result.output.startsWith("Error: Failed to execute command:")
+        && result.output.includes("EPERM")
+      if (isSpawnEperm && attempt < maxAttempts) {
+        console.warn(
+          `[LocalSandbox] spawn EPERM on attempt ${attempt}/${maxAttempts}, retrying in ${LocalSandbox.SPAWN_RETRY_DELAY_MS}ms…`
+        )
+        await new Promise<void>((r) => setTimeout(r, LocalSandbox.SPAWN_RETRY_DELAY_MS))
+        continue
+      }
+      return result
+    }
+    return { output: "Error: Unexpected retry loop exit.", exitCode: 1, truncated: false }
+  }
+
+  private executeOnce(
+    command: string,
+    shell: string,
+    isBashLikeShell: boolean,
+    isWindows: boolean
+  ): Promise<ExecuteResponse> {
     return new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []

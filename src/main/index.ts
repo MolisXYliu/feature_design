@@ -6,6 +6,7 @@ import { registerModelHandlers } from "./ipc/models"
 import { registerSkillsHandlers } from "./ipc/skills"
 import { registerMcpHandlers } from "./ipc/mcp"
 import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
+import { registerMemoryHandlers } from "./ipc/memory"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { LocalSandbox } from "./agent/local-sandbox"
@@ -93,6 +94,7 @@ app.whenReady().then(async () => {
   registerSkillsHandlers(ipcMain)
   registerMcpHandlers(ipcMain)
   registerScheduledTaskHandlers(ipcMain)
+  registerMemoryHandlers(ipcMain)
 
   createWindow()
 

@@ -404,6 +404,25 @@ const api = {
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     }
+  },
+  memory: {
+    listFiles: (): Promise<Array<{ name: string; size: number; modifiedAt: string }>> =>
+      ipcRenderer.invoke("memory:listFiles"),
+    readFile: (name: string): Promise<string> =>
+      ipcRenderer.invoke("memory:readFile", name),
+    deleteFile: (name: string): Promise<void> =>
+      ipcRenderer.invoke("memory:deleteFile", name),
+    getEnabled: (): Promise<boolean> =>
+      ipcRenderer.invoke("memory:getEnabled"),
+    setEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("memory:setEnabled", enabled),
+    getStats: (): Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }> =>
+      ipcRenderer.invoke("memory:getStats"),
+    onChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => { callback() }
+      ipcRenderer.on("memory:changed", handler)
+      return () => { ipcRenderer.removeListener("memory:changed", handler) }
+    }
   }
 }
 

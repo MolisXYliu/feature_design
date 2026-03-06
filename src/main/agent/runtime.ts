@@ -13,6 +13,7 @@ import {
   getEnabledSkillsSources,
   getEnabledMcpConnectors,
   getCustomModelConfigs,
+  isMemoryEnabled,
   DEFAULT_MAX_TOKENS
 } from "../storage"
 import { MultiServerMCPClient } from "@langchain/mcp-adapters"
@@ -41,7 +42,7 @@ import path from "path"
 import { join, delimiter } from "path"
 import { existsSync } from "fs"
 import { app } from "electron"
-import { BASE_SYSTEM_PROMPT } from "./system-prompt"
+import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 
@@ -260,7 +261,8 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
-  return workingDirSection + BASE_SYSTEM_PROMPT
+  const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
+  return workingDirSection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache
@@ -434,15 +436,21 @@ The workspace root is: ${workspacePath}`
   const skillsSources = await getEnabledSkillsSources()
   console.log("[Runtime] Skills sources:", skillsSources)
 
-  // Initialize memory system
-  const memoryStore = await getMemoryStore()
-  const memoryDir = memoryStore.getMemoryDir()
-  const memoryTools = [
-    createMemorySearchTool(memoryStore),
-    createMemoryGetTool(memoryStore)
-  ]
-  const memorySources = [join(memoryDir, "MEMORY.md")]
-  console.log("[Runtime] Memory initialized, dir:", memoryDir)
+  // Initialize memory system (gated by user setting)
+  let memoryTools: ReturnType<typeof createMemorySearchTool | typeof createMemoryGetTool>[] = []
+  let memorySources: string[] | undefined
+  if (isMemoryEnabled()) {
+    const memoryStore = await getMemoryStore()
+    const memoryDir = memoryStore.getMemoryDir()
+    memoryTools = [
+      createMemorySearchTool(memoryStore),
+      createMemoryGetTool(memoryStore)
+    ]
+    memorySources = [join(memoryDir, "MEMORY.md")]
+    console.log("[Runtime] Memory initialized, dir:", memoryDir)
+  } else {
+    console.log("[Runtime] Memory disabled by user setting")
+  }
 
   const mcpConnectors = getEnabledMcpConnectors()
   let mcpTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
@@ -525,7 +533,7 @@ The workspace root is: ${workspacePath}`
     systemPrompt,
     filesystemSystemPrompt,
     skills: skillsSources.length > 0 ? skillsSources : undefined,
-    memory: memorySources,
+    memory: memorySources?.length ? memorySources : undefined,
     // TODO: 后续改回来，恢复 execute 审批
     // interruptOn: { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },

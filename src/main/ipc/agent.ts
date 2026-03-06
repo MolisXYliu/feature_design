@@ -6,7 +6,7 @@ import { getThread } from "../db"
 import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
-import { getCustomModelConfigs } from "../storage"
+import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -72,6 +72,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         return
       }
 
+      // Sync FTS index with any memory files changed since last invocation
+      if (isMemoryEnabled()) {
+        try {
+          const memoryStore = await getMemoryStore()
+          memoryStore.syncMemoryFiles()
+        } catch { /* non-critical */ }
+      }
+
       const effectiveModelId = modelId || (metadata.model as string | undefined)
       const agent = await createAgentRuntime({
         threadId,
@@ -135,23 +143,25 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
 
-        // Background: summarize conversation and save to memory
-        const memoryStore = await getMemoryStore()
-        const allConfigs = getCustomModelConfigs()
-        const config = allConfigs.find((c) => c.id === (modelId?.replace("custom:", "") ?? "")) || allConfigs[0]
-        if (!config) {
-          console.warn("[Agent] No model config available — skipping memory summarization")
-        } else if (config?.apiKey) {
-          summarizeAndSave({
-            model: new ChatOpenAI({
-              model: config.model,
-              apiKey: config.apiKey,
-              configuration: { baseURL: config.baseUrl }
-            }),
-            userMessage: message,
-            assistantResponse: assistantText,
-            memoryDir: memoryStore.getMemoryDir()
-          }).catch((e) => console.warn("[Agent] Memory summarize failed:", e))
+        // Background: summarize conversation and save to memory (gated)
+        if (isMemoryEnabled()) {
+          const memoryStore = await getMemoryStore()
+          const allConfigs = getCustomModelConfigs()
+          const config = allConfigs.find((c) => c.id === (modelId?.replace("custom:", "") ?? "")) || allConfigs[0]
+          if (!config) {
+            console.warn("[Agent] No model config available — skipping memory summarization")
+          } else if (config?.apiKey) {
+            summarizeAndSave({
+              model: new ChatOpenAI({
+                model: config.model,
+                apiKey: config.apiKey,
+                configuration: { baseURL: config.baseUrl }
+              }),
+              userMessage: message,
+              assistantResponse: assistantText,
+              memoryDir: memoryStore.getMemoryDir()
+            }).catch((e) => console.warn("[Agent] Memory summarize failed:", e))
+          }
         }
       }
     } catch (error) {

@@ -126,6 +126,27 @@ export function getSkillsSources(): string[] {
   return sources
 }
 
+// ── Memory settings ──
+
+const MEMORY_SETTINGS_FILE = join(OPENWORK_DIR, "memory-settings.json")
+
+export function isMemoryEnabled(): boolean {
+  if (!existsSync(MEMORY_SETTINGS_FILE)) return true
+  try {
+    const parsed = JSON.parse(readFileSync(MEMORY_SETTINGS_FILE, "utf-8"))
+    return parsed.enabled !== false
+  } catch {
+    return true
+  }
+}
+
+export function setMemoryEnabled(enabled: boolean): void {
+  getOpenworkDir()
+  writeFileSync(MEMORY_SETTINGS_FILE, JSON.stringify({ enabled }, null, 2))
+}
+
+// ── Skills ──
+
 const DISABLED_SKILLS_FILE = join(OPENWORK_DIR, "disabled-skills.json")
 
 export function getDisabledSkills(): string[] {

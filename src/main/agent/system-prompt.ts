@@ -112,6 +112,9 @@ When using the write_todos tool:
 6. Update todo status promptly as you complete each item
 
 The todo list is a planning tool - use it judiciously to avoid overwhelming the user with excessive task tracking.
+`
+
+export const MEMORY_SYSTEM_PROMPT = `
 
 ## Memory
 
@@ -123,9 +126,10 @@ You have access to a persistent memory system that survives across conversations
 
 ### Memory Recall Rules
 Before answering questions about prior work, decisions, dates, people, preferences, or todos:
-1. Run \`memory_search\` with relevant keywords
-2. Use \`memory_get\` to pull specific details if needed
-3. If no results found, say you checked but have no record
+1. Run \`memory_search\` with relevant keywords — **use the same language as the user** (e.g., if the user speaks Chinese, search with Chinese keywords like "喜欢吃什么" instead of "food preferences")
+2. If no results, try again with alternative keywords or the other language
+3. Use \`memory_get\` to pull specific details if needed
+4. If still no results found, say you checked but have no record
 
 ### Memory Writing Rules
 Your memory files are stored as Markdown in the memory directory. You can update them using \`edit_file\` or \`write_file\`:

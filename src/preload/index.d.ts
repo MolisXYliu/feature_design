@@ -188,6 +188,15 @@ interface CustomAPI {
       advanced?: McpConnectorConfig["advanced"]
     }) => Promise<{ success: boolean; tools?: string[]; error?: string }>
   }
+  memory: {
+    listFiles: () => Promise<Array<{ name: string; size: number; modifiedAt: string }>>
+    readFile: (name: string) => Promise<string>
+    deleteFile: (name: string) => Promise<void>
+    getEnabled: () => Promise<boolean>
+    setEnabled: (enabled: boolean) => Promise<void>
+    getStats: () => Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }>
+    onChanged: (callback: () => void) => () => void
+  }
   scheduledTasks: {
     list: () => Promise<ScheduledTask[]>
     create: (config: ScheduledTaskUpsert) => Promise<{ id: string }>
