@@ -380,7 +380,6 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
           height: isFullscreen ? "100%" : "auto"
         },
         line: {
-          fontSize: "11px",
           lineHeight: "1.4"
         }
       }}
@@ -389,41 +388,47 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
 
   return (
     <>
-      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll w-full max-h-96 min-h-40">
-        {/* Header with controls */}
-        <div className="absolute top-0 right-0 z-10 flex items-center gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
-          {isLargeDiff && (
-            <div className="flex items-center gap-1">
+      {/* Header with controls */}
+      <div className=" flex items-center justify-between gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
+        <div>Git Diff 代码变更查看</div>
+       <div className={'flex space-x-2 '}>
+         {isLargeDiff && (
+           <div className="flex items-center gap-1">
               <span className="text-[10px] text-muted-foreground mr-1">
                 {totalLines} 行
               </span>
-              <button
-                onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-                className="cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
-                title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
-              >
-                {renderMode === "preview" ? "显示全部" : "显示预览"}
-              </button>
-            </div>
-          )}
-          <button
-            onClick={() => setIsFullscreen(true)}
-            className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
-            title="全屏查看diff"
-          >
-            <Maximize2 className="size-3" />
-          </button>
-        </div>
+             <button
+               onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
+               className="cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
+               title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
+             >
+               {renderMode === "preview" ?  "显示全部代码" : "显示少量代码"}
+             </button>
+           </div>
+         )}
+         <button
+           onClick={() => setIsFullscreen(true)}
+           className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
+           title="全屏查看diff"
+         >
+           <Maximize2 className="size-3" />
+         </button>
+       </div>
+      </div>
 
-        {/* Performance warning for large diffs */}
-        {isLargeDiff && renderMode === "full" && (
-          <div className="absolute bottom-0 left-0 right-0 z-10 p-2 bg-amber-50/90 dark:bg-amber-950/90 border-t border-amber-200 dark:border-amber-800">
-            <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
-              <div className="size-2 bg-amber-500 rounded-full animate-pulse" />
-              大文件可能影响性能，建议在全屏模式下查看
-            </div>
+      {/* Performance warning for large diffs */}
+      {isLargeDiff && renderMode === "full" && (
+        <div className=" p-2 bg-amber-50/90 dark:bg-amber-950/90 border-t border-amber-200 dark:border-amber-800">
+          <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
+            <div className="size-2 bg-amber-500 rounded-full animate-pulse" />
+            大文件可能影响性能，建议在全屏模式下查看
           </div>
-        )}
+        </div>
+      )}
+
+      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll w-full max-h-96 min-h-40">
+
+
 
         {DiffViewer}
       </div>
@@ -445,7 +450,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
                   onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
                   className="cursor-pointer px-3 py-1.5 text-xs bg-background hover:bg-muted border border-border rounded transition-colors"
                 >
-                  {renderMode === "preview" ? "显示全部" : "显示预览"}
+                  {renderMode === "preview" ? "显示全部代码" : "显示少量代码"}
                 </button>
                 <button
                   onClick={() => setIsFullscreen(false)}
