@@ -296,31 +296,8 @@ function TaskDisplay({
 export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  // Mock data for when no diff is provided
-  const mockDiff = [
-    'diff --git a/src/components/example.tsx b/src/components/example.tsx',
-    'index 1234567..abcdefg 100644',
-    '--- a/src/components/example.tsx',
-    '+++ b/src/components/example.tsx',
-    '@@ -1,8 +1,12 @@',
-    ' import React from \'react\'',
-    '+import { useState } from \'react\'',
-    ' ',
-    ' export function ExampleComponent() {',
-    '+  const [count, setCount] = useState(0)',
-    '+',
-    '   return (',
-    '     <div className="container">',
-    '-      <h1>Hello World</h1>',
-    '+      <h1>Hello World - {count}</h1>',
-    '+      <button onClick={() => setCount(count + 1)}>Click me</button>',
-    '     </div>',
-    '   )',
-    ' }'
-  ].join('\n')
-
   // Use provided diff or fallback to mock data
-  const diffToUse = diff || mockDiff
+  const diffToUse = diff
 
   // Parse git diff to extract old and new content
   const parseGitDiff = (diffText: string) => {
@@ -378,17 +355,17 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
 
   return (
     <>
-      <div className="relative text-xs font-mono bg-background rounded-sm overflow-hidden w-full max-h-96 min-h-40">
+      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll  w-full max-h-96 min-h-40">
         {/* Fullscreen button */}
-
         <button
           onClick={() => setIsFullscreen(true)}
-          className="absolute top-0 right-2 z-10 p-1.5 bg-background/80 hover:bg-background border border-border rounded-sm transition-colors"
+          className="cursor-pointer absolute top-0 right-2 z-10 p-1.5
+          bg-background/80 hover:bg-gray-200 border border-border rounded-sm transition-colors"
           title="全屏查看diff"
         >
           <Maximize2 className="size-3" />
         </button>
-        {DiffViewer}
+          {DiffViewer}
       </div>
       {/* Fullscreen Modal */}
       {isFullscreen && (
@@ -399,7 +376,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
               <h3 className="text-sm font-medium">Git Diff - 全屏视图</h3>
               <button
                 onClick={() => setIsFullscreen(false)}
-                className="p-1.5 hover:bg-background-interactive border border-border rounded-sm transition-colors"
+                className="cursor-pointer p-1.5 hover:bg-background-interactive border border-border rounded-sm transition-colors"
                 title="退出全屏"
               >
                 <X className="size-4" />
