@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -41,9 +41,11 @@ function ThreadListItem({
   thread,
   isSelected,
   isEditing,
+  isUnread,
   editingTitle,
   onSelect,
   onDelete,
+  onRunFinished,
   onStartEditing,
   onSaveTitle,
   onCancelEditing,
@@ -52,15 +54,27 @@ function ThreadListItem({
   thread: Thread
   isSelected: boolean
   isEditing: boolean
+  isUnread: boolean
   editingTitle: string
   onSelect: () => void
   onDelete: () => void
+  onRunFinished: () => void
   onStartEditing: () => void
   onSaveTitle: () => void
   onCancelEditing: () => void
   onEditingTitleChange: (value: string) => void
 }): React.JSX.Element {
   const isRunning = useIsThreadRunning(thread.thread_id)
+  const wasRunningRef = useRef(false)
+  const onRunFinishedRef = useRef(onRunFinished)
+  onRunFinishedRef.current = onRunFinished
+
+  useEffect(() => {
+    if (wasRunningRef.current && !isRunning) {
+      onRunFinishedRef.current()
+    }
+    wasRunningRef.current = isRunning
+  }, [isRunning])
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -114,6 +128,9 @@ function ThreadListItem({
               </>
             )}
           </div>
+          {isUnread && !isRunning && (
+            <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+          )}
           <span className="shrink-0" title={isRunning ? "任务运行中，无法删除" : undefined}>
             <Button
               variant="ghost"
@@ -161,6 +178,44 @@ export function ThreadSidebar(): React.JSX.Element {
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState("")
+  const [unreadIds, setUnreadIds] = useState<Set<string>>(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem("threads:unreadIds") || "[]")
+      return new Set(arr)
+    } catch {
+      return new Set()
+    }
+  })
+
+  const persistUnread = useCallback((ids: Set<string>) => {
+    localStorage.setItem("threads:unreadIds", JSON.stringify([...ids]))
+  }, [])
+
+  const currentThreadIdRef = useRef(currentThreadId)
+  currentThreadIdRef.current = currentThreadId
+  const showCustomizeViewRef = useRef(showCustomizeView)
+  showCustomizeViewRef.current = showCustomizeView
+
+  const handleRunFinished = useCallback((threadId: string) => {
+    if (threadId === currentThreadIdRef.current && !showCustomizeViewRef.current) return
+    setUnreadIds((prev) => {
+      if (prev.has(threadId)) return prev
+      const next = new Set(prev)
+      next.add(threadId)
+      persistUnread(next)
+      return next
+    })
+  }, [persistUnread])
+
+  const markRead = useCallback((threadId: string) => {
+    setUnreadIds((prev) => {
+      if (!prev.has(threadId)) return prev
+      const next = new Set(prev)
+      next.delete(threadId)
+      persistUnread(next)
+      return next
+    })
+  }, [persistUnread])
 
   const startEditing = (threadId: string, currentTitle: string): void => {
     setEditingThreadId(threadId)
@@ -224,11 +279,17 @@ export function ThreadSidebar(): React.JSX.Element {
               thread={thread}
               isSelected={currentThreadId === thread.thread_id}
               isEditing={editingThreadId === thread.thread_id}
+              isUnread={unreadIds.has(thread.thread_id)}
               editingTitle={editingTitle}
-              onSelect={() => selectThread(thread.thread_id)}
+              onSelect={() => {
+                selectThread(thread.thread_id)
+                markRead(thread.thread_id)
+              }}
+              onRunFinished={() => handleRunFinished(thread.thread_id)}
               onDelete={() => {
                 cleanupThread(thread.thread_id)
                 deleteThread(thread.thread_id)
+                markRead(thread.thread_id)
               }}
               onStartEditing={() => startEditing(thread.thread_id, thread.title || "")}
               onSaveTitle={saveTitle}
