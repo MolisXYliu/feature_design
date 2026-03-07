@@ -257,9 +257,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   ])
 
   /**
-   * Detect file encoding from raw buffer (same as Cline's detectEncoding):
+   * Detect file encoding from raw buffer (inspired by Cline's detectEncoding,
+   * but extended for read+write: Cline only uses it for reading, while we also
+   * use the detected encoding to write back, so we upgrade ASCII → UTF-8 to
+   * avoid replacing non-ASCII chars with '?').
    * 0. Fast reject known binary extensions before any I/O-heavy detection
-   * 1. Try jschardet — if it returns a valid encoding, use it
+   * 1. Try jschardet — if it returns a valid encoding, use it (ASCII → utf-8)
    * 2. If detection fails, check for binary via null-byte sampling
    * 3. Fallback to utf-8 for plain text
    */
@@ -270,6 +273,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     const detected = chardet.detect(buffer)
     if (detected && detected.encoding && iconv.encodingExists(detected.encoding)) {
+      // ASCII is a strict subset of UTF-8; upgrade so non-ASCII chars
+      // written by the agent (e.g. CJK) are not replaced with '?'.
+      if (detected.encoding.toLowerCase() === "ascii") return "utf-8"
       return detected.encoding
     }
 
@@ -450,8 +456,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /**
    * Detect encoding for command output (Windows cmd.exe/PowerShell uses system code page).
    * Only meaningful for non-bash shells; bash-like shells (Git Bash) always output UTF-8.
-   * Requires high confidence from jschardet to override UTF-8 default, because short
-   * Chinese text in UTF-8 is often misidentified as GB2312/GBK.
+   * Requires high confidence (>= 0.8) from jschardet to override UTF-8 default, as a
+   * defensive measure against potential encoding misidentification on short output.
    */
   private static readonly CHARDET_CONFIDENCE_THRESHOLD = 0.8
 
