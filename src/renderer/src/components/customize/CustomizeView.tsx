@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowLeft, Brain, Clock, Plug, Puzzle, Sparkles } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -7,8 +7,9 @@ import { SkillsPanel } from "./SkillsPanel"
 import { McpPanel } from "./McpPanel"
 import { ScheduledPanel } from "./ScheduledPanel"
 import { MemoryPanel } from "./MemoryPanel"
+import { HeartbeatPanel } from "./HeartbeatPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "memory"
+type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "heartbeat" | "memory"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView } = useAppStore()
@@ -67,6 +68,16 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "heartbeat" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("heartbeat")}
+          >
+            <HeartPulse className="size-4 shrink-0" />
+            Heartbeat
+          </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
               activeTab === "memory" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("memory")}
@@ -83,6 +94,8 @@ export function CustomizeView(): React.JSX.Element {
         <McpPanel />
       ) : activeTab === "scheduled" ? (
         <ScheduledPanel />
+      ) : activeTab === "heartbeat" ? (
+        <HeartbeatPanel />
       ) : activeTab === "memory" ? (
         <MemoryPanel />
       ) : (

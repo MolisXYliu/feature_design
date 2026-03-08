@@ -8,7 +8,8 @@ import type {
   McpConnectorConfig,
   McpConnectorUpsert,
   ScheduledTask,
-  ScheduledTaskUpsert
+  ScheduledTaskUpsert,
+  HeartbeatConfig
 } from "../main/types"
 
 interface ElectronAPI {
@@ -206,6 +207,21 @@ interface CustomAPI {
     runNow: (id: string) => Promise<void>
     cancel: (id: string) => Promise<void>
     isRunning: (id: string) => Promise<boolean>
+    onChanged: (callback: () => void) => () => void
+    listenToStream: (
+      threadId: string,
+      callback: (event: { type: string; [key: string]: unknown }) => void
+    ) => () => void
+  }
+  heartbeat: {
+    getConfig: () => Promise<HeartbeatConfig>
+    saveConfig: (updates: Partial<HeartbeatConfig>) => Promise<void>
+    getContent: () => Promise<string>
+    saveContent: (content: string) => Promise<void>
+    runNow: () => Promise<void>
+    cancel: () => Promise<void>
+    isRunning: () => Promise<boolean>
+    resetConfig: () => Promise<HeartbeatConfig>
     onChanged: (callback: () => void) => () => void
     listenToStream: (
       threadId: string,

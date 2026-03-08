@@ -575,6 +575,16 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
               })
               .catch(() => {})
           }
+          if (metadata.isHeartbeat) {
+            window.api.heartbeat
+              .isRunning()
+              .then((running) => {
+                if (running) {
+                  updateThreadState(threadId, () => ({ scheduledTaskLoading: true }))
+                }
+              })
+              .catch(() => {})
+          }
         }
       } catch (error) {
         console.error("[ThreadContext] Failed to load thread details:", error)
@@ -701,8 +711,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     [getThreadActions, updateThreadState]
   )
 
-  // Track passive scheduler stream listeners per thread
+  // Track passive scheduler/heartbeat stream listeners per thread
   const schedulerListenerCleanups = useRef<Record<string, () => void>>({})
+  const heartbeatListenerCleanups = useRef<Record<string, () => void>>({})
 
   // Track streaming AI message state per thread (for token-by-token accumulation)
   const schedulerStreamingRef = useRef<
@@ -871,11 +882,18 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
 
       loadThreadHistory(threadId)
 
-      // Register listener synchronously so no stream events are missed
-      const cleanup = window.api.scheduledTasks.listenToStream(threadId, (event) => {
-        processSchedulerEvent(threadId, event)
-      })
-      schedulerListenerCleanups.current[threadId] = cleanup
+      // Register listeners synchronously so no stream events are missed
+      if (threadId === "heartbeat") {
+        const heartbeatCleanup = window.api.heartbeat.listenToStream(threadId, (event) => {
+          processSchedulerEvent(threadId, event)
+        })
+        heartbeatListenerCleanups.current[threadId] = heartbeatCleanup
+      } else {
+        const schedulerCleanup = window.api.scheduledTasks.listenToStream(threadId, (event) => {
+          processSchedulerEvent(threadId, event)
+        })
+        schedulerListenerCleanups.current[threadId] = schedulerCleanup
+      }
     },
     [loadThreadHistory, processSchedulerEvent]
   )
@@ -883,6 +901,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const cleanupThread = useCallback((threadId: string) => {
     schedulerListenerCleanups.current[threadId]?.()
     delete schedulerListenerCleanups.current[threadId]
+    heartbeatListenerCleanups.current[threadId]?.()
+    delete heartbeatListenerCleanups.current[threadId]
     delete schedulerStreamingRef.current[threadId]
 
     initializedThreadsRef.current.delete(threadId)

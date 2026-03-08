@@ -6,9 +6,11 @@ import { registerModelHandlers } from "./ipc/models"
 import { registerSkillsHandlers } from "./ipc/skills"
 import { registerMcpHandlers } from "./ipc/mcp"
 import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
+import { registerHeartbeatHandlers } from "./ipc/heartbeat"
 import { registerMemoryHandlers } from "./ipc/memory"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
+import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { LocalSandbox } from "./agent/local-sandbox"
 
 let mainWindow: BrowserWindow | null = null
@@ -94,12 +96,14 @@ app.whenReady().then(async () => {
   registerSkillsHandlers(ipcMain)
   registerMcpHandlers(ipcMain)
   registerScheduledTaskHandlers(ipcMain)
+  registerHeartbeatHandlers(ipcMain)
   registerMemoryHandlers(ipcMain)
 
   createWindow()
 
-  // Start scheduled task scheduler
+  // Start scheduled task scheduler and heartbeat service
   startScheduler()
+  startHeartbeat()
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -117,5 +121,6 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   LocalSandbox.killAll()
   stopScheduler()
+  stopHeartbeat()
   flush()
 })

@@ -912,3 +912,74 @@ export function updateScheduledTaskRunResult(
   )
   writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(next, null, 2))
 }
+
+// Heartbeat
+const HEARTBEAT_CONFIG_FILE = join(OPENWORK_DIR, "heartbeat-config.json")
+const HEARTBEAT_MD_FILE = join(OPENWORK_DIR, "HEARTBEAT.md")
+
+const DEFAULT_HEARTBEAT_PROMPT =
+  "Review the HEARTBEAT.md content provided in your system prompt (Project Context section). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+
+function defaultHeartbeatConfig(): import("./types").HeartbeatConfig {
+  return {
+    enabled: false,
+    intervalMinutes: 30,
+    prompt: DEFAULT_HEARTBEAT_PROMPT,
+    modelId: null,
+    workDir: null,
+    lastRunAt: null,
+    lastRunStatus: null,
+    lastRunError: null
+  }
+}
+
+export function getHeartbeatConfig(): import("./types").HeartbeatConfig {
+  getOpenworkDir()
+  if (!existsSync(HEARTBEAT_CONFIG_FILE)) return defaultHeartbeatConfig()
+  try {
+    const content = readFileSync(HEARTBEAT_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultHeartbeatConfig()
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      intervalMinutes: typeof parsed.intervalMinutes === "number" ? parsed.intervalMinutes : defaults.intervalMinutes,
+      prompt: typeof parsed.prompt === "string" && parsed.prompt.trim() ? parsed.prompt : defaults.prompt,
+      modelId: typeof parsed.modelId === "string" ? parsed.modelId : defaults.modelId,
+      workDir: typeof parsed.workDir === "string" ? parsed.workDir : defaults.workDir,
+      lastRunAt: typeof parsed.lastRunAt === "string" ? parsed.lastRunAt : defaults.lastRunAt,
+      lastRunStatus: parsed.lastRunStatus === "ok" || parsed.lastRunStatus === "ok_silent" || parsed.lastRunStatus === "skipped" || parsed.lastRunStatus === "error" ? parsed.lastRunStatus : defaults.lastRunStatus,
+      lastRunError: typeof parsed.lastRunError === "string" ? parsed.lastRunError : defaults.lastRunError
+    }
+  } catch {
+    return defaultHeartbeatConfig()
+  }
+}
+
+export function saveHeartbeatConfig(updates: Partial<import("./types").HeartbeatConfig>): void {
+  getOpenworkDir()
+  const current = getHeartbeatConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(HEARTBEAT_CONFIG_FILE, JSON.stringify(merged, null, 2))
+}
+
+export function resetHeartbeatConfig(): import("./types").HeartbeatConfig {
+  getOpenworkDir()
+  const defaults = defaultHeartbeatConfig()
+  writeFileSync(HEARTBEAT_CONFIG_FILE, JSON.stringify(defaults, null, 2))
+  return defaults
+}
+
+export function getHeartbeatContent(): string {
+  getOpenworkDir()
+  if (!existsSync(HEARTBEAT_MD_FILE)) return ""
+  try {
+    return readFileSync(HEARTBEAT_MD_FILE, "utf-8")
+  } catch {
+    return ""
+  }
+}
+
+export function saveHeartbeatContent(content: string): void {
+  getOpenworkDir()
+  writeFileSync(HEARTBEAT_MD_FILE, content)
+}

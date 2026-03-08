@@ -341,13 +341,15 @@ export interface CreateAgentRuntimeOptions {
   modelId?: string
   /** Workspace path - REQUIRED for agent to operate on files */
   workspacePath: string
+  /** Extra content appended to the system prompt (e.g. HEARTBEAT.md context) */
+  extraSystemPrompt?: string
 }
 
 // Create agent runtime with configured model and checkpointer
 export type AgentRuntime = ReturnType<typeof createAgent>
 
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Promise<DeepAgent> {
-  const { threadId, workspacePath, modelId } = options
+  const { threadId, workspacePath, modelId, extraSystemPrompt } = options
 
   if (!threadId) {
     throw new Error("Thread ID is required for checkpointing.")
@@ -406,7 +408,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     env
   })
 
-  const systemPrompt = getSystemPrompt(workspacePath)
+  let systemPrompt = getSystemPrompt(workspacePath)
+  if (extraSystemPrompt) {
+    systemPrompt += "\n\n" + extraSystemPrompt
+  }
 
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"

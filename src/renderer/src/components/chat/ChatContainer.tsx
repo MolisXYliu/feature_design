@@ -401,6 +401,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       } catch (err) {
         console.error("[ChatContainer] Failed to cancel scheduled task:", err)
       }
+    } else if (scheduledTaskLoading && threadId === "heartbeat") {
+      try {
+        await window.api.heartbeat.cancel()
+      } catch (err) {
+        console.error("[ChatContainer] Failed to cancel heartbeat:", err)
+      }
     } else {
       await stream?.stop()
     }

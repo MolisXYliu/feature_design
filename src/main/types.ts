@@ -241,6 +241,18 @@ export interface ScheduledTaskUpsert {
   enabled?: boolean
 }
 
+// Heartbeat types
+export interface HeartbeatConfig {
+  enabled: boolean
+  intervalMinutes: number
+  prompt: string
+  modelId: string | null
+  workDir: string | null
+  lastRunAt: string | null
+  lastRunStatus: "ok" | "ok_silent" | "skipped" | "error" | null
+  lastRunError: string | null
+}
+
 // Skills types
 export interface SkillMetadata {
   name: string

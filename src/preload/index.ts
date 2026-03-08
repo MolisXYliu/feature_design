@@ -9,7 +9,8 @@ import type {
   McpConnectorConfig,
   McpConnectorUpsert,
   ScheduledTask,
-  ScheduledTaskUpsert
+  ScheduledTaskUpsert,
+  HeartbeatConfig
 } from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
@@ -422,6 +423,38 @@ const api = {
       const handler = (): void => { callback() }
       ipcRenderer.on("memory:changed", handler)
       return () => { ipcRenderer.removeListener("memory:changed", handler) }
+    }
+  },
+  heartbeat: {
+    getConfig: (): Promise<HeartbeatConfig> =>
+      ipcRenderer.invoke("heartbeat:getConfig") as Promise<HeartbeatConfig>,
+    saveConfig: (updates: Partial<HeartbeatConfig>): Promise<void> =>
+      ipcRenderer.invoke("heartbeat:saveConfig", updates) as Promise<void>,
+    getContent: (): Promise<string> =>
+      ipcRenderer.invoke("heartbeat:getContent") as Promise<string>,
+    saveContent: (content: string): Promise<void> =>
+      ipcRenderer.invoke("heartbeat:saveContent", content) as Promise<void>,
+    runNow: (): Promise<void> =>
+      ipcRenderer.invoke("heartbeat:runNow") as Promise<void>,
+    cancel: (): Promise<void> =>
+      ipcRenderer.invoke("heartbeat:cancel") as Promise<void>,
+    isRunning: (): Promise<boolean> =>
+      ipcRenderer.invoke("heartbeat:isRunning") as Promise<boolean>,
+    resetConfig: (): Promise<HeartbeatConfig> =>
+      ipcRenderer.invoke("heartbeat:resetConfig") as Promise<HeartbeatConfig>,
+    onChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => { callback() }
+      ipcRenderer.on("heartbeat:changed", handler)
+      return () => { ipcRenderer.removeListener("heartbeat:changed", handler) }
+    },
+    listenToStream: (
+      threadId: string,
+      callback: (event: { type: string; [key: string]: unknown }) => void
+    ): (() => void) => {
+      const channel = `heartbeat:stream:${threadId}`
+      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
     }
   }
 }

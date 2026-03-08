@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -113,7 +113,12 @@ function ThreadListItem({
                   className="text-sm truncate block flex items-center gap-1"
                   title={thread.title || thread.thread_id}
                 >
-                  {thread.title?.startsWith("[定时]") ? (
+                  {thread.title?.startsWith("[Heartbeat]") ? (
+                    <>
+                      <HeartPulse className="size-3 shrink-0 text-red-400" />
+                      <span className="truncate">{thread.title.slice(12)}</span>
+                    </>
+                  ) : thread.title?.startsWith("[定时]") ? (
                     <>
                       <span className="shrink-0 text-[10px] px-1 py-px rounded bg-primary/15 text-primary font-medium">定时</span>
                       <span className="truncate">{thread.title.slice(5)}</span>

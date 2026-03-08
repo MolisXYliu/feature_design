@@ -48,7 +48,8 @@ import type {
   Subagent,
   ScheduledTask,
   ScheduledTaskUpsert,
-  ScheduledTaskFrequency
+  ScheduledTaskFrequency,
+  HeartbeatConfig
 } from "../../main/types"
 
 export type {
@@ -58,7 +59,8 @@ export type {
   Subagent,
   ScheduledTask,
   ScheduledTaskUpsert,
-  ScheduledTaskFrequency
+  ScheduledTaskFrequency,
+  HeartbeatConfig
 }
 
 export type StreamEvent =
