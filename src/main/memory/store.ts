@@ -1,6 +1,6 @@
 import initSqlJs, { Database as SqlJsDatabase } from "sql.js"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "fs"
-import { join, dirname } from "path"
+import { join, dirname, isAbsolute } from "path"
 import { createHash } from "crypto"
 import { homedir } from "os"
 
@@ -363,7 +363,7 @@ export class MemoryStore {
   }
 
   readMemoryFile(filePath: string, from?: number, lines?: number): string {
-    const fullPath = filePath.startsWith("/") ? filePath : join(MEMORY_DIR, filePath)
+    const fullPath = isAbsolute(filePath) ? filePath : join(MEMORY_DIR, filePath)
     if (!existsSync(fullPath)) return `Error: file not found: ${filePath}`
 
     try {
