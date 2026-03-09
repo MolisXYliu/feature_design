@@ -806,6 +806,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           })
 
       if (isBashOnWin && proc.stdin) {
+        proc.stdin.on("error", () => { /* swallow: proc 'error'/'close' handles it */ })
         proc.stdin.write(command + "\n")
         proc.stdin.end()
       }
