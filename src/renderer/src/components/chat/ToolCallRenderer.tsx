@@ -554,7 +554,7 @@ export function ToolCallRenderer({
         const output = typeof result === "string" ? result : undefined
 
         // Special handling for git diff commands
-        if (command && command.includes("git diff") && output && isExpanded) {
+        if (command && command.includes("git diff") && output && !output.includes('no output') && isExpanded) {
           return (
             <div className="text-xs space-y-2 w-full overflow-hidden">
               <div className="font-mono bg-background rounded-sm p-2 flex items-center gap-2 min-w-0">
@@ -670,7 +670,7 @@ export function ToolCallRenderer({
         const command = args.command as string
 
         // Special handling for git diff commands
-        if (command && command.includes("git diff") && output.trim()) {
+        if (command && command.includes("git diff") && output.trim() && !output.includes('no output') ) {
           if (isExpanded) {
             return (
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
