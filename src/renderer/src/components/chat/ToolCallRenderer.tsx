@@ -750,6 +750,13 @@ export function ToolCallRenderer({
         if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
           return (
             <div className="space-y-2">
+              <div className={'overflow-scroll'}>
+                <ReactDiffViewer
+                  oldValue={args.old_string || ""}
+                  newValue={args.new_string  || ""}
+                  splitView={true}
+                />
+              </div>
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
                 <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
