@@ -551,7 +551,8 @@ The workspace root is: ${workspacePath}`
     }
   }
 
-  const extraTools = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extraTools: any[] = []
   if (!options.noSchedulerTool) {
     extraTools.push(createSchedulerTool({
       workspacePath,

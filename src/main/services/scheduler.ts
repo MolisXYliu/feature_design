@@ -166,14 +166,10 @@ async function executeTask(taskId: string): Promise<void> {
       for (const evt of events) {
         broadcastToChannel(channel, evt)
         // Capture last assistant text for notification
-        if (evt.type === "message" && evt.message?.role === "assistant") {
-          const content = evt.message.content
-          const text = typeof content === "string"
-            ? content
-            : Array.isArray(content)
-              ? content.filter((b: { type: string; text?: string }) => b.type === "text").map((b: { text?: string }) => b.text ?? "").join("")
-              : ""
-          if (text.trim()) lastAssistantText = text.trim()
+        if (evt.type === "full-messages") {
+          const assistantMsgs = evt.messages.filter((m) => m.role === "assistant")
+          const last = assistantMsgs[assistantMsgs.length - 1]
+          if (last?.content?.trim()) lastAssistantText = last.content.trim()
         }
       }
       hasStreamedContent = true
