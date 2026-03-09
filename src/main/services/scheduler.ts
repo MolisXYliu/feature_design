@@ -1,20 +1,47 @@
 import { v4 as uuid } from "uuid"
-import { BrowserWindow } from "electron"
+import { BrowserWindow, Notification } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
-import { getScheduledTasks, updateScheduledTaskRunResult } from "../storage"
-import { createAgentRuntime } from "../agent/runtime"
+import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord } from "../storage"
+import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread } from "../db"
 import { StreamConverter } from "../agent/stream-converter"
 
 const TICK_INTERVAL_MS = 60_000
+const ONCE_EXPIRE_MS = 30 * 60_000 // once tasks older than 30 min are auto-disabled instead of executed
 let tickTimer: ReturnType<typeof setTimeout> | null = null
 const runningTasks = new Set<string>()
 const activeAbortControllers = new Map<string, AbortController>()
+
+function recordRun(
+  taskId: string, taskName: string, startedAt: Date,
+  status: "ok" | "error", error: string | null
+): void {
+  const finishedAt = new Date()
+  addTaskRunRecord({
+    id: uuid(), taskId, taskName,
+    startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
+    status, error, durationMs: finishedAt.getTime() - startedAt.getTime()
+  })
+}
 
 function notifyRenderer(channel: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel)
   }
+}
+
+const NOTIFICATION_BODY_MAX = 200
+
+function showTaskNotification(taskName: string, status: "ok" | "error", body?: string): void {
+  if (!Notification.isSupported()) return
+  const title = status === "ok" ? `✅ ${taskName}` : `❌ ${taskName}`
+  let text = status === "ok"
+    ? (body || "任务已完成")
+    : (body || "任务执行失败")
+  if (text.length > NOTIFICATION_BODY_MAX) {
+    text = text.slice(0, NOTIFICATION_BODY_MAX - 3) + "..."
+  }
+  new Notification({ title, body: text }).show()
 }
 
 export function startScheduler(): void {
@@ -53,6 +80,12 @@ function tick(): void {
 
       const nextRun = new Date(task.nextRunAt)
       if (now >= nextRun) {
+        if (task.frequency === "once" && now.getTime() - nextRun.getTime() > ONCE_EXPIRE_MS) {
+          console.log(`[Scheduler] Once task expired (>${ONCE_EXPIRE_MS / 60_000}min late), auto-disabling: ${task.name}`)
+          setScheduledTaskEnabled(task.id, false)
+          notifyRenderer("scheduledTasks:changed")
+          continue
+        }
         executeTask(task.id).catch((err) => {
           console.error(`[Scheduler] Task ${task.id} failed:`, err)
         })
@@ -82,6 +115,7 @@ async function executeTask(taskId: string): Promise<void> {
   activeAbortControllers.set(taskId, abortController)
   notifyRenderer("scheduledTasks:changed")
   console.log(`[Scheduler] Executing task: ${task.name} (${taskId})`)
+  const startedAt = new Date()
 
   const threadId = uuid()
   const channel = `scheduler:stream:${threadId}`
@@ -107,7 +141,8 @@ async function executeTask(taskId: string): Promise<void> {
     const agent = await createAgentRuntime({
       threadId,
       workspacePath,
-      modelId: task.modelId || undefined
+      modelId: task.modelId || undefined,
+      noSchedulerTool: true
     })
 
     const converter = new StreamConverter()
@@ -122,6 +157,7 @@ async function executeTask(taskId: string): Promise<void> {
       }
     )
 
+    let lastAssistantText = ""
     for await (const chunk of stream) {
       if (abortController.signal.aborted) break
       const [mode, data] = chunk as [string, unknown]
@@ -129,6 +165,16 @@ async function executeTask(taskId: string): Promise<void> {
       const events = converter.processChunk(mode, serialized)
       for (const evt of events) {
         broadcastToChannel(channel, evt)
+        // Capture last assistant text for notification
+        if (evt.type === "message" && evt.message?.role === "assistant") {
+          const content = evt.message.content
+          const text = typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content.filter((b: { type: string; text?: string }) => b.type === "text").map((b: { text?: string }) => b.text ?? "").join("")
+              : ""
+          if (text.trim()) lastAssistantText = text.trim()
+        }
       }
       hasStreamedContent = true
     }
@@ -136,26 +182,35 @@ async function executeTask(taskId: string): Promise<void> {
     if (!abortController.signal.aborted) {
       broadcastToChannel(channel, { type: "done" })
       updateScheduledTaskRunResult(taskId, "ok", null)
+      recordRun(taskId, task.name, startedAt, "ok", null)
+      if (task.frequency === "once") {
+        setScheduledTaskEnabled(taskId, false)
+        console.log(`[Scheduler] Once task auto-disabled: ${task.name}`)
+      }
+      showTaskNotification(task.name, "ok", lastAssistantText)
       console.log(`[Scheduler] Task completed: ${task.name}`)
     } else {
       broadcastToChannel(channel, { type: "done" })
       updateScheduledTaskRunResult(taskId, "error", "Cancelled by user")
+      recordRun(taskId, task.name, startedAt, "error", "Cancelled by user")
       console.log(`[Scheduler] Task cancelled: ${task.name}`)
     }
   } catch (error) {
     const isAbortError =
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"))
+    const errMsg = isAbortError ? "Cancelled by user" : (error instanceof Error ? error.message : String(error))
     if (isAbortError) {
       broadcastToChannel(channel, { type: "done" })
-      updateScheduledTaskRunResult(taskId, "error", "Cancelled by user")
+      updateScheduledTaskRunResult(taskId, "error", errMsg)
       console.log(`[Scheduler] Task cancelled: ${task.name}`)
     } else {
-      const message = error instanceof Error ? error.message : String(error)
-      broadcastToChannel(channel, { type: "error", error: message })
-      updateScheduledTaskRunResult(taskId, "error", message)
-      console.error(`[Scheduler] Task error: ${task.name}:`, message)
+      broadcastToChannel(channel, { type: "error", error: errMsg })
+      updateScheduledTaskRunResult(taskId, "error", errMsg)
+      showTaskNotification(task.name, "error", errMsg)
+      console.error(`[Scheduler] Task error: ${task.name}:`, errMsg)
     }
+    recordRun(taskId, task.name, startedAt, "error", errMsg)
     // Clean up empty thread if runtime failed before any content was streamed
     if (threadCreated && !hasStreamedContent) {
       try {
@@ -167,6 +222,7 @@ async function executeTask(taskId: string): Promise<void> {
   } finally {
     runningTasks.delete(taskId)
     activeAbortControllers.delete(taskId)
+    closeCheckpointer(threadId).catch(() => {})
     notifyRenderer("scheduledTasks:changed")
     notifyRenderer("threads:changed")
   }

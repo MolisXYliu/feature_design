@@ -754,9 +754,11 @@ export function computeNextRunAt(
   frequency: import("./types").ScheduledTaskFrequency,
   from: Date = new Date(),
   runAtTime?: string | null,
-  weekday?: number | null
+  weekday?: number | null,
+  runAt?: string | null
 ): string | null {
   if (frequency === "manual") return null
+  if (frequency === "once") return runAt ?? null
   const { hour, minute } = parseTime(runAtTime)
 
   if (frequency === "hourly") {
@@ -839,6 +841,7 @@ export function upsertScheduledTask(
     modelId: config.modelId,
     workDir: config.workDir,
     frequency: config.frequency,
+    runAt: config.runAt ?? existing?.runAt ?? null,
     runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
     weekday: config.weekday ?? existing?.weekday ?? null,
     enabled: config.enabled ?? existing?.enabled ?? true,
@@ -851,7 +854,8 @@ export function upsertScheduledTask(
       config.frequency,
       new Date(),
       config.runAtTime ?? existing?.runAtTime ?? null,
-      config.weekday ?? existing?.weekday ?? null
+      config.weekday ?? existing?.weekday ?? null,
+      config.runAt ?? existing?.runAt ?? null
     )
   }
   const index = items.findIndex((i) => i.id === id)
@@ -868,6 +872,9 @@ export function deleteScheduledTask(id: string): void {
   getOpenworkDir()
   const items = getScheduledTasks().filter((i) => i.id !== id)
   writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(items, null, 2))
+  // Clean up run history for the deleted task
+  const runs = readTaskRuns().filter((r) => r.taskId !== id)
+  writeFileSync(TASK_RUNS_FILE, JSON.stringify(runs, null, 2))
 }
 
 export function setScheduledTaskEnabled(id: string, enabled: boolean): void {
@@ -879,9 +886,14 @@ export function setScheduledTaskEnabled(id: string, enabled: boolean): void {
   const next = items.map((i) => {
     if (i.id !== id) return i
     const updated = { ...i, enabled, updatedAt: now.toISOString() }
-    // Recompute nextRunAt when enabling to avoid stale past timestamps
     if (enabled && i.frequency !== "manual") {
-      updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday)
+      if (i.frequency === "once") {
+        // Don't re-arm a once task whose runAt has already passed
+        const runAtDate = i.runAt ? new Date(i.runAt) : null
+        updated.nextRunAt = runAtDate && runAtDate > now ? i.runAt : null
+      } else {
+        updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt)
+      }
     }
     return updated
   })
@@ -905,12 +917,56 @@ export function updateScheduledTaskRunResult(
           lastRunAt: now.toISOString(),
           lastRunStatus: status,
           lastRunError: error,
-          nextRunAt: computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday),
+          nextRunAt: i.frequency === "once" ? null : computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt),
           updatedAt: now.toISOString()
         }
       : i
   )
   writeFileSync(SCHEDULED_TASKS_FILE, JSON.stringify(next, null, 2))
+}
+
+// Task Run History
+const TASK_RUNS_FILE = join(OPENWORK_DIR, "task-runs.json")
+const MAX_RUNS_PER_TASK = 20
+const MAX_TOTAL_RUNS = 200
+
+function readTaskRuns(): import("./types").TaskRunRecord[] {
+  getOpenworkDir()
+  if (!existsSync(TASK_RUNS_FILE)) return []
+  try {
+    const content = readFileSync(TASK_RUNS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is import("./types").TaskRunRecord =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).taskId === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function addTaskRunRecord(record: import("./types").TaskRunRecord): void {
+  getOpenworkDir()
+  const runs = readTaskRuns()
+  runs.unshift(record)
+  // Trim: keep at most MAX_TOTAL_RUNS overall, MAX_RUNS_PER_TASK per task
+  const counts = new Map<string, number>()
+  const trimmed = runs.filter((r) => {
+    const n = (counts.get(r.taskId) ?? 0) + 1
+    counts.set(r.taskId, n)
+    return n <= MAX_RUNS_PER_TASK
+  }).slice(0, MAX_TOTAL_RUNS)
+  writeFileSync(TASK_RUNS_FILE, JSON.stringify(trimmed, null, 2))
+}
+
+export function getTaskRunHistory(taskId: string, limit = 10): import("./types").TaskRunRecord[] {
+  return readTaskRuns()
+    .filter((r) => r.taskId === taskId)
+    .slice(0, limit)
 }
 
 // Heartbeat

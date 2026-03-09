@@ -1,7 +1,7 @@
 import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
 import { getHeartbeatConfig, getHeartbeatContent, saveHeartbeatConfig } from "../storage"
-import { createAgentRuntime, getCheckpointer } from "../agent/runtime"
+import { createAgentRuntime, getCheckpointer, closeCheckpointer } from "../agent/runtime"
 import {
   createThread as dbCreateThread,
   getThread as dbGetThread,
@@ -265,7 +265,8 @@ async function executeHeartbeat(): Promise<void> {
       threadId,
       workspacePath: config.workDir,
       modelId: config.modelId || undefined,
-      extraSystemPrompt: heartbeatContext
+      extraSystemPrompt: heartbeatContext,
+      noSchedulerTool: true
     })
 
     const converter = new StreamConverter()
@@ -342,6 +343,7 @@ async function executeHeartbeat(): Promise<void> {
   } finally {
     running = false
     abortController = null
+    closeCheckpointer(HEARTBEAT_THREAD_ID).catch(() => {})
     notifyRenderer("heartbeat:changed")
     notifyRenderer("threads:changed")
   }

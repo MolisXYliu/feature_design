@@ -208,7 +208,7 @@ export interface McpConnectorUpsert {
 }
 
 // Scheduled Task types
-export type ScheduledTaskFrequency = "manual" | "hourly" | "daily" | "weekdays" | "weekly"
+export type ScheduledTaskFrequency = "once" | "manual" | "hourly" | "daily" | "weekdays" | "weekly"
 
 export interface ScheduledTask {
   id: string
@@ -218,6 +218,7 @@ export interface ScheduledTask {
   modelId: string | null
   workDir: string | null
   frequency: ScheduledTaskFrequency
+  runAt: string | null            // ISO 时间戳，仅 once 类型使用
   runAtTime: string | null       // "HH:mm" 格式，如 "09:00"
   weekday: number | null          // 0=周日, 1=周一, ..., 6=周六 (仅 weekly 使用)
   enabled: boolean
@@ -236,9 +237,21 @@ export interface ScheduledTaskUpsert {
   modelId: string | null
   workDir: string | null
   frequency: ScheduledTaskFrequency
+  runAt?: string | null
   runAtTime?: string | null
   weekday?: number | null
   enabled?: boolean
+}
+
+export interface TaskRunRecord {
+  id: string
+  taskId: string
+  taskName: string
+  startedAt: string
+  finishedAt: string
+  status: "ok" | "error"
+  error: string | null
+  durationMs: number
 }
 
 // Heartbeat types

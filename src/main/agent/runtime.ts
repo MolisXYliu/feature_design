@@ -45,6 +45,7 @@ import { app } from "electron"
 import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
+import { createSchedulerTool } from "./tools/scheduler-tool"
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -233,6 +234,27 @@ function getShellInfo(): { name: string; isBashLike: boolean } {
   return { name: base, isBashLike }
 }
 
+/** Format a Date as local ISO-8601 with UTC offset, e.g. 2026-03-08T23:01:26+08:00 */
+function formatLocalISO(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false
+  }).formatToParts(date)
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? ""
+  const local = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`
+  // Compute UTC offset
+  const utc = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }))
+  const loc = new Date(date.toLocaleString("en-US", { timeZone }))
+  const offsetMin = Math.round((loc.getTime() - utc.getTime()) / 60_000)
+  const sign = offsetMin >= 0 ? "+" : "-"
+  const absMin = Math.abs(offsetMin)
+  const oh = String(Math.floor(absMin / 60)).padStart(2, "0")
+  const om = String(absMin % 60).padStart(2, "0")
+  return `${local}${sign}${oh}:${om}`
+}
+
 function getSystemPrompt(workspacePath: string): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
@@ -245,10 +267,13 @@ function getSystemPrompt(workspacePath: string): string {
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const workingDirSection = `
 ### System Environment
 - Operating system: ${platform} (${process.arch})
 - Default shell: ${shell}
+- Timezone: ${timezone}
+- Current time: ${formatLocalISO(new Date(), timezone)}
 ${shellGuidance}
 
 ### File System and Paths
@@ -343,6 +368,8 @@ export interface CreateAgentRuntimeOptions {
   workspacePath: string
   /** Extra content appended to the system prompt (e.g. HEARTBEAT.md context) */
   extraSystemPrompt?: string
+  /** Skip the manage_scheduler tool (used by scheduled task / heartbeat execution to prevent recursive scheduling) */
+  noSchedulerTool?: boolean
 }
 
 // Create agent runtime with configured model and checkpointer
@@ -524,6 +551,15 @@ The workspace root is: ${workspacePath}`
     }
   }
 
+  const extraTools = []
+  if (!options.noSchedulerTool) {
+    extraTools.push(createSchedulerTool({
+      workspacePath,
+      modelId: options.modelId,
+      threadId: options.threadId
+    }))
+  }
+
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
@@ -532,7 +568,7 @@ The workspace root is: ${workspacePath}`
 
   const agent = createDeepAgent({
     model,
-    tools: [...mcpTools, ...memoryTools],
+    tools: [...mcpTools, ...memoryTools, ...extraTools],
     checkpointer,
     backend,
     systemPrompt,
