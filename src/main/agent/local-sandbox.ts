@@ -84,7 +84,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.id = `local-sandbox-${randomUUID().slice(0, 8)}`
     this.timeout = options.timeout ?? 120_000 // 2 minutes default
     this.maxOutputBytes = options.maxOutputBytes ?? 100_000 // ~100KB default
-    this.env = options.env ?? ({ ...process.env } as Record<string, string>)
+    const baseEnv = options.env ?? ({ ...process.env } as Record<string, string>)
+    // Ensure UTF-8 locale for spawned shells (Git Bash via pipe defaults to
+    // Windows console code page, e.g. GBK, producing garbled CJK output)
+    if (process.platform === "win32") {
+      baseEnv.LANG ??= "C.UTF-8"
+      baseEnv.LC_ALL ??= "C.UTF-8"
+    }
+    this.env = baseEnv
     this.workingDir = options.rootDir ?? process.cwd()
 
     // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
@@ -454,10 +461,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   /**
-   * Detect encoding for command output (Windows cmd.exe/PowerShell uses system code page).
-   * Only meaningful for non-bash shells; bash-like shells (Git Bash) always output UTF-8.
-   * Requires high confidence (>= 0.8) from jschardet to override UTF-8 default, as a
-   * defensive measure against potential encoding misidentification on short output.
+   * Detect encoding for command output on Windows.
+   * Git Bash via pipe may output in the system code page (e.g. GBK) despite
+   * LANG=C.UTF-8, because MSYS2's character conversion layer uses the Windows
+   * ANSI code page for non-pty file descriptors.
+   *
+   * Two-pronged detection:
+   * 1. High-confidence jschardet (>= 0.8) — trust directly.
+   * 2. If buffer is NOT valid UTF-8 — accept jschardet at any confidence,
+   *    since it's clearly not UTF-8. This handles short CJK output
+   *    (e.g. `echo "中文"` → 4 GBK bytes) where jschardet reports low
+   *    confidence but the detected encoding (GB2312/GB18030) is correct.
    */
   private static readonly CHARDET_CONFIDENCE_THRESHOLD = 0.8
 
@@ -467,15 +481,28 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (!detected) return "utf-8"
     const enc = typeof detected === "string" ? detected : detected.encoding
     const confidence = typeof detected === "object" ? detected.confidence : 1
-    if (
-      enc
-      && confidence >= LocalSandbox.CHARDET_CONFIDENCE_THRESHOLD
-      && enc.toLowerCase() !== "ascii"
-      && iconv.encodingExists(enc)
-    ) {
+    if (!enc || enc.toLowerCase() === "ascii" || !iconv.encodingExists(enc)) {
+      return "utf-8"
+    }
+    if (confidence >= LocalSandbox.CHARDET_CONFIDENCE_THRESHOLD) {
+      return enc
+    }
+    // Low confidence but buffer contains invalid UTF-8 — definitely not UTF-8,
+    // trust jschardet's best guess (typically GBK/GB2312 on Chinese Windows)
+    if (!LocalSandbox.isValidUtf8(buf)) {
       return enc
     }
     return "utf-8"
+  }
+
+  /** Quick check whether a buffer is valid UTF-8. */
+  private static isValidUtf8(buf: Buffer): boolean {
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(buf)
+      return true
+    } catch {
+      return false
+    }
   }
 
   private static readonly SEARCH_IGNORE = [
@@ -703,11 +730,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const shellBase = path.basename(shell).replace(/\.exe$/i, "")
     const isBashLikeShell = ["bash", "sh", "zsh"].includes(shellBase)
 
+    // On Windows with cmd.exe, force UTF-8 code page so CJK output isn't garbled.
+    // For Git Bash, encoding detection handles the conversion instead (see collectAndResolve).
+    const effectiveCommand = isWindows && !isBashLikeShell
+      ? `chcp 65001 >nul & ${command}`
+      : command
+
     // On Windows, spawn can transiently fail with EPERM (antivirus file lock, handle
     // contention). Retry up to SPAWN_RETRY_COUNT times with a short delay.
     const maxAttempts = isWindows ? LocalSandbox.SPAWN_RETRY_COUNT + 1 : 1
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.executeOnce(command, shell, isBashLikeShell, isWindows)
+      const result = await this.executeOnce(effectiveCommand, shell, isWindows)
       const isSpawnEperm =
         result.exitCode === 1
         && result.output.startsWith("Error: Failed to execute command:")
@@ -727,7 +760,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private executeOnce(
     command: string,
     shell: string,
-    isBashLikeShell: boolean,
     isWindows: boolean
   ): Promise<ExecuteResponse> {
     return new Promise<ExecuteResponse>((resolve) => {
@@ -795,10 +827,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
 
-        // Git Bash (and other bash-like shells) output UTF-8 even on Windows.
-        // Only probe encoding for native Windows shells (cmd.exe, PowerShell).
-        const enc = isWindows && !isBashLikeShell
-          ? this.detectCmdEncoding(stdoutBuf.length > 0 ? stdoutBuf : stderrBuf)
+        // On Windows, Git Bash via pipe may convert UTF-8 to the system code
+        // page (e.g. GBK/CP936) despite LANG=C.UTF-8, because MSYS2's
+        // character conversion layer uses the Windows ANSI code page for
+        // non-pty file descriptors. Detect the actual encoding from the
+        // output buffer so CJK characters are decoded correctly.
+        const enc = isWindows
+          ? this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
           : "utf-8"
 
         let output = ""
