@@ -179,9 +179,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     for (const match of results) {
       if (capped.length >= LocalSandbox.MAX_GREP_MATCHES) break
-      const estChars = match.path.length + match.text.length + 16
+      // Truncate overly long lines (e.g. minified JS) to avoid blowing the char budget
+      const text =
+        match.text.length > 1000
+          ? match.text.slice(0, 1000) + "...(truncated)"
+          : match.text
+      const estChars = match.path.length + text.length + 16
       if (charCount + estChars > LocalSandbox.MAX_GREP_CHARS) break
-      capped.push(match)
+      capped.push(text !== match.text ? { ...match, text } : match)
       charCount += estChars
     }
 
