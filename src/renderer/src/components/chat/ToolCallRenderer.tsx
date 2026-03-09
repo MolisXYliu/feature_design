@@ -394,7 +394,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
     <>
       {/* Header with controls */}
       <div className=" flex items-center justify-between gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
-        <div>Git Diff 代码变更查看</div>
+        <div>Git Diff 代码变更查看 （默认显示前20行）</div>
        <div className={'flex space-x-2 '}>
          {isLargeDiff && (
            <div className="flex items-center gap-1">
