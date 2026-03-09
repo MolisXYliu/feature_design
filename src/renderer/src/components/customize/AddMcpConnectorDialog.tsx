@@ -129,7 +129,7 @@ export function AddMcpConnectorDialog(props: {
         const config: McpConnectorUpsert = {
           name: trimmedName,
           url: trimmedUrl,
-          enabled: editConnector ? editConnector.enabled : true,
+          enabled: editConnector ? editConnector.enabled : false,
           advanced: Object.keys(advanced).length > 0 ? advanced : undefined
         }
       if (editConnector) {
