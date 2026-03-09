@@ -380,7 +380,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
           height: isFullscreen ? "100%" : "auto"
         },
         line: {
-          lineHeight: "1.4",
+          lineHeight: "1.6",
           fontSize:'1rem'
         },
         contentText:{
@@ -552,20 +552,6 @@ export function ToolCallRenderer({
       case "execute": {
         const command = args.command as string
         const output = typeof result === "string" ? result : undefined
-
-        // Special handling for git diff commands
-        if (command && command.includes("git diff") && output && !output.includes('no output') && isExpanded) {
-          return (
-            <div className="text-xs space-y-2 w-full overflow-hidden">
-              <div className="font-mono bg-background rounded-sm p-2 flex items-center gap-2 min-w-0">
-                <span className="text-status-info shrink-0">$</span>
-                <span className="truncate">{command}</span>
-              </div>
-              <DiffDisplay diff={output} />
-            </div>
-          )
-        }
-
         return <CommandDisplay command={command} output={isExpanded ? output : undefined} />
       }
 
