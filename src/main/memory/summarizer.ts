@@ -4,43 +4,51 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } fr
 import { join } from "path"
 import { getMemoryStore } from "./store"
 
-const SUMMARIZE_SYSTEM_PROMPT = `You are a memory assistant. Your job is to extract durable, reusable knowledge from a conversation.
+const SUMMARIZE_SYSTEM_PROMPT = `You are a memory extraction agent. Extract ONLY durable facts from this conversation.
 
-Output a concise markdown summary (2-8 bullet points) covering:
-- Key decisions made
-- User preferences or corrections discovered
-- Important facts or context learned
-- Action items or todos mentioned
+Output a flat bullet list (2-6 items) of facts worth remembering for future conversations.
+
+GOOD examples:
+- 用户偏好使用 TypeScript 和 Electron 开发
+- 项目名为 checkerframework-build-server，技术栈 Java 1.8 + Spring Boot
+- 用户要求代码审查时重点关注安全问题
+
+BAD examples (NEVER output these):
+- 用户询问了项目功能 ← 这是描述对话过程，不是事实
+- The user wants me to extract knowledge ← 这是推理过程
+- 助手分析了代码结构并提供了总结 ← 这是描述行为
 
 Rules:
-- Be concise — each bullet should be one line
-- Focus on information useful for FUTURE conversations
-- Skip transient details (greetings, acknowledgments, one-time lookups)
-- Never include API keys, passwords, or credentials
-- If the conversation has nothing worth remembering, respond with exactly: NO_MEMORY
-- Write in the same language the user used in the conversation`
+- Each bullet = one durable fact, ONE line, no sub-bullets
+- Extract facts: user preferences, project context, technical decisions, personal info
+- NEVER describe the conversation ("用户询问了...", "助手回复了...")
+- NEVER include reasoning or chain-of-thought
+- NEVER include API keys, passwords, or credentials
+- If nothing worth remembering, respond with exactly: NO_MEMORY
+- Write in the same language the user used`
 
-const SUMMARIZE_USER_PROMPT = `Summarize the following conversation for long-term memory:\n\n`
+const SUMMARIZE_USER_PROMPT = `Extract durable facts from this conversation:\n\n`
+const MAX_CONVERSATION_CHARS = 6000
 
 export interface SummarizeOptions {
   model: ChatOpenAI
-  userMessage: string
-  assistantResponse: string
+  conversation: string
   memoryDir: string
 }
 
 export async function summarizeAndSave(options: SummarizeOptions): Promise<void> {
-  const { model, userMessage, assistantResponse, memoryDir } = options
+  const { model, conversation, memoryDir } = options
 
-  if (!userMessage.trim() || !assistantResponse.trim()) return
+  if (!conversation.trim()) return
 
   try {
-    const conversationText =
-      `User: ${userMessage}\n\nAssistant: ${assistantResponse}`
+    const truncated = conversation.length > MAX_CONVERSATION_CHARS
+      ? conversation.slice(0, MAX_CONVERSATION_CHARS) + "\n...(truncated)"
+      : conversation
 
     const response = await model.invoke([
       new SystemMessage(SUMMARIZE_SYSTEM_PROMPT),
-      new HumanMessage(SUMMARIZE_USER_PROMPT + conversationText)
+      new HumanMessage(SUMMARIZE_USER_PROMPT + truncated)
     ])
 
     const summary = typeof response.content === "string"

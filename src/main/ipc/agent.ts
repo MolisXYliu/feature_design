@@ -14,6 +14,8 @@ import type {
   AgentCancelParams
 } from "../types"
 
+const MIN_CHARS_FOR_MEMORY = 200
+
 // Track active runs for cancellation
 const activeRuns = new Map<string, AbortController>()
 
@@ -102,34 +104,30 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       )
 
       let assistantText = ""
-
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
 
-        // With multiple stream modes, chunks are tuples: [mode, data]
         const [mode, data] = chunk as [string, unknown]
 
-        // Collect assistant response text for memory summarization
         if (mode === "messages") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const msgData = data as any
-          const msg = msgData?.[0]
-          if (msg && (msg._getType?.() === "ai" || msg.type === "ai")) {
-            const content = msg.content
-            if (typeof content === "string") {
-              assistantText += content
-            } else if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block?.type === "text" && typeof block.text === "string") {
-                  assistantText += block.text
-                }
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const [msgChunk] = data as [any]
+            const type = msgChunk?._getType?.() ?? msgChunk?.type
+            if (type === "ai" && msgChunk?.content) {
+              const c = msgChunk.content
+              if (typeof c === "string") {
+                assistantText += c
+              } else if (Array.isArray(c)) {
+                assistantText += c
+                  .filter((b: { type: string }) => b?.type === "text")
+                  .map((b: { text?: string }) => b.text ?? "")
+                  .join("")
               }
             }
-          }
+          } catch { /* best-effort */ }
         }
 
-        // Forward raw stream events - transport layer handles parsing
-        // Serialize to plain objects for IPC (class instances don't transfer)
         const serialized = JSON.parse(JSON.stringify(data))
 
         window.webContents.send(channel, {
@@ -139,12 +137,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
 
-      // Send done event (only if not aborted)
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
 
-        // Background: summarize conversation and save to memory (gated)
-        if (isMemoryEnabled()) {
+        const conversation = assistantText.trim()
+          ? `User: ${message}\n\nAssistant: ${assistantText}`
+          : ""
+
+        if (isMemoryEnabled() && conversation.length >= MIN_CHARS_FOR_MEMORY) {
           const memoryStore = await getMemoryStore()
           const allConfigs = getCustomModelConfigs()
           const config = allConfigs.find((c) => c.id === (modelId?.replace("custom:", "") ?? "")) || allConfigs[0]
@@ -157,8 +157,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                 apiKey: config.apiKey,
                 configuration: { baseURL: config.baseUrl }
               }),
-              userMessage: message,
-              assistantResponse: assistantText,
+              conversation,
               memoryDir: memoryStore.getMemoryDir()
             }).catch((e) => console.warn("[Agent] Memory summarize failed:", e))
           }
