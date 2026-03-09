@@ -382,6 +382,9 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
         line: {
           lineHeight: "1.4",
           fontSize:'1rem'
+        },
+        contentText:{
+          fontFamily:'Consolas'
         }
       }}
     />
