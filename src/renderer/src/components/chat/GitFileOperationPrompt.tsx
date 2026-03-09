@@ -22,6 +22,7 @@ export function GitFileOperationPrompt({ filePath, operation }: GitFileOperation
     ahead?: number
     behind?: number
   }>({})
+  const [cardNumber, setCardNumber] = useState("")
 
   useEffect(() => {
     // 生成智能提交信息
@@ -149,7 +150,7 @@ export function GitFileOperationPrompt({ filePath, operation }: GitFileOperation
 
     const commands = [
       `git -C "${repoPath}" add "${filePath}"`,
-      `git -C "${repoPath}" commit -m "${commitMessage.trim()}"`,
+      `git -C "${repoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()}"`,
       gitInfo.hasRemote ? `git -C "${repoPath}" push` : null
     ].filter(Boolean) as string[]
 
@@ -285,6 +286,19 @@ export function GitFileOperationPrompt({ filePath, operation }: GitFileOperation
         />
       </div>
 
+      {/* 卡片编号 */}
+      <div className="space-y-2">
+        <div className="text-xs font-medium">卡片编号:</div>
+        <input
+          type="text"
+          value={cardNumber}
+          onChange={(e) => setCardNumber(e.target.value)}
+          disabled={isExecuting}
+          placeholder="请输入卡片编号..."
+          className="w-full p-2 text-xs border border-border rounded"
+        />
+      </div>
+
       {/* 执行步骤显示 */}
       {(isExecuting || executionResult) && (
         <div className="space-y-2">
@@ -383,7 +397,7 @@ export function GitFileOperationPrompt({ filePath, operation }: GitFileOperation
       <div className="flex items-center gap-2">
         <button
           onClick={executeGitCommands}
-          disabled={isExecuting || !commitMessage.trim() || (executionResult?.success === true)}
+          disabled={isExecuting || !commitMessage.trim() || !cardNumber.trim() || (executionResult?.success === true)}
           className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Play className="size-3" />
