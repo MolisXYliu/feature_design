@@ -38,7 +38,7 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
   const fetchGitInfo = async () => {
     try {
       // 根据文件路径确定正确的Git仓库根目录
-      const fileDir = filePath.substring(0, filePath.lastIndexOf('/')) || '.'
+      const fileDir = filePath.replace(/[/\\][^/\\]*$/, '') || '.'
       const repoPath = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${fileDir}" rev-parse --show-toplevel`) as string
 
       // 获取当前分支（在正确的仓库中）
@@ -139,7 +139,8 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
     // 根据文件路径确定正确的Git仓库根目录
     let repoPath = ""
     try {
-      const fileDir = filePath.substring(0, filePath.lastIndexOf('/')) || '.'
+      const fileDir = filePath.replace(/[/\\][^/\\]*$/, '') || '.'
+      console.log(fileDir, filePath, 'fileDir=')
       repoPath = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${fileDir}" rev-parse --show-toplevel`) as string
       repoPath = repoPath.trim()
     } catch (error) {
