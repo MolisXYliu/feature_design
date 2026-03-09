@@ -338,7 +338,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
 
   // Performance optimization: only show preview for large diffs
   const isLargeDiff = totalLines > 100
-  const maxPreviewLines = 50
+  const maxPreviewLines = 20
 
   // Get preview content (first N lines)
   const getPreviewContent = (content: string, maxLines: number) => {
@@ -380,7 +380,8 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
           height: isFullscreen ? "100%" : "auto"
         },
         line: {
-          lineHeight: "1.4"
+          lineHeight: "1.4",
+          fontSize:'1rem'
         }
       }}
     />
@@ -399,7 +400,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
               </span>
              <button
                onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-               className="cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
+               className="text-[14px] cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
                title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
              >
                {renderMode === "preview" ?  "显示全部代码" : "显示少量代码"}
@@ -408,7 +409,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
          )}
          <button
            onClick={() => setIsFullscreen(true)}
-           className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
+           className="text-[14px] cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
            title="全屏查看diff"
          >
            <Maximize2 className="size-3" />
@@ -453,7 +454,10 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
                   {renderMode === "preview" ? "显示全部代码" : "显示少量代码"}
                 </button>
                 <button
-                  onClick={() => setIsFullscreen(false)}
+                  onClick={() => {
+                    setIsFullscreen(false)
+                    setRenderMode('preview')
+                  }}
                   className="cursor-pointer p-1.5 hover:bg-muted border border-border rounded transition-colors"
                   title="退出全屏"
                 >
