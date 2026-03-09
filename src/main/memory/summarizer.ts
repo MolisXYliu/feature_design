@@ -51,9 +51,14 @@ export async function summarizeAndSave(options: SummarizeOptions): Promise<void>
       new HumanMessage(SUMMARIZE_USER_PROMPT + truncated)
     ])
 
-    const summary = typeof response.content === "string"
+    let summary = typeof response.content === "string"
       ? response.content
       : JSON.stringify(response.content)
+
+    // Strip <think>...</think> blocks that some models (DeepSeek, Qwen, etc.) emit
+    // Also handle cases where opening <think> is missing (content before lone </think>)
+    summary = summary.replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+    summary = summary.replace(/^[\s\S]*?<\/think>\s*/g, "")
 
     if (!summary.trim() || summary.trim() === "NO_MEMORY") return
 
