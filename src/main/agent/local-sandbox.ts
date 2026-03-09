@@ -770,13 +770,40 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let resolved = false
       let exited = false
 
-      const proc = spawn(command, {
-        shell,
-        cwd: this.workingDir,
-        env: this.env,
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: !isWindows
-      })
+      // On Windows with bash-like shells (Git Bash / MSYS2), non-ASCII
+      // characters in command-line arguments get corrupted: MSYS2's runtime
+      // converts the UTF-16 command line to the system ANSI code page (e.g.
+      // CP936/GBK) during process startup — before bash or LANG=C.UTF-8
+      // take effect. This causes any CJK characters in the command to be
+      // garbled, making bash treat the entire string as a filename (exit 127).
+      //
+      // Fix: pipe the command through stdin as raw UTF-8 bytes, completely
+      // bypassing MSYS2's command-line argument parsing. Bash reads from
+      // stdin in non-interactive mode and executes the command correctly.
+      // Note: stdin was already "ignore" (commands couldn't read stdin anyway),
+      // so changing to "pipe" has no practical side effects.
+      const shellBase = path.basename(shell).replace(/\.exe$/i, "")
+      const isBashOnWin = isWindows && ["bash", "sh", "zsh"].includes(shellBase)
+
+      const proc = isBashOnWin
+        ? spawn(shell, [], {
+            cwd: this.workingDir,
+            env: this.env,
+            stdio: ["pipe", "pipe", "pipe"],
+            detached: false
+          })
+        : spawn(command, {
+            shell,
+            cwd: this.workingDir,
+            env: this.env,
+            stdio: ["ignore", "pipe", "pipe"],
+            detached: !isWindows
+          })
+
+      if (isBashOnWin && proc.stdin) {
+        proc.stdin.write(command + "\n")
+        proc.stdin.end()
+      }
 
       LocalSandbox.activeProcesses.add(proc)
 
