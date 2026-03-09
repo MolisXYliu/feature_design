@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react"
-import { GitBranch, AlertTriangle, Play, Check, X } from "lucide-react"
+import { GitBranch, Play, Check, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 
 interface GitFileOperationPromptProps {
   filePath: string
   operation: string // 'write_file' or 'edit_file'
+  onSkip?: () => void
 }
 
-export function GitFileOperationPrompt({ filePath, operation }: GitFileOperationPromptProps) {
+export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileOperationPromptProps) {
   const [showGitOptions, setShowGitOptions] = useState(false)
   const [commitMessage, setCommitMessage] = useState("")
   const [isExecuting, setIsExecuting] = useState(false)
@@ -204,7 +205,11 @@ export function GitFileOperationPrompt({ filePath, operation }: GitFileOperation
               提交到Git
             </button>
             <button
-              onClick={() => {/* 忽略提示 */}}
+              onClick={() => {
+                if (onSkip) {
+                  onSkip()
+                }
+              }}
               className="px-2 py-1 text-xs border border-blue-200 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
             >
               暂时跳过

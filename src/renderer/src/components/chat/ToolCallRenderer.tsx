@@ -494,11 +494,12 @@ export function ToolCallRenderer({
   isError,
   needsApproval,
   onApprovalDecision
-}: ToolCallRendererProps): React.JSX.Element | null {
+}: ToolCallRendererProps) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
+
   // Defensive: ensure args is always an object
   const args = toolCall?.args || {}
-
-  const [isExpanded, setIsExpanded] = useState(false)
 
   // Bail out if no toolCall
   if (!toolCall) {
@@ -746,14 +747,18 @@ export function ToolCallRenderer({
         }
 
         // Check if this operation might need Git commit (any file operation)
-        if (!isExpanded && path) {
+        if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
           return (
             <div className="space-y-2">
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
                 <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
               </div>
-              <GitFileOperationPrompt filePath={path} operation={toolCall.name} />
+              <GitFileOperationPrompt
+                filePath={path}
+                operation={toolCall.name}
+                onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+              />
             </div>
           )
         }
@@ -1008,11 +1013,10 @@ function MarkdownPreview({
   const gitCommands = extractGitCommands(content)
 
   // Execute Git command via IPC
-  const handleExecuteCommand = async (command: string) => {
+  const handleExecuteCommand = async (command: string): Promise<void> => {
     try {
-      const result = await window.electron.ipcRenderer.invoke('execute-git-command', command)
-      console.log('Git command executed:', command, 'Result:', result)
-      return result
+      await window.electron.ipcRenderer.invoke('execute-git-command', command)
+      console.log('Git command executed:', command)
     } catch (error) {
       console.error('Failed to execute Git command:', error)
       throw error
