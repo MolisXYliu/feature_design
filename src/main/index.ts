@@ -8,6 +8,7 @@ import { registerMcpHandlers } from "./ipc/mcp"
 import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
 import { registerHeartbeatHandlers } from "./ipc/heartbeat"
 import { registerMemoryHandlers } from "./ipc/memory"
+import { registerGitHandlers } from "./ipc/git"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -98,6 +99,7 @@ app.whenReady().then(async () => {
   registerScheduledTaskHandlers(ipcMain)
   registerHeartbeatHandlers(ipcMain)
   registerMemoryHandlers(ipcMain)
+  registerGitHandlers()
 
   // Register file system handlers
   ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {

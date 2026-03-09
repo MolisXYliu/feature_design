@@ -26,6 +26,8 @@ import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 import ReactMarkdown from "react-markdown"
+import { GitCommandExecutor } from "./GitCommandExecutor"
+import { GitFileOperationPrompt } from "./GitFileOperationPrompt"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -722,7 +724,7 @@ export function ToolCallRenderer({
         const path = (args.path || args.file_path) as string
         const content = args.content as string | undefined
         const newStr = args.new_str as string | undefined
-        const isMarkdownFile = path && (path.endsWith('.md') || path.endsWith('.markdown'))
+        const isMarkdownFile = path && (path.endsWith(".md") || path.endsWith(".markdown"))
 
         // For edit_file, we want to show the new content (new_str)
         // For write_file, we want to show the content
@@ -734,9 +736,24 @@ export function ToolCallRenderer({
             <div className="space-y-2">
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
-                <span>{toolCall.name === "edit_file" ? "Markdown file edited" : "Markdown file created"}</span>
+                <span>
+                  {toolCall.name === "edit_file" ? "Markdown file edited" : "Markdown file created"}
+                </span>
               </div>
               <MarkdownPreview content={markdownContent} path={path} />
+            </div>
+          )
+        }
+
+        // Check if this operation might need Git commit (any file operation)
+        if (!isExpanded && path) {
+          return (
+            <div className="space-y-2">
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
+              </div>
+              <GitFileOperationPrompt filePath={path} operation={toolCall.name} />
             </div>
           )
         }
@@ -951,6 +968,57 @@ function MarkdownPreview({
 }): React.JSX.Element {
   const [copySuccess, setCopySuccess] = useState(false)
 
+  // Extract Git commands from markdown bash code blocks
+  const extractGitCommands = (markdownContent: string) => {
+    const commands: Array<{ original: string; command: string; index: number }> = []
+    const codeBlockRegex = /```bash\s*([\s\S]*?)```/g
+    let match
+    let commandIndex = 0
+
+    while ((match = codeBlockRegex.exec(markdownContent)) !== null) {
+      const codeBlock = match[1].trim()
+      const lines = codeBlock.split('\n')
+
+      for (const line of lines) {
+        const trimmedLine = line.trim()
+        // Check if line contains git commands
+        if (trimmedLine.startsWith('git ') ||
+            trimmedLine.includes('git add') ||
+            trimmedLine.includes('git commit') ||
+            trimmedLine.includes('git push') ||
+            trimmedLine.includes('git pull') ||
+            trimmedLine.includes('git checkout') ||
+            trimmedLine.includes('git merge') ||
+            trimmedLine.includes('git status') ||
+            trimmedLine.includes('git diff') ||
+            trimmedLine.includes('git branch') ||
+            trimmedLine.includes('git log')) {
+          commands.push({
+            original: trimmedLine,
+            command: trimmedLine,
+            index: commandIndex++
+          })
+        }
+      }
+    }
+
+    return commands
+  }
+
+  const gitCommands = extractGitCommands(content)
+
+  // Execute Git command via IPC
+  const handleExecuteCommand = async (command: string) => {
+    try {
+      const result = await window.electron.ipcRenderer.invoke('execute-git-command', command)
+      console.log('Git command executed:', command, 'Result:', result)
+      return result
+    } catch (error) {
+      console.error('Failed to execute Git command:', error)
+      throw error
+    }
+  }
+
   // Copy content to clipboard
   const handleCopy = async () => {
     try {
@@ -970,8 +1038,6 @@ function MarkdownPreview({
     }
 
     try {
-      // Use Electron's shell API to show the file in folder
-      // This will be handled by the main process
       await window.electron.ipcRenderer.invoke('show-item-in-folder', path)
     } catch (err) {
       console.error('Failed to open folder:', err)
@@ -980,9 +1046,7 @@ function MarkdownPreview({
 
   const MarkdownRenderer = (
     <ReactMarkdown
-      // className="prose prose-sm max-w-none dark:prose-invert"
       components={{
-        // Custom styling for markdown elements
         h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
         h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>,
         h3: ({ children }) => <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>,
@@ -1037,7 +1101,6 @@ function MarkdownPreview({
           {path && <span className="text-xs text-muted-foreground">({getFileName(path)})</span>}
         </div>
         <div className="flex space-x-1">
-          {/* Copy button */}
           <button
             onClick={handleCopy}
             className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
@@ -1045,7 +1108,6 @@ function MarkdownPreview({
           >
             <Copy className={cn("size-3", copySuccess ? "text-status-nominal" : "text-muted-foreground")} />
           </button>
-          {/* Open folder button */}
           <button
             onClick={handleOpenFolder}
             className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
@@ -1066,7 +1128,17 @@ function MarkdownPreview({
         </div>
       )}
 
-      {/* Markdown content - always fully displayed */}
+      {/* Git Command Executor - appears before markdown content if commands detected */}
+      {gitCommands.length > 0 && (
+        <div className="p-3 border-b border-border">
+          <GitCommandExecutor
+            commands={gitCommands}
+            onExecuteCommand={handleExecuteCommand}
+          />
+        </div>
+      )}
+
+      {/* Markdown content */}
       <div className="relative bg-background rounded-sm overflow-auto w-full min-h-40 p-3">
         {MarkdownRenderer}
       </div>
