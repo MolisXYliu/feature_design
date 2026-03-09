@@ -151,7 +151,7 @@ export function MessageBubble({
           </div>
         )}
 
-      <DisplayDiffTest/>
+      {/*<DisplayDiffTest/>*/}
       </div>
     </div>
   )
