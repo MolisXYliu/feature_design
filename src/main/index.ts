@@ -99,6 +99,17 @@ app.whenReady().then(async () => {
   registerHeartbeatHandlers(ipcMain)
   registerMemoryHandlers(ipcMain)
 
+  // Register file system handlers
+  ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
+    try {
+      shell.showItemInFolder(filePath)
+      return { success: true }
+    } catch (error) {
+      console.error("Failed to show item in folder:", error)
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+    }
+  })
+
   createWindow()
 
   // Start scheduled task scheduler and heartbeat service

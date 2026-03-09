@@ -15,13 +15,17 @@ import {
   File,
   Folder,
   Maximize2,
-  X
+  X,
+  Eye,
+  Copy,
+  FolderOpen as FolderOpenIcon
 } from "lucide-react"
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
+import ReactMarkdown from "react-markdown"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -714,6 +718,29 @@ export function ToolCallRenderer({
 
       case "write_file":
       case "edit_file": {
+        // Check if this is a markdown file being written or edited
+        const path = (args.path || args.file_path) as string
+        const content = args.content as string | undefined
+        const newStr = args.new_str as string | undefined
+        const isMarkdownFile = path && (path.endsWith('.md') || path.endsWith('.markdown'))
+
+        // For edit_file, we want to show the new content (new_str)
+        // For write_file, we want to show the content
+        const markdownContent = toolCall.name === "edit_file" ? newStr : content
+
+        if (isMarkdownFile && markdownContent && !isExpanded) {
+          // Show markdown preview for collapsed view
+          return (
+            <div className="space-y-2">
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>{toolCall.name === "edit_file" ? "Markdown file edited" : "Markdown file created"}</span>
+              </div>
+              <MarkdownPreview content={markdownContent} path={path} />
+            </div>
+          )
+        }
+
         // Show confirmation message for file operations
         if (typeof result === "string" && result.trim()) {
           return (
@@ -911,5 +938,138 @@ export function ToolCallRenderer({
         </div>
       )}
     </div>
+  )
+}
+
+// Render markdown content nicely
+function MarkdownPreview({
+  content,
+  path
+}: {
+  content: string
+  path?: string
+}): React.JSX.Element {
+  const [copySuccess, setCopySuccess] = useState(false)
+
+  // Copy content to clipboard
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  // Open folder containing the file
+  const handleOpenFolder = async () => {
+    if (!path) {
+      console.warn('No file path available to open folder')
+      return
+    }
+
+    try {
+      // Use Electron's shell API to show the file in folder
+      // This will be handled by the main process
+      await window.electron.ipcRenderer.invoke('show-item-in-folder', path)
+    } catch (err) {
+      console.error('Failed to open folder:', err)
+    }
+  }
+
+  const MarkdownRenderer = (
+    <ReactMarkdown
+      // className="prose prose-sm max-w-none dark:prose-invert"
+      components={{
+        // Custom styling for markdown elements
+        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-4 first:mt-0">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>,
+        p: ({ children }) => <p className="text-xs mb-2 last:mb-0 leading-relaxed">{children}</p>,
+        code: ({ children, className }) => {
+          const isInline = !className
+          if (isInline) {
+            return <code className="bg-background px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+          }
+          return (
+            <pre className="bg-background p-2 rounded-sm overflow-auto text-xs font-mono my-2">
+              <code>{children}</code>
+            </pre>
+          )
+        },
+        ul: ({ children }) => <ul className="text-sm mb-3 pl-6 space-y-1 list-disc">{children}</ul>,
+        ol: ({ children }) => <ol className="text-sm mb-3 pl-8 space-y-1 list-none counter-reset-[ordered-list] list-disc">{children}</ol>,
+        li: ({ children }) =>  <li className="text-sm relative pl-1">{children}</li>,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-border pl-3 italic text-muted-foreground my-2">
+            {children}
+          </blockquote>
+        ),
+        table: ({ children }) => (
+          <div className="overflow-auto my-2">
+            <table className="text-xs border-collapse border border-border w-full">
+              {children}
+            </table>
+          </div>
+        ),
+        th: ({ children }) => (
+          <th className="border border-border px-2 py-1 bg-background-elevated font-medium text-left">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="border border-border px-2 py-1">{children}</td>
+        )
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+
+  return (
+    <>
+      {/* Header with controls */}
+      <div className="flex items-center justify-between gap-1 p-1.5 bg-background/90 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Eye className="size-3 text-status-info" />
+          <span className="text-xs font-medium">Markdown 预览</span>
+          {path && <span className="text-xs text-muted-foreground">({getFileName(path)})</span>}
+        </div>
+        <div className="flex space-x-1">
+          {/* Copy button */}
+          <button
+            onClick={handleCopy}
+            className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
+            title="复制内容"
+          >
+            <Copy className={cn("size-3", copySuccess ? "text-status-nominal" : "text-muted-foreground")} />
+          </button>
+          {/* Open folder button */}
+          <button
+            onClick={handleOpenFolder}
+            className="cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
+            title="打开文件夹"
+          >
+            <FolderOpenIcon className="size-3 text-muted-foreground" />
+          </button>
+        </div>
+      </div>
+
+      {/* Copy success indicator */}
+      {copySuccess && (
+        <div className="px-2 py-1 bg-status-nominal/10 border-b border-status-nominal/20">
+          <div className="flex items-center gap-2 text-[10px] text-status-nominal">
+            <div className="size-2 bg-status-nominal rounded-full animate-pulse" />
+            已复制到剪贴板
+          </div>
+        </div>
+      )}
+
+      {/* Markdown content - always fully displayed */}
+      <div className="relative bg-background rounded-sm overflow-auto w-full min-h-40 p-3">
+        {MarkdownRenderer}
+      </div>
+    </>
   )
 }
