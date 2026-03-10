@@ -24,8 +24,12 @@ export function notifyAlways(title: string, body: string): void {
   sendNotification(title, body)
 }
 
+function stripThink(s: string): string {
+  return s.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/^[\s\S]*?<\/think>\s*/g, "")
+}
+
 function sendNotification(title: string, body: string): void {
-  let text = body
+  let text = stripThink(body).trim()
   if (text.length > BODY_MAX) {
     text = text.slice(0, BODY_MAX - 3) + "..."
   }

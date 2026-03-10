@@ -58,84 +58,98 @@ function createWindow(): void {
   })
 }
 
-app.whenReady().then(async () => {
-  // Set app user model id for windows
-  if (process.platform === "win32") {
-    app.setAppUserModelId(isDev ? process.execPath : "com.cmb.cmbcoworkagent")
-  }
-
-  // Set dock icon on macOS
-  if (process.platform === "darwin" && app.dock) {
-    const iconPath = join(__dirname, "../../resources/icon.png")
-    try {
-      const icon = nativeImage.createFromPath(iconPath)
-      if (!icon.isEmpty()) {
-        app.dock.setIcon(icon)
-      }
-    } catch {
-      // Icon not found, use default
+// Ensure only a single instance is running (prevents duplicate schedulers on Windows)
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
     }
-  }
+  })
 
-  // Default open or close DevTools by F12 in development
-  if (isDev) {
-    app.on("browser-window-created", (_, window) => {
-      window.webContents.on("before-input-event", (event, input) => {
-        if (input.key === "F12") {
-          window.webContents.toggleDevTools()
-          event.preventDefault()
+  app.whenReady().then(async () => {
+    // Set app user model id for windows
+    if (process.platform === "win32") {
+      app.setAppUserModelId(isDev ? process.execPath : "com.cmb.cmbcoworkagent")
+    }
+
+    // Set dock icon on macOS
+    if (process.platform === "darwin" && app.dock) {
+      const iconPath = join(__dirname, "../../resources/icon.png")
+      try {
+        const icon = nativeImage.createFromPath(iconPath)
+        if (!icon.isEmpty()) {
+          app.dock.setIcon(icon)
         }
+      } catch {
+        // Icon not found, use default
+      }
+    }
+
+    // Default open or close DevTools by F12 in development
+    if (isDev) {
+      app.on("browser-window-created", (_, window) => {
+        window.webContents.on("before-input-event", (event, input) => {
+          if (input.key === "F12") {
+            window.webContents.toggleDevTools()
+            event.preventDefault()
+          }
+        })
       })
+    }
+
+    // Initialize database
+    await initializeDatabase()
+
+    // Register IPC handlers
+    registerAgentHandlers(ipcMain)
+    registerThreadHandlers(ipcMain)
+    registerModelHandlers(ipcMain)
+    registerSkillsHandlers(ipcMain)
+    registerMcpHandlers(ipcMain)
+    registerScheduledTaskHandlers(ipcMain)
+    registerHeartbeatHandlers(ipcMain)
+    registerMemoryHandlers(ipcMain)
+
+    // Register file system handlers
+    ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
+      try {
+        shell.showItemInFolder(filePath)
+        return { success: true }
+      } catch (error) {
+        console.error("Failed to show item in folder:", error)
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+      }
     })
-  }
 
-  // Initialize database
-  await initializeDatabase()
+    createWindow()
 
-  // Register IPC handlers
-  registerAgentHandlers(ipcMain)
-  registerThreadHandlers(ipcMain)
-  registerModelHandlers(ipcMain)
-  registerSkillsHandlers(ipcMain)
-  registerMcpHandlers(ipcMain)
-  registerScheduledTaskHandlers(ipcMain)
-  registerHeartbeatHandlers(ipcMain)
-  registerMemoryHandlers(ipcMain)
-  registerGitHandlers()
+    registerGitHandlers()
 
-  // Register file system handlers
-  ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
-    try {
-      shell.showItemInFolder(filePath)
-      return { success: true }
-    } catch (error) {
-      console.error("Failed to show item in folder:", error)
-      return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+    // Start scheduled task scheduler and heartbeat service
+    startScheduler()
+    startHeartbeat()
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
+      app.quit()
     }
   })
 
-  createWindow()
-
-  // Start scheduled task scheduler and heartbeat service
-  startScheduler()
-  startHeartbeat()
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
+  app.on("will-quit", () => {
+    LocalSandbox.killAll()
+    stopScheduler()
+    stopHeartbeat()
+    flush()
   })
-})
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit()
-  }
-})
-
-app.on("will-quit", () => {
-  LocalSandbox.killAll()
-  stopScheduler()
-  stopHeartbeat()
-  flush()
-})
+}

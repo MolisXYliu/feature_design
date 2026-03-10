@@ -148,6 +148,21 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  // Safety net: refresh thread list when the window regains focus.
+  // On Windows, IPC messages sent while the window is minimized/background may be dropped.
+  useEffect(() => {
+    const onFocus = async (): Promise<void> => {
+      try {
+        const threads = await window.api.threads.list()
+        useAppStore.setState({ threads })
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [])
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
