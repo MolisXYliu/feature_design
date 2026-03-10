@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -8,8 +8,9 @@ import { McpPanel } from "./McpPanel"
 import { ScheduledPanel } from "./ScheduledPanel"
 import { MemoryPanel } from "./MemoryPanel"
 import { HeartbeatPanel } from "./HeartbeatPanel"
+import { MarketPanel } from "./MarketPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "heartbeat" | "memory"
+type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "heartbeat" | "memory" | "market"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView } = useAppStore()
@@ -19,7 +20,12 @@ export function CustomizeView(): React.JSX.Element {
     <div className="flex h-full overflow-hidden bg-background">
       <div className="w-[200px] shrink-0 border-r border-border flex flex-col">
         <div className="p-3 flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-7 w-9 p-0" onClick={() => setShowCustomizeView(false)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-9 p-0"
+            onClick={() => setShowCustomizeView(false)}
+          >
             <ArrowLeft className="size-6" strokeWidth={1} />
           </Button>
           <span className="text-base font-bold">自定义</span>
@@ -28,7 +34,9 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "skills" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "skills"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("skills")}
           >
@@ -38,7 +46,9 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "connectors" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "connectors"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("connectors")}
           >
@@ -48,7 +58,9 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "plugin" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "plugin"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("plugin")}
           >
@@ -58,7 +70,9 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "scheduled" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "scheduled"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("scheduled")}
           >
@@ -68,7 +82,9 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "heartbeat" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "heartbeat"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("heartbeat")}
           >
@@ -78,12 +94,26 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-              activeTab === "memory" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"
+              activeTab === "memory"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
             )}
             onClick={() => setActiveTab("memory")}
           >
             <Brain className="size-4 shrink-0" />
             Memory
+          </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "market"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("market")}
+          >
+            <ShoppingBag className="size-4 shrink-0" />
+            Market
           </button>
         </nav>
       </div>
@@ -98,6 +128,8 @@ export function CustomizeView(): React.JSX.Element {
         <HeartbeatPanel />
       ) : activeTab === "memory" ? (
         <MemoryPanel />
+      ) : activeTab === "market" ? (
+        <MarketPanel />
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           <div className="text-center space-y-2">
