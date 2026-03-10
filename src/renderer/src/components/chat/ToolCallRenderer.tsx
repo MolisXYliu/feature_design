@@ -400,7 +400,7 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     <>
       {/* Header with controls */}
       <div className=" flex items-center justify-between gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
-        <div>Git Diff 代码变更查看 （默认显示前20行）</div>
+        <div>变更查看 （默认显示前20行）</div>
        <div className={'flex space-x-2 '}>
          {isLargeDiff && (
            <div className="flex items-center gap-1">
@@ -456,16 +456,16 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
                 </span>
               </div>
               <div className="flex items-center gap-2">
-                <button
+                {isLargeDiff && <button
                   onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
                   className="cursor-pointer px-3 py-1.5 text-xs bg-background hover:bg-muted border border-border rounded transition-colors"
                 >
                   {renderMode === "preview" ? "显示全部代码" : "显示少量代码"}
-                </button>
+                </button>}
                 <button
                   onClick={() => {
-                    setIsFullscreen(false)
-                    setRenderMode('preview')
+                    setIsFullscreen(false);
+                    setRenderMode("preview");
                   }}
                   className="cursor-pointer p-1.5 hover:bg-muted border border-border rounded transition-colors"
                   title="退出全屏"

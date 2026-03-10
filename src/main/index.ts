@@ -32,7 +32,9 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false
-    }
+    },
+    autoHideMenuBar: true,   // 自动隐藏菜单栏
+    menuBarVisible: false    // 不显示菜单栏
   })
 
   mainWindow.on("ready-to-show", () => {
