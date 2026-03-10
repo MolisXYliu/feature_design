@@ -49,7 +49,9 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsert,
   ScheduledTaskFrequency,
-  HeartbeatConfig
+  HeartbeatConfig,
+  PluginMetadata,
+  PluginManifest
 } from "../../main/types"
 
 export type {
@@ -60,7 +62,9 @@ export type {
   ScheduledTask,
   ScheduledTaskUpsert,
   ScheduledTaskFrequency,
-  HeartbeatConfig
+  HeartbeatConfig,
+  PluginMetadata,
+  PluginManifest
 }
 
 export type StreamEvent =

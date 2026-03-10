@@ -5,6 +5,7 @@ import { v4 as uuid } from "uuid"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
 import { readdir, readFile, rm, mkdir, copyFile, stat, chmod } from "fs/promises"
 import { app } from "electron"
+import type { PluginMetadata, PluginMcpServerConfig } from "./types"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -1038,4 +1039,103 @@ export function getHeartbeatContent(): string {
 export function saveHeartbeatContent(content: string): void {
   getOpenworkDir()
   writeFileSync(HEARTBEAT_MD_FILE, content)
+}
+
+// ── Plugins ──
+
+const PLUGINS_DIR = join(OPENWORK_DIR, "plugins")
+const PLUGINS_FILE = join(OPENWORK_DIR, "plugins.json")
+
+export function getPluginsDir(): string {
+  if (!existsSync(PLUGINS_DIR)) {
+    mkdirSync(PLUGINS_DIR, { recursive: true })
+  }
+  return PLUGINS_DIR
+}
+
+export function getPlugins(): PluginMetadata[] {
+  getOpenworkDir()
+  if (!existsSync(PLUGINS_FILE)) return []
+  try {
+    const content = readFileSync(PLUGINS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is PluginMetadata =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).path === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+function writePlugins(items: PluginMetadata[]): void {
+  getOpenworkDir()
+  writeFileSync(PLUGINS_FILE, JSON.stringify(items, null, 2))
+}
+
+export function upsertPlugin(meta: PluginMetadata): void {
+  const items = getPlugins()
+  const index = items.findIndex((i) => i.id === meta.id)
+  if (index >= 0) {
+    items[index] = meta
+  } else {
+    items.push(meta)
+  }
+  writePlugins(items)
+}
+
+export function deletePlugin(id: string): void {
+  const items = getPlugins().filter((i) => i.id !== id)
+  writePlugins(items)
+}
+
+export function setPluginEnabled(id: string, enabled: boolean): void {
+  const items = getPlugins()
+  const target = items.find((i) => i.id === id)
+  if (!target) return
+  const next = items.map((i) =>
+    i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
+  )
+  writePlugins(next)
+}
+
+export function getEnabledPluginSkillsSources(): string[] {
+  const plugins = getPlugins().filter((p) => p.enabled && p.skillCount > 0)
+  const sources: string[] = []
+  for (const plugin of plugins) {
+    const skillsDir = join(plugin.path, "skills")
+    if (existsSync(skillsDir)) {
+      sources.push(skillsDir)
+    }
+  }
+  return sources
+}
+
+export function getEnabledPluginMcpConfigs(): Record<string, PluginMcpServerConfig> {
+  const plugins = getPlugins().filter((p) => p.enabled && p.mcpServerCount > 0)
+  const configs: Record<string, PluginMcpServerConfig> = {}
+  for (const plugin of plugins) {
+    const mcpJsonPath = join(plugin.path, ".mcp.json")
+    if (!existsSync(mcpJsonPath)) continue
+    try {
+      const content = readFileSync(mcpJsonPath, "utf-8")
+      const parsed = JSON.parse(content) as Record<string, unknown>
+      const servers = (parsed.mcpServers ?? parsed) as Record<string, PluginMcpServerConfig>
+      if (typeof servers === "object" && servers !== null) {
+        for (const [name, cfg] of Object.entries(servers)) {
+          if (cfg && typeof cfg === "object") {
+            configs[`${plugin.name}/${name}`] = cfg
+          }
+        }
+      }
+    } catch {
+      console.warn(`[Plugins] Failed to read .mcp.json for plugin ${plugin.name}`)
+    }
+  }
+  return configs
 }

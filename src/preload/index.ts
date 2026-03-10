@@ -10,7 +10,9 @@ import type {
   McpConnectorUpsert,
   ScheduledTask,
   ScheduledTaskUpsert,
-  HeartbeatConfig
+  HeartbeatConfig,
+  PluginMetadata,
+  PluginManifest
 } from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
@@ -456,6 +458,20 @@ const api = {
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     }
+  },
+  plugins: {
+    list: (): Promise<PluginMetadata[]> =>
+      ipcRenderer.invoke("plugins:list") as Promise<PluginMetadata[]>,
+    install: (buffer: ArrayBuffer, fileName: string): Promise<{ success: boolean; pluginName?: string; error?: string }> =>
+      ipcRenderer.invoke("plugins:install", { buffer, fileName }) as Promise<{ success: boolean; pluginName?: string; error?: string }>,
+    installFromDir: (): Promise<{ success: boolean; pluginName?: string; error?: string }> =>
+      ipcRenderer.invoke("plugins:installFromDir") as Promise<{ success: boolean; pluginName?: string; error?: string }>,
+    delete: (id: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("plugins:delete", id) as Promise<{ success: boolean; error?: string }>,
+    setEnabled: (id: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("plugins:setEnabled", { id, enabled }) as Promise<void>,
+    getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
+      ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
 }
 

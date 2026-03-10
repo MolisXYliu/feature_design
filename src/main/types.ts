@@ -266,6 +266,40 @@ export interface HeartbeatConfig {
   lastRunError: string | null
 }
 
+// Plugin types
+export interface PluginManifest {
+  name: string
+  version?: string
+  description?: string
+  author?: { name?: string; email?: string; url?: string } | string
+  license?: string
+  keywords?: string[]
+  skills?: string | string[]
+  mcpServers?: string
+}
+
+export interface PluginMetadata {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  path: string
+  enabled: boolean
+  skillCount: number
+  mcpServerCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PluginMcpServerConfig {
+  command?: string
+  args?: string[]
+  url?: string
+  transport?: "sse" | "streamable-http"
+  headers?: Record<string, string>
+}
+
 // Skills types
 export interface SkillMetadata {
   name: string

@@ -8,6 +8,7 @@ import { McpPanel } from "./McpPanel"
 import { ScheduledPanel } from "./ScheduledPanel"
 import { MemoryPanel } from "./MemoryPanel"
 import { HeartbeatPanel } from "./HeartbeatPanel"
+import { PluginsPanel } from "./PluginsPanel"
 
 type CustomizeTab = "skills" | "connectors" | "plugin" | "scheduled" | "heartbeat" | "memory"
 
@@ -98,6 +99,8 @@ export function CustomizeView(): React.JSX.Element {
         <HeartbeatPanel />
       ) : activeTab === "memory" ? (
         <MemoryPanel />
+      ) : activeTab === "plugin" ? (
+        <PluginsPanel />
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           <div className="text-center space-y-2">

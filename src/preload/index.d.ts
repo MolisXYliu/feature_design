@@ -9,7 +9,9 @@ import type {
   McpConnectorUpsert,
   ScheduledTask,
   ScheduledTaskUpsert,
-  HeartbeatConfig
+  HeartbeatConfig,
+  PluginMetadata,
+  PluginManifest
 } from "../main/types"
 
 interface ElectronAPI {
@@ -227,6 +229,14 @@ interface CustomAPI {
       threadId: string,
       callback: (event: { type: string; [key: string]: unknown }) => void
     ) => () => void
+  }
+  plugins: {
+    list: () => Promise<PluginMetadata[]>
+    install: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; pluginName?: string; error?: string }>
+    installFromDir: () => Promise<{ success: boolean; pluginName?: string; error?: string }>
+    delete: (id: string) => Promise<{ success: boolean; error?: string }>
+    setEnabled: (id: string, enabled: boolean) => Promise<void>
+    getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
 }
 

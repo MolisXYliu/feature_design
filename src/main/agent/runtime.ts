@@ -14,7 +14,9 @@ import {
   getEnabledMcpConnectors,
   getCustomModelConfigs,
   isMemoryEnabled,
-  DEFAULT_MAX_TOKENS
+  DEFAULT_MAX_TOKENS,
+  getEnabledPluginSkillsSources,
+  getEnabledPluginMcpConfigs
 } from "../storage"
 import { MultiServerMCPClient } from "@langchain/mcp-adapters"
 import { buildMcpServerConfig } from "../ipc/mcp"
@@ -466,7 +468,10 @@ ${subagentShellGuidance}
 The workspace root is: ${workspacePath}`
 
   const skillsSources = await getEnabledSkillsSources()
-  console.log("[Runtime] Skills sources:", skillsSources)
+  // Merge plugin skills sources
+  const pluginSkillsSources = getEnabledPluginSkillsSources()
+  const allSkillsSources = [...skillsSources, ...pluginSkillsSources]
+  console.log("[Runtime] Skills sources:", skillsSources, "Plugin skills:", pluginSkillsSources)
 
   // Initialize memory system (gated by user setting)
   let memoryTools: ReturnType<typeof createMemorySearchTool | typeof createMemoryGetTool>[] = []
@@ -485,9 +490,13 @@ The workspace root is: ${workspacePath}`
   }
 
   const mcpConnectors = getEnabledMcpConnectors()
+  const pluginMcpConfigs = getEnabledPluginMcpConfigs()
   let mcpTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
-  if (mcpConnectors.length > 0) {
-    const fingerprint = computeMcpConfigFingerprint(mcpConnectors)
+  if (mcpConnectors.length > 0 || Object.keys(pluginMcpConfigs).length > 0) {
+    const fingerprint = computeMcpConfigFingerprint([
+      ...mcpConnectors,
+      ...Object.entries(pluginMcpConfigs).map(([k, v]) => ({ id: k, url: v.url ?? "", advanced: v }))
+    ])
     const cached = _mcpToolsCache
     const cacheValid = cached
       && cached.fingerprint === fingerprint
@@ -503,6 +512,15 @@ The workspace root is: ${workspacePath}`
         const mcpServers: Record<string, any> = {}
         for (const c of mcpConnectors) {
           mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: c.advanced })
+        }
+        // Add plugin MCP servers
+        for (const [name, cfg] of Object.entries(pluginMcpConfigs)) {
+          if (cfg.url) {
+            mcpServers[name] = buildMcpServerConfig({
+              url: cfg.url,
+              advanced: { headers: cfg.headers, transport: cfg.transport }
+            })
+          }
         }
         mcpClient = new MultiServerMCPClient({
           throwOnLoadError: false,
@@ -525,7 +543,7 @@ The workspace root is: ${workspacePath}`
         console.warn("[Runtime] MCP client init failed:", e)
       }
     }
-  } else if (_mcpToolsCache) {
+  } else if (_mcpToolsCache && Object.keys(pluginMcpConfigs).length === 0) {
     _retiredMcpClients.add(_mcpToolsCache.client)
     _mcpToolsCache = null
     console.log("[Runtime] MCP connectors disabled, retired cached client")
@@ -574,7 +592,7 @@ The workspace root is: ${workspacePath}`
     backend,
     systemPrompt,
     filesystemSystemPrompt,
-    skills: skillsSources.length > 0 ? skillsSources : undefined,
+    skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
     // TODO: 后续改回来，恢复 execute 审批
     // interruptOn: { execute: true },
