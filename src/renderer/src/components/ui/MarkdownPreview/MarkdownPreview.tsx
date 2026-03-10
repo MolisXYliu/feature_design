@@ -6,7 +6,7 @@ import remarkMath from "remark-math"
 import rehypeHighlight from "rehype-highlight"
 import rehypeRaw from "rehype-raw"
 import rehypeKatex from "rehype-katex"
-import { Copy, Check, FolderOpen, Eye } from "lucide-react"
+import { Copy, Check, FolderOpen, Eye, ChevronDown, ChevronUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 // Import highlight.js CSS for code syntax highlighting
@@ -21,15 +21,23 @@ interface MarkdownPreviewProps {
   path?: string
   className?: string
   showHeader?: boolean
+  defaultExpanded?: boolean // 新增：默认展开状态
 }
 
 export function MarkdownPreview({
   content,
   path,
   className,
-  showHeader = true
+  showHeader = true,
+  defaultExpanded = true // 新增：默认展开
 }: MarkdownPreviewProps) {
   const [copySuccess, setCopySuccess] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded) // 新增：展开状态
+
+  // 新增：切换展开/收起
+  const toggleExpanded = useCallback(() => {
+    setIsExpanded(!isExpanded)
+  }, [isExpanded])
 
   // Copy content to clipboard
   const handleCopy = useCallback(async () => {
@@ -51,7 +59,7 @@ export function MarkdownPreview({
 
     try {
       // 处理Windows和Unix路径分隔符
-      const normalizedPath = path.replace(/\\/g, '/')
+      const normalizedPath = path.replace(/\\/g, "/")
       const folderPath = normalizedPath.split("/").slice(0, -1).join("/") || "."
 
       // 检测操作系统并使用相应的IPC调用
@@ -59,15 +67,15 @@ export function MarkdownPreview({
 
       if (platform === "win32") {
         // Windows: 转换为Windows路径格式
-        const windowsPath = folderPath.replace(/\//g, '\\')
+        const windowsPath = folderPath.replace(/\//g, "\\")
         await window.electron.ipcRenderer.invoke("open-folder", windowsPath)
       } else {
-        // macOS/Linux: 使用Unix路径格式
+        // macOS/Linux: 使用Unix路径���式
         await window.electron.ipcRenderer.invoke("open-folder", folderPath)
       }
     } catch (error) {
       console.error("Failed to open folder:", error)
-      // 降级方案：如果IPC调用失败，尝试使用shell
+      // 降级��案：如果IPC调用失败，尝试使用shell
       try {
         const folderPath = path.split("/").slice(0, -1).join("/") || "."
         await window.electron.ipcRenderer.invoke("shell-show-item-in-folder", folderPath)
@@ -80,10 +88,16 @@ export function MarkdownPreview({
   // Custom components for enhanced rendering - 优化字体大小
   const components = {
     // Enhanced code blocks with syntax highlighting
-    code({ inline, className, children, ...props }: {
+    code({
+      inline,
+      className,
+      children,
+      ...props
+    }: {
       inline?: boolean
       className?: string
       children?: React.ReactNode
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       [key: string]: any
     }) {
       const match = /language-(\w+)/.exec(className || "")
@@ -122,6 +136,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced tables with better styling
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     table({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <div className="overflow-x-auto my-4">
@@ -135,10 +150,16 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     thead({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
-      return <thead className="bg-slate-50 dark:bg-slate-800" {...props}>{children}</thead>
+      return (
+        <thead className="bg-slate-50 dark:bg-slate-800" {...props}>
+          {children}
+        </thead>
+      )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     th({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <th
@@ -150,6 +171,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     td({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <td
@@ -162,6 +184,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced blockquotes
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     blockquote({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <blockquote
@@ -174,6 +197,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced headings with better spacing
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h1({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h1
@@ -185,6 +209,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h2({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h2
@@ -196,6 +221,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h3({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h3
@@ -207,6 +233,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h4({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h4
@@ -218,6 +245,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h5({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h5
@@ -229,6 +257,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     h6({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <h6
@@ -241,6 +270,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced paragraphs with better spacing
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <p className="text-slate-700 dark:text-slate-300 leading-relaxed mb-3 text-sm" {...props}>
@@ -250,6 +280,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced lists
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ul({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <ul
@@ -261,6 +292,7 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ol({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
       return (
         <ol
@@ -272,12 +304,26 @@ export function MarkdownPreview({
       )
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     li({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) {
-      return <li className="leading-relaxed" {...props}>{children}</li>
+      return (
+        <li className="leading-relaxed" {...props}>
+          {children}
+        </li>
+      )
     },
 
     // Enhanced links
-    a({ href, children, ...props }: { href?: string; children?: React.ReactNode; [key: string]: any }) {
+    a({
+      href,
+      children,
+      ...props
+    }: {
+      href?: string
+      children?: React.ReactNode
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [key: string]: any
+    }) {
       return (
         <a
           href={href}
@@ -292,6 +338,7 @@ export function MarkdownPreview({
     },
 
     // Enhanced horizontal rules
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     hr({ ...props }: { [key: string]: any }) {
       return (
         <hr
@@ -302,7 +349,16 @@ export function MarkdownPreview({
     },
 
     // Enhanced images
-    img({ src, alt, ...props }: { src?: string; alt?: string; [key: string]: any }) {
+    img({
+      src,
+      alt,
+      ...props
+    }: {
+      src?: string
+      alt?: string
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [key: string]: any
+    }) {
       return (
         <img
           src={src}
@@ -337,7 +393,7 @@ export function MarkdownPreview({
     <div
       className={cn(
         "markdown-preview",
-        "w-full h-auto", // 不限制高度，默认全部展示
+        "w-full h-auto",
         "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100",
         className
       )}
@@ -346,6 +402,17 @@ export function MarkdownPreview({
       {showHeader && (
         <div className="flex items-center justify-between gap-2 p-3 bg-slate-50/90 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-700 rounded-t-md">
           <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={toggleExpanded}
+              className="p-1 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors shrink-0"
+              title={isExpanded ? "收起预览" : "展开预览"}
+            >
+              {isExpanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
             <Eye className="h-4 w-4 text-slate-500 shrink-0" />
             <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
               Markdown文件预览
@@ -381,8 +448,26 @@ export function MarkdownPreview({
         </div>
       )}
 
-      {/* Content - 移除高度限制和滚动 */}
-      <div className="p-4">{markdownContent}</div>
+      {/* Content - 添加展开/收起动画 */}
+      <div
+        className={cn(
+          "transition-all duration-300 ease-in-out overflow-hidden",
+          isExpanded ? "opacity-100" : "opacity-0 h-0"
+        )}
+      >
+        {isExpanded && (
+          <div className="p-4">{markdownContent}</div>
+        )}
+      </div>
+
+      {/* 收起状态下的预览行 */}
+      {!isExpanded && (
+        <div className="px-4 py-2 text-sm text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50">
+          <div className="truncate">
+            {content.split('\n')[0] || "Markdown 内容已收起..."}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
