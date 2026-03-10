@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react"
-import { GitBranch, Play, Check, X } from "lucide-react"
+import { useState, useEffect, useCallback } from "react"
+import { GitBranch, Play, Check, X, AlertTriangle, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
+import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
 
 interface GitFileOperationPromptProps {
   filePath: string
@@ -9,11 +10,18 @@ interface GitFileOperationPromptProps {
   onSkip?: () => void
 }
 
-export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileOperationPromptProps) {
+export function GitFileOperationPrompt({
+  filePath,
+  operation,
+  onSkip
+}: GitFileOperationPromptProps) {
   const [showGitOptions, setShowGitOptions] = useState(false)
   const [commitMessage, setCommitMessage] = useState("")
   const [isExecuting, setIsExecuting] = useState(false)
-  const [executionResult, setExecutionResult] = useState<{ success: boolean; output?: string } | null>(null)
+  const [executionResult, setExecutionResult] = useState<{
+    success: boolean
+    output?: string
+  } | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
   const [gitInfo, setGitInfo] = useState<{
     branch?: string
@@ -25,24 +33,24 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
   }>({})
   const [cardNumber, setCardNumber] = useState("")
 
-  useEffect(() => {
-    // 生成智能提交信息
-    const fileName = filePath.split("/").pop() || filePath
-    const actionText = operation === "edit_file" ? "更新" : "创建"
-    setCommitMessage(`${actionText}: ${fileName}`)
+  // 新增：检查是否已提交
+  const [isAlreadyCommitted, setIsAlreadyCommitted] = useState(false)
+  const [existingCommitRecord, setExistingCommitRecord] = useState<CommitRecord | null>(null)
 
-    // 获取Git仓库信息
-    fetchGitInfo()
-  }, [filePath, operation])
-
-  const fetchGitInfo = async () => {
+  const fetchGitInfo = useCallback(async () => {
     try {
       // 根据文件路径确定正确的Git仓库根目录
-      const fileDir = filePath.replace(/[/\\][^/\\]*$/, '') || '.'
-      const repoPath = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${fileDir}" rev-parse --show-toplevel`) as string
+      const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || "."
+      const repoPath = (await window.electron.ipcRenderer.invoke(
+        "execute-git-command",
+        `git -C "${fileDir}" rev-parse --show-toplevel`
+      )) as string
 
       // 获取当前分支（在正确的仓库中）
-      const branch = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" rev-parse --abbrev-ref HEAD`) as string
+      const branch = (await window.electron.ipcRenderer.invoke(
+        "execute-git-command",
+        `git -C "${repoPath.trim()}" rev-parse --abbrev-ref HEAD`
+      )) as string
 
       // 获取远程信息（在正确的仓库中）
       let remote = ""
@@ -50,12 +58,15 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       let remoteName = ""
       try {
         // 使用 git remote -v 获取远程仓库信息，这样更可靠
-        const remotesVerbose = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" remote -v`) as string
+        const remotesVerbose = (await window.electron.ipcRenderer.invoke(
+          "execute-git-command",
+          `git -C "${repoPath.trim()}" remote -v`
+        )) as string
         console.log("Git remotes -v:", remotesVerbose)
 
         if (remotesVerbose && remotesVerbose.trim()) {
           // 解析输出，格式通常是: name url (fetch) 或 name url (push)
-          const lines = remotesVerbose.trim().split('\n')
+          const lines = remotesVerbose.trim().split("\n")
           const remoteMap = new Map<string, string>()
 
           for (const line of lines) {
@@ -84,15 +95,21 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       }
 
       // 获取仓库状态（在正确的仓库中）
-      const status = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" status --porcelain`) as string
+      const status = (await window.electron.ipcRenderer.invoke(
+        "execute-git-command",
+        `git -C "${repoPath.trim()}" status --porcelain`
+      )) as string
 
       // 获取ahead/behind信息（在正确的仓库中）
       let ahead = 0
       let behind = 0
       if (hasRemote && remoteName) {
         try {
-          const aheadBehind = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" rev-list --left-right --count HEAD...${remoteName}/${branch.trim()}`) as string
-          const [aheadStr, behindStr] = aheadBehind.trim().split('\t')
+          const aheadBehind = (await window.electron.ipcRenderer.invoke(
+            "execute-git-command",
+            `git -C "${repoPath.trim()}" rev-list --left-right --count HEAD...${remoteName}/${branch.trim()}`
+          )) as string
+          const [aheadStr, behindStr] = aheadBehind.trim().split("\t")
           ahead = parseInt(aheadStr) || 0
           behind = parseInt(behindStr) || 0
         } catch {
@@ -120,7 +137,29 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
         behind: 0
       })
     }
-  }
+  }, [filePath])
+
+  useEffect(() => {
+    // 检查文件是否已经提交过
+    const hasCommitted = GitCommitTracker.hasCommitted(filePath, operation)
+    setIsAlreadyCommitted(hasCommitted)
+
+    if (hasCommitted) {
+      const record = GitCommitTracker.getCommitRecord(filePath, operation)
+      setExistingCommitRecord(record)
+    }
+
+    // 生成智能提交信息
+    const fileName = filePath.split("/").pop() || filePath
+    const actionText = operation === "edit_file" ? "更新" : "创建"
+    setCommitMessage(`${actionText}: ${fileName}`)
+
+    // 获取Git仓库信息
+    fetchGitInfo()
+
+    // 清理过期记录
+    GitCommitTracker.cleanupExpiredRecords()
+  }, [filePath, operation, fetchGitInfo])
 
   const handleShowGitOptions = () => {
     setShowGitOptions(true)
@@ -139,9 +178,12 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
     // 根据文件路径确定正确的Git仓库根目录
     let repoPath = ""
     try {
-      const fileDir = filePath.replace(/[/\\][^/\\]*$/, '') || '.'
-      console.log(fileDir, filePath, 'fileDir=')
-      repoPath = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${fileDir}" rev-parse --show-toplevel`) as string
+      const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || "."
+      console.log(fileDir, filePath, "fileDir=")
+      repoPath = (await window.electron.ipcRenderer.invoke(
+        "execute-git-command",
+        `git -C "${fileDir}" rev-parse --show-toplevel`
+      )) as string
       repoPath = repoPath.trim()
     } catch (error) {
       console.error("无法确定Git仓库路径:", error)
@@ -157,11 +199,31 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
     ].filter(Boolean) as string[]
 
     try {
+      let commitHash = ""
+
       for (let i = 0; i < commands.length; i++) {
         setCurrentStep(i)
         try {
-          const result = await window.electron.ipcRenderer.invoke("execute-git-command", commands[i])
+          const result = await window.electron.ipcRenderer.invoke(
+            "execute-git-command",
+            commands[i]
+          )
           console.log(`Git命令执行成功: ${commands[i]}`, result)
+
+          // 如果是commit命令，尝试获取commit hash
+          if (i === 1 && result) {
+            try {
+              const hashResult = await window.electron.ipcRenderer.invoke(
+                "execute-git-command",
+                `git -C "${repoPath}" rev-parse HEAD`
+              )
+              if (hashResult && typeof hashResult === "string") {
+                commitHash = hashResult.trim().substring(0, 7) // 取前7位
+              }
+            } catch (hashError) {
+              console.warn("Failed to get commit hash:", hashError)
+            }
+          }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error)
           setExecutionResult({ success: false, output: errorMessage })
@@ -171,6 +233,20 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       }
 
       setExecutionResult({ success: true, output: "所有Git命令执行成功" })
+
+      // 记录提交信息
+      GitCommitTracker.recordCommit(
+        filePath,
+        operation,
+        commitMessage.trim(),
+        cardNumber.trim(),
+        commitHash
+      )
+
+      // 更新状态
+      setIsAlreadyCommitted(true)
+      const newRecord = GitCommitTracker.getCommitRecord(filePath, operation)
+      setExistingCommitRecord(newRecord)
 
       // 重新获取Git信息以更新状态
       await fetchGitInfo()
@@ -184,6 +260,40 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       setIsExecuting(false)
       setCurrentStep(0)
     }
+  }
+
+  // 强制重新提交（忽略已提交状态）
+  const handleForceCommit = () => {
+    setIsAlreadyCommitted(false)
+    setExistingCommitRecord(null)
+    setShowGitOptions(true)
+  }
+
+  // 如果文件已经提交过，显示已提交状态
+  if (isAlreadyCommitted && existingCommitRecord && !showGitOptions) {
+    return (
+      <div className="flex items-start gap-2 p-2 bg-green-50/90 dark:bg-green-950/90 border border-green-200 dark:border-green-800 rounded">
+        <Check className="size-4 text-green-600 dark:text-green-400 mt-0.5" />
+        <div className="flex-1 text-xs">
+          <div className="font-medium text-green-800 dark:text-green-200">
+            文件已提交到Git
+          </div>
+          <div className="text-green-700 dark:text-green-300 mt-1 space-y-1">
+            <div>提交信息: {existingCommitRecord.commitMessage}</div>
+            {existingCommitRecord.cardNumber && (
+              <div>卡片编号: {existingCommitRecord.cardNumber}</div>
+            )}
+            {existingCommitRecord.commitHash && (
+              <div className="font-mono">提交哈希: {existingCommitRecord.commitHash}</div>
+            )}
+            <div className="flex items-center gap-1">
+              <Clock className="size-3" />
+              <span>{new Date(existingCommitRecord.timestamp).toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (!showGitOptions) {
@@ -241,16 +351,6 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
               <Badge variant="secondary" className="text-xs font-mono">
                 {gitInfo.branch}
               </Badge>
-              {/*{(gitInfo.ahead && gitInfo.ahead > 0) && (*/}
-              {/*  <Badge variant="warning" className="text-xs">*/}
-              {/*    +{gitInfo.ahead} 提交待推送*/}
-              {/*  </Badge>*/}
-              {/*)}*/}
-              {/*{(gitInfo.behind && gitInfo.behind > 0) && (*/}
-              {/*  <Badge variant="critical" className="text-xs">*/}
-              {/*    -{gitInfo.behind} 提交待拉取*/}
-              {/*  </Badge>*/}
-              {/*)}*/}
             </div>
 
             {gitInfo.hasRemote ? (
@@ -271,7 +371,7 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">状态:</span>
                 <span className="text-xs">
-                  {gitInfo.status.split('\n').length} 个文件有变更
+                  {gitInfo.status.split("\n").length} 个文件有变更
                 </span>
               </div>
             )}
@@ -321,14 +421,22 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
                 step: 1,
                 label: "提交更改",
                 command: `git commit -m "${commitMessage.trim()}"`,
-                info: `分支: ${gitInfo.branch || 'unknown'} | 信息: ${commitMessage.trim()}`
+                info: `分支: ${gitInfo.branch || "unknown"} | 信息: ${commitMessage.trim()}`
               },
-              ...(gitInfo.hasRemote ? [{
-                step: 2,
-                label: "推送到远程仓库",
-                command: "git push",
-                info: `推送到 ${gitInfo.remote ? gitInfo.remote.split('/').pop()?.replace('.git', '') : 'origin'} / ${gitInfo.branch || 'main'}`
-              }] : [])
+              ...(gitInfo.hasRemote
+                ? [
+                    {
+                      step: 2,
+                      label: "推送到远程仓库",
+                      command: "git push",
+                      info: `推送到 ${
+                        gitInfo.remote
+                          ? gitInfo.remote.split("/").pop()?.replace(".git", "")
+                          : "origin"
+                      } / ${gitInfo.branch || "main"}`
+                    }
+                  ]
+                : [])
             ].map(({ step, label, command, info }) => (
               <div
                 key={step}
@@ -352,11 +460,11 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
                     <div className="font-mono text-muted-foreground text-[10px]">{command}</div>
                   </div>
                   {currentStep === step && isExecuting && (
-                    <Badge variant="outline" className="animate-pulse">执行中</Badge>
+                    <Badge variant="outline" className="animate-pulse">
+                      执行中
+                    </Badge>
                   )}
-                  {currentStep > step && (
-                    <Badge variant="nominal">完成</Badge>
-                  )}
+                  {currentStep > step && <Badge variant="nominal">完成</Badge>}
                 </div>
                 <div className="text-[10px] text-muted-foreground ml-5 pl-1 border-l border-border/30">
                   {info}
@@ -403,7 +511,12 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       <div className="flex items-center gap-2">
         <button
           onClick={executeGitCommands}
-          disabled={isExecuting || !commitMessage.trim() || !cardNumber.trim() || (executionResult?.success === true)}
+          disabled={
+            isExecuting ||
+            !commitMessage.trim() ||
+            !cardNumber.trim() ||
+            executionResult?.success === true
+          }
           className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           <Play className="size-3" />
