@@ -1,6 +1,5 @@
 import { ipcMain } from "electron"
 import { execSync } from "child_process"
-import { join } from "path"
 
 interface GitStatus {
   hasChanges: boolean

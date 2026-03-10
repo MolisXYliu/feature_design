@@ -33,8 +33,7 @@ function createWindow(): void {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false
     },
-    autoHideMenuBar: true,   // 自动隐藏菜单栏
-    menuBarVisible: false    // 不显示菜单栏
+    autoHideMenuBar: true    // 自动隐藏菜单栏
   })
 
   mainWindow.on("ready-to-show", () => {
@@ -113,6 +112,7 @@ if (!gotTheLock) {
     registerScheduledTaskHandlers(ipcMain)
     registerHeartbeatHandlers(ipcMain)
     registerMemoryHandlers(ipcMain)
+    registerGitHandlers()
 
     // Register file system handlers
     ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
@@ -126,8 +126,6 @@ if (!gotTheLock) {
     })
 
     createWindow()
-
-    registerGitHandlers()
 
     // Start scheduled task scheduler and heartbeat service
     startScheduler()
