@@ -7,6 +7,7 @@ import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
 import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
+import { notifyIfBackground } from "../services/notify"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -139,6 +140,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
+        notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`
@@ -172,11 +174,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           error.message.includes("Controller is already closed"))
 
       if (!isAbortError) {
+        const errMsg = error instanceof Error ? error.message : "Unknown error"
         console.error("[Agent] Error:", error)
         window.webContents.send(channel, {
           type: "error",
-          error: error instanceof Error ? error.message : "Unknown error"
+          error: errMsg
         })
+        notifyIfBackground("❌ 任务失败", errMsg)
       }
     } finally {
       window.removeListener("closed", onWindowClosed)

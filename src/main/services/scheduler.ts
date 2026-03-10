@@ -1,10 +1,11 @@
 import { v4 as uuid } from "uuid"
-import { BrowserWindow, Notification } from "electron"
+import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
 import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord } from "../storage"
 import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread } from "../db"
 import { StreamConverter } from "../agent/stream-converter"
+import { notifyIfBackground } from "./notify"
 
 const TICK_INTERVAL_MS = 60_000
 const ONCE_EXPIRE_MS = 30 * 60_000 // once tasks older than 30 min are auto-disabled instead of executed
@@ -30,18 +31,12 @@ function notifyRenderer(channel: string): void {
   }
 }
 
-const NOTIFICATION_BODY_MAX = 200
-
 function showTaskNotification(taskName: string, status: "ok" | "error", body?: string): void {
-  if (!Notification.isSupported()) return
   const title = status === "ok" ? `✅ ${taskName}` : `❌ ${taskName}`
-  let text = status === "ok"
+  const text = status === "ok"
     ? (body || "任务已完成")
     : (body || "任务执行失败")
-  if (text.length > NOTIFICATION_BODY_MAX) {
-    text = text.slice(0, NOTIFICATION_BODY_MAX - 3) + "..."
-  }
-  new Notification({ title, body: text }).show()
+  notifyIfBackground(title, text)
 }
 
 export function startScheduler(): void {
