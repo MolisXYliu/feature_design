@@ -376,14 +376,15 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
       splitView={true}
       hideLineNumbers={false}
       useDarkTheme={false}
+      loadingElement={()=><div className={'text-center font-bold text-lg py-2'}>loading...</div>}
       disableWordDiff={shouldUsePreview} // Disable word diff for better performance with large content
       compareMethod={shouldUsePreview ? DiffMethod.LINES : DiffMethod.WORDS}
       styles={{
         diffContainer: {
           maxHeight: isFullscreen ? "100%" : "24rem",
-          minHeight: isFullscreen ? "100%" : "10rem",
+          minHeight: isFullscreen ? "100%" : "100px",
           overflow: "auto",
-          height: isFullscreen ? "100%" : "auto"
+          height: isFullscreen ? "100%" : "100px"
         },
         line: {
           lineHeight: "1.6",
