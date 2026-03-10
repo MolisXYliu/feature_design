@@ -12,6 +12,19 @@ export function notifyIfBackground(title: string, body: string): void {
   const win = BrowserWindow.getFocusedWindow()
   if (win && win.isFocused()) return
 
+  sendNotification(title, body)
+}
+
+/**
+ * Always show a desktop notification regardless of window focus.
+ * Use for autonomous tasks (scheduled tasks) where the user expects to be notified.
+ */
+export function notifyAlways(title: string, body: string): void {
+  if (!Notification.isSupported()) return
+  sendNotification(title, body)
+}
+
+function sendNotification(title: string, body: string): void {
   let text = body
   if (text.length > BODY_MAX) {
     text = text.slice(0, BODY_MAX - 3) + "..."
