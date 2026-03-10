@@ -299,7 +299,7 @@ function TaskDisplay({
 }
 
 // Render git diff nicely
-export const DiffDisplay = memo( ({ diff }: { diff?: string })=>  {
+export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [renderMode, setRenderMode] = useState<"preview" | "full">("preview")
 
@@ -371,8 +371,8 @@ export const DiffDisplay = memo( ({ diff }: { diff?: string })=>  {
 
   const DiffViewer = (
     <ReactDiffViewer
-      oldValue={displayOldContent}
-      newValue={displayNewContent}
+      oldValue={oldValue || displayOldContent}
+      newValue={newValue || displayNewContent}
       splitView={true}
       hideLineNumbers={false}
       useDarkTheme={false}
@@ -751,10 +751,9 @@ export function ToolCallRenderer({
           return (
             <div className="space-y-2">
               <div className={'overflow-scroll'}>
-                <ReactDiffViewer
+                <DiffDisplay
                   oldValue={args.old_string || ""}
                   newValue={args.new_string  || ""}
-                  splitView={true}
                 />
               </div>
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
