@@ -42,7 +42,7 @@ export function GitFileOperationPrompt({ filePath, operation, onSkip }: GitFileO
       const repoPath = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${fileDir}" rev-parse --show-toplevel`) as string
 
       // 获取当前分支（在正确的仓库中）
-      const branch = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" branch --show-current`) as string
+      const branch = await window.electron.ipcRenderer.invoke("execute-git-command", `git -C "${repoPath.trim()}" rev-parse --abbrev-ref HEAD`) as string
 
       // 获取远程信息（在正确的仓库中）
       let remote = ""

@@ -448,7 +448,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         // Get the current branch of the main repo as the base branch
         let baseBranch = "main"
         try {
-          const r = await execFileAsync("git", ["-C", gitRoot, "branch", "--show-current"])
+          const r = await execFileAsync("git", ["-C", gitRoot, "rev-parse", "--abbrev-ref", "HEAD"])
           baseBranch = r.stdout.trim() || "main"
         } catch { /* ignore */ }
 
