@@ -20,7 +20,7 @@ import {
   Copy,
   FolderOpen as FolderOpenIcon
 } from "lucide-react"
-import { useState } from "react"
+import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
@@ -299,7 +299,7 @@ function TaskDisplay({
 }
 
 // Render git diff nicely
-export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
+export const DiffDisplay = memo( ({ diff }: { diff?: string })=>  {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [renderMode, setRenderMode] = useState<"preview" | "full">("preview")
 
@@ -486,7 +486,7 @@ export function DiffDisplay({ diff }: { diff?: string }): React.JSX.Element {
       )}
     </>
   )
-}
+})
 
 export function ToolCallRenderer({
   toolCall,
