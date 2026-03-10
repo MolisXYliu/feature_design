@@ -30,6 +30,9 @@ import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
+import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
+import { mockMd } from "../ui/MarkdownPreview/mock";
+import DisplayDiffTest from "./DisplayDiffTest";
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -758,7 +761,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     我能帮你做什么？
                   </div>
                 </div>
-
                 {skillsLoading ? (
                   <div className="text-sm text-muted-foreground text-center py-10">正在加载技能列表...</div>
                 ) : skills.length === 0 ? null : (
@@ -777,7 +779,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                             >
                               <div className="flex items-center gap-3">
-                                <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <div
+                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
                                   {icon}
                                 </div>
                                 <div className="text-xs text-foreground leading-5">{label}</div>
@@ -806,7 +809,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </div>
                     )}
-
                     {visibleGeneralSkillCards.length > 0 && (
                       <div className="space-y-2">
                         <div className="text-xs text-muted-foreground font-medium tracking-wider">
@@ -821,7 +823,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                             >
                               <div className="flex items-center gap-3">
-                                <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <div
+                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
                                   {icon}
                                 </div>
                                 <div className="text-xs text-foreground leading-5">{label}</div>
@@ -831,7 +834,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         </div>
                       </div>
                     )}
-
                     {generalSkills.length > 8 && (
                       <button
                         type="button"
@@ -855,7 +857,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 )}
               </div>
             )}
-
             {displayMessages.map((message) => (
               <MessageBubble
                 key={message.id}
@@ -865,6 +866,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 onApprovalDecision={handleApprovalDecision}
               />
             ))}
+
+
+            {/* todo 测试样式*/}
+            {/*<MarkdownPreview content={mockMd} />*/}
+            {/*<DisplayDiffTest/>*/}
+
 
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
@@ -878,7 +885,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
             )}
-
             {/* Error state */}
             {threadError && !isLoading && (
               <div className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-4">

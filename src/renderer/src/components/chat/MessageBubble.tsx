@@ -1,7 +1,6 @@
 import type { Message, HITLRequest } from "@/types"
 import { ToolCallRenderer } from "./ToolCallRenderer";
 import { StreamingMarkdown } from "./StreamingMarkdown"
-import DisplayDiffTest from "./DisplayDiffTest";
 
 
 interface ToolResultInfo {
@@ -151,7 +150,7 @@ export function MessageBubble({
           </div>
         )}
 
-      {/*<DisplayDiffTest/>*/}
+
       </div>
     </div>
   )

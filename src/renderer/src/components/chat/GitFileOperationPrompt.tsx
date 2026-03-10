@@ -262,13 +262,6 @@ export function GitFileOperationPrompt({
     }
   }
 
-  // 强制重新提交（忽略已提交状态）
-  const handleForceCommit = () => {
-    setIsAlreadyCommitted(false)
-    setExistingCommitRecord(null)
-    setShowGitOptions(true)
-  }
-
   // 如果文件已经提交过，显示已提交状态
   if (isAlreadyCommitted && existingCommitRecord && !showGitOptions) {
     return (

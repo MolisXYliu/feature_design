@@ -33,7 +33,7 @@ function createWindow(): void {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false
     },
-    autoHideMenuBar: true    // 自动隐藏菜单栏
+    autoHideMenuBar: true // 自动隐藏菜单栏
   })
 
   mainWindow.on("ready-to-show", () => {
@@ -115,7 +115,31 @@ if (!gotTheLock) {
     registerGitHandlers()
 
     // Register file system handlers
+    ipcMain.handle("get-platform", async () => {
+      return process.platform
+    })
+
+    ipcMain.handle("open-folder", async (_, folderPath: string) => {
+      try {
+        await shell.openPath(folderPath)
+        return { success: true }
+      } catch (error) {
+        console.error("Failed to open folder:", error)
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+      }
+    })
+
     ipcMain.handle("show-item-in-folder", async (_, filePath: string) => {
+      try {
+        shell.showItemInFolder(filePath)
+        return { success: true }
+      } catch (error) {
+        console.error("Failed to show item in folder:", error)
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+      }
+    })
+
+    ipcMain.handle("shell-show-item-in-folder", async (_, filePath: string) => {
       try {
         shell.showItemInFolder(filePath)
         return { success: true }
