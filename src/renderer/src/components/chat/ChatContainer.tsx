@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useCallback, useState } from "react"
+import React, { useRef, useEffect, useMemo, useCallback, useState } from "react"
 import {
   Send,
   Square,
@@ -24,15 +24,12 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { useCurrentThread, useThreadStream } from "@/lib/thread-context"
-import { MessageBubble } from "./MessageBubble"
 import { ModelSwitcher } from "./ModelSwitcher"
 import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
-import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
-import { mockMd } from "../ui/MarkdownPreview/mock";
-import DisplayDiffTest from "./DisplayDiffTest";
+import { MessageBubble } from "./MessageBubble";
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -857,15 +854,20 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 )}
               </div>
             )}
-            {displayMessages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                toolResults={toolResults}
-                pendingApproval={pendingApproval}
-                onApprovalDecision={handleApprovalDecision}
-              />
-            ))}
+            {displayMessages.map((message, index) => {
+              const previousMessage = index > 0 ? displayMessages[index - 1] : null
+
+              return (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  previousMessage={previousMessage}
+                  toolResults={toolResults}
+                  pendingApproval={pendingApproval}
+                  onApprovalDecision={handleApprovalDecision}
+                />
+              )
+            })}
 
 
             {/* todo 测试样式*/}
@@ -885,6 +887,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
             )}
+
             {/* Error state */}
             {threadError && !isLoading && (
               <div className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-4">
