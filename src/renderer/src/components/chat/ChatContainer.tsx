@@ -869,7 +869,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
 
             {/* todo 测试样式*/}
-            <MarkdownPreview content={mockMd} />
+            {/*<MarkdownPreview content={mockMd} />*/}
             {/*<DisplayDiffTest/>*/}
 
 
