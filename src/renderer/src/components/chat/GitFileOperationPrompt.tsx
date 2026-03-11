@@ -194,7 +194,7 @@ export function GitFileOperationPrompt({
 
     const commands = [
       `git -C "${repoPath}" add "${filePath}"`,
-      `git -C "${repoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()}"`,
+      `git -C "${repoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
       gitInfo.hasRemote ? `git -C "${repoPath}" push` : null
     ].filter(Boolean) as string[]
 
