@@ -121,8 +121,12 @@ async function installPluginFromDir(
     let pluginDirName = sanitizePluginName(parsed.name)
     if (!existing) {
       let suffix = 1
+      const maxRetries = 100
       while (existsSync(path.join(pluginsDir, pluginDirName))) {
         suffix++
+        if (suffix > maxRetries) {
+          return { success: false, error: `无法为插件 "${parsed.name}" 创建唯一目录名` }
+        }
         pluginDirName = `${sanitizePluginName(parsed.name)}-${suffix}`
       }
     } else {
@@ -183,6 +187,7 @@ async function installPluginFromDir(
 }
 
 const MAX_EXTRACTED_SIZE = 50 * 1024 * 1024 // 50 MB
+const MAX_ENTRY_COUNT = 1000
 
 async function installPluginFromZip(
   buffer: ArrayBuffer
@@ -191,10 +196,15 @@ async function installPluginFromZip(
     const zip = new AdmZip(Buffer.from(buffer))
     const entries = zip.getEntries()
 
-    // Check total uncompressed size before extracting
+    // Check total uncompressed size and entry count before extracting
     let totalSize = 0
+    let fileCount = 0
     for (const entry of entries) {
       if (!entry.isDirectory) {
+        fileCount++
+        if (fileCount > MAX_ENTRY_COUNT) {
+          return { success: false, error: `ZIP 包含文件数量超过 ${MAX_ENTRY_COUNT} 个限制` }
+        }
         totalSize += entry.header.size
         if (totalSize > MAX_EXTRACTED_SIZE) {
           return { success: false, error: `ZIP 解压后大小超过 ${MAX_EXTRACTED_SIZE / 1024 / 1024}MB 限制` }

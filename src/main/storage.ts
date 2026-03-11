@@ -1123,11 +1123,13 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
   if (!existsSync(filePath)) return null
   try {
     const content = readFileSync(filePath, "utf-8")
-    const parsed = JSON.parse(content) as Record<string, unknown>
-    const servers = (parsed.mcpServers ?? parsed) as Record<string, unknown>
-    if (typeof servers !== "object" || servers === null) return null
+    const parsed = JSON.parse(content) as unknown
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null
+    const obj = parsed as Record<string, unknown>
+    const servers = (obj.mcpServers ?? obj) as unknown
+    if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return null
     const result: Record<string, PluginMcpServerConfig> = {}
-    for (const [name, cfg] of Object.entries(servers)) {
+    for (const [name, cfg] of Object.entries(servers as Record<string, unknown>)) {
       if (!cfg || typeof cfg !== "object") continue
       const entry = cfg as Record<string, unknown>
       // Must have at least a "command" or "url" field to be a valid MCP server config

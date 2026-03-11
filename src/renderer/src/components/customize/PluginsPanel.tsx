@@ -287,11 +287,15 @@ export function PluginsPanel(): React.JSX.Element {
 
   const handleToggleEnabled = useCallback(
     async (plugin: PluginMetadata) => {
-      const newEnabled = !plugin.enabled
-      await window.api.plugins.setEnabled(plugin.id, newEnabled)
-      refreshPlugins()
-      if (selectedPlugin?.id === plugin.id) {
-        setSelectedPlugin((prev) => (prev ? { ...prev, enabled: newEnabled } : prev))
+      try {
+        const newEnabled = !plugin.enabled
+        await window.api.plugins.setEnabled(plugin.id, newEnabled)
+        refreshPlugins()
+        if (selectedPlugin?.id === plugin.id) {
+          setSelectedPlugin((prev) => (prev ? { ...prev, enabled: newEnabled } : prev))
+        }
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : "启用/禁用插件失败")
       }
     },
     [selectedPlugin, refreshPlugins]
@@ -305,15 +309,19 @@ export function PluginsPanel(): React.JSX.Element {
     if (!deleteTarget) return
     const plugin = deleteTarget
     setDeleteTarget(null)
-    const res = await window.api.plugins.delete(plugin.id)
-    if (res.success) {
-      if (selectedPlugin?.id === plugin.id) {
-        setSelectedPlugin(null)
-        setDetail(null)
+    try {
+      const res = await window.api.plugins.delete(plugin.id)
+      if (res.success) {
+        if (selectedPlugin?.id === plugin.id) {
+          setSelectedPlugin(null)
+          setDetail(null)
+        }
+        refreshPlugins()
+      } else {
+        setErrorMsg(res.error || "卸载失败")
       }
-      refreshPlugins()
-    } else {
-      setErrorMsg(res.error || "卸载失败")
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "卸载插件失败")
     }
   }, [deleteTarget, selectedPlugin, refreshPlugins])
 
