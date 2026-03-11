@@ -323,10 +323,13 @@
 }
 
 .streaming-markdown code {
-  background-color: var(--background);
+  /*background-color: var(--background);*/
   padding: 0.125em 0.25em;
   border-radius: 3px;
   font-size: 0.84em;
+  border: 1px solid rgba(224, 222, 222, 0.7);
+  background: #f0f0f0;
+  margin-left: 5px;
 }
 
 .streaming-markdown pre {
@@ -335,11 +338,13 @@
   border-radius: 3px;
   overflow-x: auto;
   margin-bottom: 0.75em;
+  border: 1px solid rgba(117, 116, 116, 0.2);
 }
 
 .streaming-markdown pre code {
   background-color: transparent;
   padding: 0;
+  border: none;
 }
 
 .streaming-markdown blockquote {
@@ -370,6 +375,7 @@
   border: 1px solid var(--border);
   padding: 0.5em;
   text-align: left;
+  min-width: 70px;
 }
 
 .streaming-markdown th {
