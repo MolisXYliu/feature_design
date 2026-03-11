@@ -9,10 +9,12 @@ import { registerScheduledTaskHandlers } from "./ipc/scheduled-tasks"
 import { registerHeartbeatHandlers } from "./ipc/heartbeat"
 import { registerMemoryHandlers } from "./ipc/memory"
 import { registerGitHandlers } from "./ipc/git"
+import { registerPluginHandlers } from "./ipc/plugins"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { LocalSandbox } from "./agent/local-sandbox"
+import { closeRuntime } from "./agent/runtime"
 
 let mainWindow: BrowserWindow | null = null
 
@@ -113,6 +115,7 @@ if (!gotTheLock) {
     registerHeartbeatHandlers(ipcMain)
     registerMemoryHandlers(ipcMain)
     registerGitHandlers()
+    registerPluginHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
@@ -172,6 +175,7 @@ if (!gotTheLock) {
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()
+    closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
     flush()
   })
 }

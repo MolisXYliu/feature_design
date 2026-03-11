@@ -2,9 +2,11 @@ import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
-import { readdir, readFile, rm, mkdir, copyFile, stat, chmod } from "fs/promises"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
+import { readdir, readFile, rm, mkdir, stat as fsStat } from "fs/promises"
 import { app } from "electron"
+import type { PluginMetadata, PluginMcpServerConfig } from "./types"
+import { copyDirRecursive } from "./utils/fs"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -33,7 +35,12 @@ export function getThreadCheckpointDir(): string {
   return dir
 }
 
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/
+
 export function getThreadCheckpointPath(threadId: string): string {
+  if (!SAFE_ID_RE.test(threadId)) {
+    throw new Error(`Invalid threadId: ${threadId}`)
+  }
   return join(getThreadCheckpointDir(), `${threadId}.sqlite`)
 }
 
@@ -184,19 +191,19 @@ const ENABLED_SKILLS_DIR = join(OPENWORK_DIR, "enabled-skills")
 // Fingerprint of the last successful enabled-skills rebuild
 let _enabledSkillsFingerprint: string | null = null
 
-function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: string[]): string {
+async function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: string[]): Promise<string> {
   const parts = [disabledList.sort().join(","), sourceDirs.join("|")]
   for (const dir of sourceDirs) {
     if (!existsSync(dir)) continue
     try {
-      const entries = readdirSync(dir, { withFileTypes: true })
+      const entries = await readdir(dir, { withFileTypes: true })
       const dirNames: string[] = []
       for (const e of entries) {
         if (!e.isDirectory()) continue
         dirNames.push(e.name)
         const skillMdPath = join(dir, e.name, "SKILL.md")
         try {
-          const st = statSync(skillMdPath)
+          const st = await fsStat(skillMdPath)
           dirNames.push(String(st.mtimeMs))
         } catch { /* no SKILL.md or unreadable */ }
       }
@@ -204,30 +211,6 @@ function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: str
     } catch { /* ignore */ }
   }
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 16)
-}
-
-/**
- * Recursively copy a directory tree from src to dest.
- * Uses copyFile + mkdir instead of fs.promises.cp (experimental in Node < 22).
- */
-async function copyDirRecursive(src: string, dest: string): Promise<void> {
-  await mkdir(dest, { recursive: true })
-  const entries = await readdir(src, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = join(src, entry.name)
-    const destPath = join(dest, entry.name)
-    if (entry.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath)
-    } else if (entry.isFile()) {
-      await copyFile(srcPath, destPath)
-      // Preserve executable permission bits (e.g. .py / .sh scripts in skills)
-      // chmod is a no-op on Windows but harmless
-      try {
-        const srcStat = await stat(srcPath)
-        await chmod(destPath, srcStat.mode)
-      } catch { /* ignore permission errors on restricted filesystems */ }
-    }
-  }
 }
 
 async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set<string>): Promise<number> {
@@ -286,7 +269,7 @@ async function _ensureEnabledSkillsDirImpl(): Promise<string> {
   const disabled = getDisabledSkills()
   const sourceDirs = [builtinDir, customDir]
 
-  const fingerprint = computeEnabledSkillsFingerprint(disabled, sourceDirs)
+  const fingerprint = await computeEnabledSkillsFingerprint(disabled, sourceDirs)
   if (_enabledSkillsFingerprint === fingerprint && existsSync(ENABLED_SKILLS_DIR)) {
     return ENABLED_SKILLS_DIR
   }
@@ -311,6 +294,8 @@ async function _ensureEnabledSkillsDirImpl(): Promise<string> {
  */
 export function invalidateEnabledSkillsCache(): void {
   _enabledSkillsFingerprint = null
+  _pluginSkillsCache = null
+  _pluginMcpCache = null
 }
 
 /**
@@ -322,13 +307,10 @@ export async function getEnabledSkillsSources(): Promise<string[]> {
   if (disabled.length === 0) return getSkillsSources()
 
   await ensureEnabledSkillsDirAsync()
-  try {
-    const entries = await readdir(ENABLED_SKILLS_DIR)
-    if (entries.length > 0) return [ENABLED_SKILLS_DIR]
-  } catch { /* fall through */ }
+  if (existsSync(ENABLED_SKILLS_DIR)) return [ENABLED_SKILLS_DIR]
 
-  console.warn("[Storage] No enabled skills copied; using all skills")
-  return getSkillsSources()
+  // All skills were disabled — return empty rather than falling back to all skills
+  return []
 }
 
 // Custom model configurations stored as JSON in ~/.cmbcoworkagent/custom-models.json
@@ -1038,4 +1020,144 @@ export function getHeartbeatContent(): string {
 export function saveHeartbeatContent(content: string): void {
   getOpenworkDir()
   writeFileSync(HEARTBEAT_MD_FILE, content)
+}
+
+// ── Plugins ──
+
+const PLUGINS_DIR = join(OPENWORK_DIR, "plugins")
+const PLUGINS_FILE = join(OPENWORK_DIR, "plugins.json")
+let _pluginSkillsCache: string[] | null = null
+let _pluginMcpCache: Record<string, PluginMcpServerConfig> | null = null
+
+export function getPluginsDir(): string {
+  if (!existsSync(PLUGINS_DIR)) {
+    mkdirSync(PLUGINS_DIR, { recursive: true })
+  }
+  return PLUGINS_DIR
+}
+
+export function getPlugins(): PluginMetadata[] {
+  getOpenworkDir()
+  if (!existsSync(PLUGINS_FILE)) return []
+  try {
+    const content = readFileSync(PLUGINS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is PluginMetadata =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).path === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+function writePlugins(items: PluginMetadata[]): void {
+  getOpenworkDir()
+  writeFileSync(PLUGINS_FILE, JSON.stringify(items, null, 2))
+}
+
+export function upsertPlugin(meta: PluginMetadata): void {
+  const items = getPlugins()
+  const index = items.findIndex((i) => i.id === meta.id)
+  if (index >= 0) {
+    items[index] = meta
+  } else {
+    items.push(meta)
+  }
+  writePlugins(items)
+}
+
+export function deletePlugin(id: string): void {
+  const items = getPlugins().filter((i) => i.id !== id)
+  writePlugins(items)
+}
+
+export function setPluginEnabled(id: string, enabled: boolean): void {
+  const items = getPlugins()
+  if (!items.some((i) => i.id === id)) return
+  const next = items.map((i) =>
+    i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
+  )
+  writePlugins(next)
+}
+
+export function getEnabledPluginSkillsSources(): string[] {
+  if (_pluginSkillsCache) return _pluginSkillsCache
+  const plugins = getPlugins().filter((p) => p.enabled && p.skillCount > 0)
+  const sources: string[] = []
+  for (const plugin of plugins) {
+    const skillsDir = join(plugin.path, "skills")
+    if (existsSync(skillsDir)) {
+      sources.push(skillsDir)
+    } else {
+      const rootSkillMd = join(plugin.path, "SKILL.md")
+      if (existsSync(rootSkillMd)) {
+        sources.push(plugin.path)
+      }
+    }
+  }
+  _pluginSkillsCache = sources
+  return sources
+}
+
+export function getEnabledPluginMcpConfigs(): Record<string, PluginMcpServerConfig> {
+  if (_pluginMcpCache) return _pluginMcpCache
+  const plugins = getPlugins().filter((p) => p.enabled && p.mcpServerCount > 0)
+  const configs: Record<string, PluginMcpServerConfig> = {}
+  for (const plugin of plugins) {
+    const mcpJsonPath = join(plugin.path, ".mcp.json")
+    const servers = parseMcpJsonFile(mcpJsonPath)
+    if (!servers) continue
+    for (const [name, cfg] of Object.entries(servers)) {
+      configs[`plugin:${plugin.id}/${name}`] = cfg
+    }
+  }
+  _pluginMcpCache = configs
+  return configs
+}
+
+export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServerConfig> | null {
+  if (!existsSync(filePath)) return null
+  try {
+    const content = readFileSync(filePath, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null
+    const obj = parsed as Record<string, unknown>
+    const servers = (obj.mcpServers ?? obj) as unknown
+    if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return null
+    const result: Record<string, PluginMcpServerConfig> = {}
+    for (const [name, cfg] of Object.entries(servers as Record<string, unknown>)) {
+      if (!cfg || typeof cfg !== "object") continue
+      const entry = cfg as Record<string, unknown>
+      // Must have at least a "command" or "url" field to be a valid MCP server config
+      if (typeof entry.command !== "string" && typeof entry.url !== "string") continue
+      // Validate known fields to prevent unexpected data injection
+      const validated: PluginMcpServerConfig = {}
+      if (typeof entry.command === "string") validated.command = entry.command
+      if (Array.isArray(entry.args) && entry.args.every((a): a is string => typeof a === "string")) {
+        validated.args = entry.args
+      }
+      if (typeof entry.url === "string") validated.url = entry.url
+      if (entry.transport === "sse" || entry.transport === "streamable-http") {
+        validated.transport = entry.transport
+      }
+      if (entry.headers && typeof entry.headers === "object" && !Array.isArray(entry.headers)) {
+        const headers: Record<string, string> = {}
+        for (const [hk, hv] of Object.entries(entry.headers as Record<string, unknown>)) {
+          if (typeof hv === "string") headers[hk] = hv
+        }
+        if (Object.keys(headers).length > 0) validated.headers = headers
+      }
+      result[name] = validated
+    }
+    return Object.keys(result).length > 0 ? result : null
+  } catch {
+    console.warn(`[Plugins] Failed to parse .mcp.json at ${filePath}`)
+    return null
+  }
 }
