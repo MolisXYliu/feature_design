@@ -1,5 +1,5 @@
 // Git 提交记录跟踪器
-// 用于防止重复提交同一文件
+// 用于防止重复提交同一操作
 
 interface CommitRecord {
   filePath: string
@@ -9,6 +9,7 @@ interface CommitRecord {
   commitMessage: string
   cardNumber?: string
   sessionId: string // 当前会话ID，用于区分不同的对话会话
+  operationId: string // 操作ID，用于唯一标识本次操作
 }
 
 class GitCommitTracker {
@@ -25,9 +26,9 @@ class GitCommitTracker {
     return sessionId
   }
 
-  // 生成文件记录的唯一键
-  private static getRecordKey(filePath: string, operation: string): string {
-    return `${filePath}:${operation}`
+  // 生成操作记录的唯一键（基于operationId）
+  private static getRecordKey(operationId: string): string {
+    return operationId
   }
 
   // 获取所有提交记录
@@ -40,7 +41,7 @@ class GitCommitTracker {
       const recordMap = new Map<string, CommitRecord>()
 
       recordArray.forEach((record) => {
-        const key = this.getRecordKey(record.filePath, record.operation)
+        const key = this.getRecordKey(record.operationId)
         recordMap.set(key, record)
       })
 
@@ -61,11 +62,10 @@ class GitCommitTracker {
     }
   }
 
-  // 检查文件是否已经在当前会话中提交过
-  static hasCommitted(filePath: string, operation: string): boolean {
+  // 检查操作是否已经提交过（基于operationId）
+  static hasCommittedOperation(operationId: string): boolean {
     const records = this.getRecords()
-    const key = this.getRecordKey(filePath, operation)
-    const record = records.get(key)
+    const record = records.get(operationId)
 
     if (!record) return false
 
@@ -74,8 +74,39 @@ class GitCommitTracker {
     return record.sessionId === currentSessionId
   }
 
-  // 记录文件提交
+  // 检查文件在当前会话是否有提交记录（用于显示历史）
+  static hasCommittedFile(filePath: string, operation: string): boolean {
+    const records = this.getRecords()
+    const currentSessionId = this.getSessionId()
+
+    return Array.from(records.values()).some(
+      (record) =>
+        record.filePath === filePath &&
+        record.operation === operation &&
+        record.sessionId === currentSessionId
+    )
+  }
+
+  // 获取文件的最新提交记录
+  static getLatestCommitRecord(filePath: string, operation: string): CommitRecord | null {
+    const records = this.getRecords()
+    const currentSessionId = this.getSessionId()
+
+    const fileRecords = Array.from(records.values())
+      .filter(
+        (record) =>
+          record.filePath === filePath &&
+          record.operation === operation &&
+          record.sessionId === currentSessionId
+      )
+      .sort((a, b) => b.timestamp - a.timestamp)
+
+    return fileRecords[0] || null
+  }
+
+  // 记录文件提交（需要operationId）
   static recordCommit(
+    operationId: string,
     filePath: string,
     operation: string,
     commitMessage: string,
@@ -83,7 +114,6 @@ class GitCommitTracker {
     commitHash?: string
   ): void {
     const records = this.getRecords()
-    const key = this.getRecordKey(filePath, operation)
     const currentSessionId = this.getSessionId()
 
     const record: CommitRecord = {
@@ -93,20 +123,31 @@ class GitCommitTracker {
       timestamp: Date.now(),
       commitMessage,
       cardNumber,
-      sessionId: currentSessionId
+      sessionId: currentSessionId,
+      operationId
     }
 
-    records.set(key, record)
+    records.set(operationId, record)
     this.saveRecords(records)
 
-    console.log(`Git commit recorded for: ${filePath} (${operation})`)
+    console.log(`Git commit recorded for operation: ${operationId} - ${filePath} (${operation})`)
   }
 
   // 获取文件的提交记录
   static getCommitRecord(filePath: string, operation: string): CommitRecord | null {
     const records = this.getRecords()
-    const key = this.getRecordKey(filePath, operation)
-    return records.get(key) || null
+    const currentSessionId = this.getSessionId()
+
+    const fileRecords = Array.from(records.values())
+      .filter(
+        (record) =>
+          record.filePath === filePath &&
+          record.operation === operation &&
+          record.sessionId === currentSessionId
+      )
+      .sort((a, b) => b.timestamp - a.timestamp)
+
+    return fileRecords[0] || null
   }
 
   // 清除当前会话的所有记录

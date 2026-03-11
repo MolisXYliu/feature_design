@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react"
-import { GitBranch, Play, Check, X, AlertTriangle, Clock } from "lucide-react"
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { GitBranch, Play, Check, X, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
@@ -8,13 +8,20 @@ interface GitFileOperationPromptProps {
   filePath: string
   operation: string // 'write_file' or 'edit_file'
   onSkip?: () => void
+  operationId?: string // 新增：操作ID，用于唯一标识本次操作
 }
 
 export function GitFileOperationPrompt({
   filePath,
   operation,
-  onSkip
+  onSkip,
+  operationId
 }: GitFileOperationPromptProps) {
+  // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
+  const currentOperationId = useMemo(() => {
+    return operationId || `${operation}_${filePath}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  }, [operationId, operation, filePath])
+
   const [showGitOptions, setShowGitOptions] = useState(false)
   const [commitMessage, setCommitMessage] = useState("")
   const [isExecuting, setIsExecuting] = useState(false)
@@ -32,6 +39,11 @@ export function GitFileOperationPrompt({
     behind?: number
   }>({})
   const [cardNumber, setCardNumber] = useState("")
+
+  // 新增：检查当前操作是否已提交
+  const [isCurrentOperationCommitted, setIsCurrentOperationCommitted] = useState(false)
+  const [hasFileCommitHistory, setHasFileCommitHistory] = useState(false)
+  const [latestCommitRecord, setLatestCommitRecord] = useState<CommitRecord | null>(null)
 
   // 新增：检查是否已提交
   const [isAlreadyCommitted, setIsAlreadyCommitted] = useState(false)
@@ -140,13 +152,23 @@ export function GitFileOperationPrompt({
   }, [filePath])
 
   useEffect(() => {
-    // 检查文件是否已经提交过
-    const hasCommitted = GitCommitTracker.hasCommitted(filePath, operation)
-    setIsAlreadyCommitted(hasCommitted)
+    // 检查当前操作是否已经提交过
+    const isCurrentOpCommitted = GitCommitTracker.hasCommittedOperation(currentOperationId)
+    setIsCurrentOperationCommitted(isCurrentOpCommitted)
 
-    if (hasCommitted) {
-      const record = GitCommitTracker.getCommitRecord(filePath, operation)
-      setExistingCommitRecord(record)
+    // 检查文件是否有提交历史
+    const hasFileHistory = GitCommitTracker.hasCommittedFile(filePath, operation)
+    setHasFileCommitHistory(hasFileHistory)
+
+    if (hasFileHistory) {
+      // 获取最新的提交记录用于显示
+      const latest = GitCommitTracker.getLatestCommitRecord(filePath, operation)
+      setLatestCommitRecord(latest)
+    }
+
+    // 如果当前操作已提交，不需要执行后续逻辑（获取Git信息等）
+    if (isCurrentOpCommitted) {
+      return
     }
 
     // 生成智能提交信息
@@ -154,15 +176,14 @@ export function GitFileOperationPrompt({
     const actionText = operation === "edit_file" ? "更新" : "创建"
     setCommitMessage(`${actionText}: ${fileName}`)
 
-    // 获取Git仓库信息
-    fetchGitInfo()
-
     // 清理过期记录
     GitCommitTracker.cleanupExpiredRecords()
-  }, [filePath, operation, fetchGitInfo])
+  }, [filePath, operation, currentOperationId])
 
-  const handleShowGitOptions = () => {
+  const handleShowGitOptions = async () => {
     setShowGitOptions(true)
+    // 只有当用户点击"提交到Git"时，才获取Git仓库信息
+    await fetchGitInfo()
   }
 
   const handleHideGitOptions = () => {
@@ -234,8 +255,9 @@ export function GitFileOperationPrompt({
 
       setExecutionResult({ success: true, output: "所有Git命令执行成功" })
 
-      // 记录提交信息
+      // 使用新的API记录提交信息（包含operationId）
       GitCommitTracker.recordCommit(
+        currentOperationId,
         filePath,
         operation,
         commitMessage.trim(),
@@ -244,9 +266,7 @@ export function GitFileOperationPrompt({
       )
 
       // 更新状态
-      setIsAlreadyCommitted(true)
-      const newRecord = GitCommitTracker.getCommitRecord(filePath, operation)
-      setExistingCommitRecord(newRecord)
+      setIsCurrentOperationCommitted(true)
 
       // 重新获取Git信息以更新状态
       await fetchGitInfo()
@@ -262,31 +282,35 @@ export function GitFileOperationPrompt({
     }
   }
 
-  // 如果文件已经提交过，显示已提交状态
-  if (isAlreadyCommitted && existingCommitRecord && !showGitOptions) {
-    return (
-      <div className="flex items-start gap-2 p-2 bg-green-50/90 dark:bg-green-950/90 border border-green-200 dark:border-green-800 rounded">
-        <Check className="size-4 text-green-600 dark:text-green-400 mt-0.5" />
-        <div className="flex-1 text-xs">
-          <div className="font-medium text-green-800 dark:text-green-200">
-            文件已提交到Git
-          </div>
-          <div className="text-green-700 dark:text-green-300 mt-1 space-y-1">
-            <div>提交信息: {existingCommitRecord.commitMessage}</div>
-            {existingCommitRecord.cardNumber && (
-              <div>卡片编号: {existingCommitRecord.cardNumber}</div>
-            )}
-            {existingCommitRecord.commitHash && (
-              <div className="font-mono">提交哈希: {existingCommitRecord.commitHash}</div>
-            )}
-            <div className="flex items-center gap-1">
-              <Clock className="size-3" />
-              <span>{new Date(existingCommitRecord.timestamp).toLocaleString()}</span>
+  // 如果当前操作已提交，显示已提交状态
+  if (isCurrentOperationCommitted && !showGitOptions) {
+    // 获取当前操作的提交记录
+    const records = GitCommitTracker.getCurrentSessionRecords()
+    const currentRecord = records.find(r => r.operationId === currentOperationId)
+
+    if (currentRecord) {
+      return (
+        <div className="flex items-start gap-2 p-2 bg-green-50/90 dark:bg-green-950/90 border border-green-200 dark:border-green-800 rounded">
+          <Check className="size-4 text-green-600 dark:text-green-400 mt-0.5" />
+          <div className="flex-1 text-xs">
+            <div className="font-medium text-green-800 dark:text-green-200">本次操作已提交到Git</div>
+            <div className="text-green-700 dark:text-green-300 mt-1 space-y-1">
+              <div>提交信息: {currentRecord.commitMessage}</div>
+              {currentRecord.cardNumber && (
+                <div>卡片编号: {currentRecord.cardNumber}</div>
+              )}
+              {currentRecord.commitHash && (
+                <div className="font-mono">提交哈希: {currentRecord.commitHash}</div>
+              )}
+              <div className="flex items-center gap-1">
+                <Clock className="size-3" />
+                <span>{new Date(currentRecord.timestamp).toLocaleString()}</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    )
+      )
+    }
   }
 
   if (!showGitOptions) {
@@ -297,9 +321,16 @@ export function GitFileOperationPrompt({
           <div className="font-medium text-blue-800 dark:text-blue-200">
             文件已{operation === "edit_file" ? "修改" : "创建"}
           </div>
-          <div className="text-blue-700 dark:text-blue-300 mt-1">
-            是否要提交到Git？
-          </div>
+          <div className="text-blue-700 dark:text-blue-300 mt-1">是否要提交到Git？</div>
+
+          {/* 显示文件历史提交信息（如果有的话） */}
+          {hasFileCommitHistory && latestCommitRecord && (
+            <div className="text-blue-600 dark:text-blue-400 mt-1 text-[10px]">
+              💡 此文件在本会话中已有提交记录: {latestCommitRecord.commitMessage}
+              ({new Date(latestCommitRecord.timestamp).toLocaleString()})
+            </div>
+          )}
+
           <div className="flex gap-2 mt-2">
             <button
               onClick={handleShowGitOptions}
@@ -363,9 +394,7 @@ export function GitFileOperationPrompt({
             {gitInfo.status && (
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">状态:</span>
-                <span className="text-xs">
-                  {gitInfo.status.split("\n").length} 个文件有变更
-                </span>
+                <span className="text-xs">{gitInfo.status.split("\n").length} 个文件有变更</span>
               </div>
             )}
           </div>
@@ -393,7 +422,7 @@ export function GitFileOperationPrompt({
           value={cardNumber}
           onChange={(e) => setCardNumber(e.target.value)}
           disabled={isExecuting}
-          placeholder="请输入卡片编号..."
+          placeholder="请输入卡片编号， 案例：Z998877-12345"
           className="w-full p-2 text-xs border border-border rounded"
         />
       </div>
@@ -480,11 +509,7 @@ export function GitFileOperationPrompt({
             )}
           >
             <div className="flex items-center gap-2 font-medium">
-              {executionResult.success ? (
-                <Check className="size-3" />
-              ) : (
-                <X className="size-3" />
-              )}
+              {executionResult.success ? <Check className="size-3" /> : <X className="size-3" />}
               {executionResult.success ? "Git提交成功" : "Git提交失败"}
             </div>
             {executionResult.output && (
@@ -525,9 +550,7 @@ export function GitFileOperationPrompt({
         </button>
 
         {!gitInfo.hasRemote && (
-          <span className="text-xs text-amber-600">
-            ⚠️ 仅本地提交 (无远程仓库)
-          </span>
+          <span className="text-xs text-amber-600">⚠️ 仅本地提交 (无远程仓库)</span>
         )}
       </div>
     </div>
