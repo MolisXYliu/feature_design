@@ -132,6 +132,7 @@ export function AddMcpConnectorDialog(props: {
           enabled: editConnector ? editConnector.enabled : false,
           advanced: Object.keys(advanced).length > 0 ? advanced : undefined
         }
+        console.log('mcp submit config', config, JSON.stringify(config))
       if (editConnector) {
         await window.api.mcp.update({ ...config, id: editConnector.id })
       } else {

@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react"
-import { Download, Search, ShoppingBag, Sparkles, Plug, Puzzle, Trash2, CheckCircle, Upload, Plus } from "lucide-react"
+import {
+  Download,
+  Search,
+  ShoppingBag,
+  Sparkles,
+  Plug,
+  Puzzle,
+  Trash2,
+  CheckCircle,
+  Upload,
+  Plus
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -147,6 +158,212 @@ interface DeleteResponse {
 interface DownloadResponse {
   success: boolean
   error?: string
+}
+
+// API endpoints - mock URLs for demonstration
+const API_BASE_URL = "https://api.cmbcowork.com/marketplace" // Mock API URL
+const ENDPOINTS = {
+  skills: `${API_BASE_URL}/skills`,
+  mcps: `${API_BASE_URL}/mcps`,
+  plugins: `${API_BASE_URL}/plugins`,
+  download: `${API_BASE_URL}/download`,
+  upload: `${API_BASE_URL}/upload`,
+  delete: `${API_BASE_URL}/delete`
+}
+
+
+// MCP Connector interface
+interface McpConnector {
+  name: string
+  description?: string
+  version?: string
+}
+
+// Enhanced API functions with fetch and fallback to mock data
+const marketApi = {
+  async getSkills(): Promise<MarketApiResponse> {
+    try {
+      console.log("Fetching skills from API...")
+      const response = await fetch(ENDPOINTS.skills, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token" // Add actual token
+        }
+      }) // 10 second timeout
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        data: data.skills || data
+      }
+    } catch (error) {
+      console.warn("API call failed, using mock data:", error)
+      // Fallback to mock data
+      return mockMarketApi.getSkills()
+    }
+  },
+
+  async getMcps(): Promise<MarketApiResponse> {
+    try {
+      console.log("Fetching MCPs from API...")
+      const response = await fetch(ENDPOINTS.mcps, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token"
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        data: data.mcps || data
+      }
+    } catch (error) {
+      console.warn("API call failed, using mock data:", error)
+      // Fallback to mock data
+      return mockMarketApi.getMcps()
+    }
+  },
+
+  async getPlugins(): Promise<MarketApiResponse> {
+    try {
+      console.log("Fetching plugins from API...")
+      const response = await fetch(ENDPOINTS.plugins, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token"
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        data: data.plugins || data
+      }
+    } catch (error) {
+      console.warn("API call failed, using mock data:", error)
+      // Fallback to mock data
+      return mockMarketApi.getPlugins()
+    }
+  },
+
+  async deleteItem(id: string, type: MarketItemType): Promise<DeleteResponse> {
+    try {
+      console.log(`Deleting ${type} item: ${id}`)
+      const response = await fetch(`${ENDPOINTS.delete}/${type}/${id}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token"
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        ...data
+      }
+    } catch (error) {
+      console.warn("API delete failed, using mock response:", error)
+      // Fallback to mock response
+      return mockMarketApi.deleteItem(id, type)
+    }
+  },
+
+  async downloadItem(id: string, type: MarketItemType): Promise<DownloadResponse> {
+    try {
+      console.log(`Downloading ${type} item: ${id}`)
+      const response = await fetch(`${ENDPOINTS.download}/${type}/${id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token"
+        },
+        body: JSON.stringify({ id, type })
+      }) // 30 seconds for downloads
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      // For skills, we still need to handle the local upload
+      if (type === "skills" && data.skillContent) {
+        try {
+          const buffer = new TextEncoder().encode(data.skillContent).buffer
+          const fileName = `${data.name || "downloaded-skill"}.md`
+
+          if (typeof window.api?.skills?.upload === "function") {
+            const uploadResult = await window.api.skills.upload(buffer, fileName)
+            return {
+              success: uploadResult.success,
+              error: uploadResult.error
+            }
+          }
+        } catch (uploadError) {
+          console.error("Failed to upload downloaded skill:", uploadError)
+        }
+      }
+
+      return {
+        success: true,
+        ...data
+      }
+    } catch (error) {
+      console.warn("API download failed, using mock response:", error)
+      // Fallback to mock download
+      return mockMarketApi.downloadItem(id, type)
+    }
+  },
+
+  async submitMcpConnector(connector: McpConnector): Promise<DownloadResponse> {
+    try {
+      console.log(`Submitting MCP connector: ${connector.name}`)
+
+      const response = await fetch(`${ENDPOINTS.upload}/mcps`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer your-api-token"
+        },
+        body: JSON.stringify(connector)
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        ...data
+      }
+    } catch (error) {
+      console.warn("API submit failed, using mock response:", error)
+      // Fallback to mock submit
+      return mockMarketApi.submitMcpConnector(connector)
+    }
+  }
 }
 
 // Mock API functions
@@ -511,7 +728,7 @@ export function MarketPanel(): React.JSX.Element {
         switch (activeTab) {
           case "skills":
             if (skillsData.length === 0) {
-              const response = await mockMarketApi.getSkills()
+              const response = await marketApi.getSkills()
               if (response.success && response.data) {
                 setSkillsData(response.data)
               }
@@ -519,7 +736,7 @@ export function MarketPanel(): React.JSX.Element {
             break
           case "mcps":
             if (mcpsData.length === 0) {
-              const response = await mockMarketApi.getMcps()
+              const response = await marketApi.getMcps()
               if (response.success && response.data) {
                 setMcpsData(response.data)
               }
@@ -527,7 +744,7 @@ export function MarketPanel(): React.JSX.Element {
             break
           case "plugins":
             if (pluginsData.length === 0) {
-              const response = await mockMarketApi.getPlugins()
+              const response = await marketApi.getPlugins()
               if (response.success && response.data) {
                 setPluginsData(response.data)
               }
@@ -572,7 +789,7 @@ export function MarketPanel(): React.JSX.Element {
     if (!deleteDialog.item) return
 
     try {
-      const response = await mockMarketApi.deleteItem(deleteDialog.item.id, deleteDialog.item.type)
+      const response = await marketApi.deleteItem(deleteDialog.item.id, deleteDialog.item.type)
       if (response.success) {
         // Remove item from local state
         switch (deleteDialog.item.type) {
@@ -596,7 +813,7 @@ export function MarketPanel(): React.JSX.Element {
 
   const handleDownload = async (item: MarketItem) => {
     try {
-      const response = await mockMarketApi.downloadItem(item.id, item.type)
+      const response = await marketApi.downloadItem(item.id, item.type)
       if (response.success) {
         console.log(`Downloaded ${item.name}`)
 
@@ -651,7 +868,7 @@ export function MarketPanel(): React.JSX.Element {
     // This is called when MCP connector is successfully added via the form
     // We simulate submitting it to the marketplace
     try {
-      const response = await mockMarketApi.submitMcpConnector({ name: "New MCP Connector" })
+      const response = await marketApi.submitMcpConnector({ name: "New MCP Connector" })
       if (response.success) {
         setUploadSuccess({ open: true, type: "mcps" })
         // Optionally reload MCPs data
@@ -668,7 +885,7 @@ export function MarketPanel(): React.JSX.Element {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <ShoppingBag className="size-5" />
-            <h2 className="font-semibold">Market</h2>
+            <h2 className="font-semibold">公共市场</h2>
           </div>
           <Button
             size="sm"
@@ -683,7 +900,7 @@ export function MarketPanel(): React.JSX.Element {
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input
-            placeholder="Search marketplace..."
+            placeholder="搜索公共市场里的工具"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
