@@ -124,7 +124,7 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 export function RightPanel(): React.JSX.Element {
-  const { currentThreadId } = useAppStore()
+  const { currentThreadId, pluginVersion } = useAppStore()
   const threadState = useThreadState(currentThreadId)
   const todos = threadState?.todos ?? []
   const workspaceFiles = threadState?.workspaceFiles ?? []
@@ -158,7 +158,7 @@ export function RightPanel(): React.JSX.Element {
 
   useEffect(() => {
     window.api.plugins.list().then(setPlugins).catch(console.error)
-  }, [])
+  }, [pluginVersion])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)

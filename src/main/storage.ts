@@ -2,11 +2,11 @@ import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
-import { readdir, readFile, rm, mkdir } from "fs/promises"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
+import { readdir, readFile, rm, mkdir, stat as fsStat } from "fs/promises"
 import { app } from "electron"
 import type { PluginMetadata, PluginMcpServerConfig } from "./types"
-import { copyDirRecursive, createAsyncMutex } from "./utils/fs"
+import { copyDirRecursive } from "./utils/fs"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -35,7 +35,12 @@ export function getThreadCheckpointDir(): string {
   return dir
 }
 
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/
+
 export function getThreadCheckpointPath(threadId: string): string {
+  if (!SAFE_ID_RE.test(threadId)) {
+    throw new Error(`Invalid threadId: ${threadId}`)
+  }
   return join(getThreadCheckpointDir(), `${threadId}.sqlite`)
 }
 
@@ -186,19 +191,19 @@ const ENABLED_SKILLS_DIR = join(OPENWORK_DIR, "enabled-skills")
 // Fingerprint of the last successful enabled-skills rebuild
 let _enabledSkillsFingerprint: string | null = null
 
-function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: string[]): string {
+async function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: string[]): Promise<string> {
   const parts = [disabledList.sort().join(","), sourceDirs.join("|")]
   for (const dir of sourceDirs) {
     if (!existsSync(dir)) continue
     try {
-      const entries = readdirSync(dir, { withFileTypes: true })
+      const entries = await readdir(dir, { withFileTypes: true })
       const dirNames: string[] = []
       for (const e of entries) {
         if (!e.isDirectory()) continue
         dirNames.push(e.name)
         const skillMdPath = join(dir, e.name, "SKILL.md")
         try {
-          const st = statSync(skillMdPath)
+          const st = await fsStat(skillMdPath)
           dirNames.push(String(st.mtimeMs))
         } catch { /* no SKILL.md or unreadable */ }
       }
@@ -264,7 +269,7 @@ async function _ensureEnabledSkillsDirImpl(): Promise<string> {
   const disabled = getDisabledSkills()
   const sourceDirs = [builtinDir, customDir]
 
-  const fingerprint = computeEnabledSkillsFingerprint(disabled, sourceDirs)
+  const fingerprint = await computeEnabledSkillsFingerprint(disabled, sourceDirs)
   if (_enabledSkillsFingerprint === fingerprint && existsSync(ENABLED_SKILLS_DIR)) {
     return ENABLED_SKILLS_DIR
   }
@@ -302,13 +307,10 @@ export async function getEnabledSkillsSources(): Promise<string[]> {
   if (disabled.length === 0) return getSkillsSources()
 
   await ensureEnabledSkillsDirAsync()
-  try {
-    const entries = await readdir(ENABLED_SKILLS_DIR)
-    if (entries.length > 0) return [ENABLED_SKILLS_DIR]
-  } catch { /* fall through */ }
+  if (existsSync(ENABLED_SKILLS_DIR)) return [ENABLED_SKILLS_DIR]
 
-  console.warn("[Storage] No enabled skills copied; using all skills")
-  return getSkillsSources()
+  // All skills were disabled — return empty rather than falling back to all skills
+  return []
 }
 
 // Custom model configurations stored as JSON in ~/.cmbcoworkagent/custom-models.json
@@ -1134,7 +1136,24 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
       const entry = cfg as Record<string, unknown>
       // Must have at least a "command" or "url" field to be a valid MCP server config
       if (typeof entry.command !== "string" && typeof entry.url !== "string") continue
-      result[name] = cfg as PluginMcpServerConfig
+      // Validate known fields to prevent unexpected data injection
+      const validated: PluginMcpServerConfig = {}
+      if (typeof entry.command === "string") validated.command = entry.command
+      if (Array.isArray(entry.args) && entry.args.every((a): a is string => typeof a === "string")) {
+        validated.args = entry.args
+      }
+      if (typeof entry.url === "string") validated.url = entry.url
+      if (entry.transport === "sse" || entry.transport === "streamable-http") {
+        validated.transport = entry.transport
+      }
+      if (entry.headers && typeof entry.headers === "object" && !Array.isArray(entry.headers)) {
+        const headers: Record<string, string> = {}
+        for (const [hk, hv] of Object.entries(entry.headers as Record<string, unknown>)) {
+          if (typeof hv === "string") headers[hk] = hv
+        }
+        if (Object.keys(headers).length > 0) validated.headers = headers
+      }
+      result[name] = validated
     }
     return Object.keys(result).length > 0 ? result : null
   } catch {

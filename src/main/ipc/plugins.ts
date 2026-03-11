@@ -31,6 +31,28 @@ function sanitizePluginName(name: string): string {
     .slice(0, 64) || "plugin"
 }
 
+/** Validate and parse a raw JSON object as PluginManifest. Returns null if invalid. */
+function validatePluginManifest(raw: unknown): PluginManifest | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.name !== "string" || !obj.name.trim()) return null
+  return {
+    name: obj.name,
+    version: typeof obj.version === "string" ? obj.version : undefined,
+    description: typeof obj.description === "string" ? obj.description : undefined,
+    author:
+      typeof obj.author === "string"
+        ? obj.author
+        : obj.author && typeof obj.author === "object" && !Array.isArray(obj.author)
+          ? (obj.author as PluginManifest["author"])
+          : undefined,
+    license: typeof obj.license === "string" ? obj.license : undefined,
+    keywords: Array.isArray(obj.keywords) ? obj.keywords.filter((k): k is string => typeof k === "string") : undefined,
+    skills: typeof obj.skills === "string" ? obj.skills : Array.isArray(obj.skills) ? obj.skills.filter((s): s is string => typeof s === "string") : undefined,
+    mcpServers: typeof obj.mcpServers === "string" ? obj.mcpServers : undefined
+  }
+}
+
 async function parsePluginDir(dirPath: string): Promise<ParsedPlugin> {
   let manifest: PluginManifest | null = null
   const skillDirs: string[] = []
@@ -42,7 +64,7 @@ async function parsePluginDir(dirPath: string): Promise<ParsedPlugin> {
   if (existsSync(manifestPath)) {
     try {
       const content = await fs.readFile(manifestPath, "utf-8")
-      manifest = JSON.parse(content) as PluginManifest
+      manifest = validatePluginManifest(JSON.parse(content))
       if (manifest?.name) name = manifest.name
     } catch {
       console.warn("[Plugins] Failed to parse plugin.json at", manifestPath)
@@ -55,7 +77,7 @@ async function parsePluginDir(dirPath: string): Promise<ParsedPlugin> {
     if (existsSync(rootManifestPath)) {
       try {
         const content = await fs.readFile(rootManifestPath, "utf-8")
-        manifest = JSON.parse(content) as PluginManifest
+        manifest = validatePluginManifest(JSON.parse(content))
         if (manifest?.name) name = manifest.name
       } catch {
         console.warn("[Plugins] Failed to parse plugin.json at", rootManifestPath)
@@ -112,9 +134,10 @@ async function installPluginFromDir(
 
     const pluginsDir = getPluginsDir()
 
-    // Check for existing plugin with same name (update scenario)
+    // Check for existing plugin with same name AND author (update scenario)
+    const newAuthor = formatAuthor(parsed.manifest?.author)
     const existing = getPlugins().find(
-      (p) => p.name === parsed.name
+      (p) => p.name === parsed.name && p.author === newAuthor
     )
 
     // Determine unique directory name — avoid collision with other plugins' directories
@@ -125,7 +148,7 @@ async function installPluginFromDir(
       while (existsSync(path.join(pluginsDir, pluginDirName))) {
         suffix++
         if (suffix > maxRetries) {
-          return { success: false, error: `无法为插件 "${parsed.name}" 创建唯一目录名` }
+          return { success: false, error: `无法为插件 "${parsed.name}" 创建唯一目录名，目录 "${pluginDirName}" 已被占用` }
         }
         pluginDirName = `${sanitizePluginName(parsed.name)}-${suffix}`
       }
@@ -210,6 +233,20 @@ async function installPluginFromZip(
           return { success: false, error: `ZIP 解压后大小超过 ${MAX_EXTRACTED_SIZE / 1024 / 1024}MB 限制` }
         }
       }
+    }
+
+    // Check available disk space before extracting
+    try {
+      const pluginsDir = getPluginsDir()
+      const { statfs } = await import("fs/promises")
+      const fsInfo = await statfs(pluginsDir)
+      const availableBytes = fsInfo.bavail * fsInfo.bsize
+      // Require at least 2x the total uncompressed size (temp + final copy)
+      if (availableBytes < totalSize * 2) {
+        return { success: false, error: `磁盘可用空间不足，需要至少 ${Math.ceil(totalSize * 2 / 1024 / 1024)}MB` }
+      }
+    } catch {
+      // statfs may not be available on all platforms — continue without check
     }
 
     // Determine root prefix — the zip may have a single root directory
@@ -352,12 +389,15 @@ export function registerPluginHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(
     "plugins:setEnabled",
-    async (_event, payload: { id: string; enabled: boolean }): Promise<void> => {
+    async (_event, payload: { id: string; enabled: boolean }): Promise<{ success: boolean; error?: string }> => {
       await pluginMutex.acquire()
       try {
         const { id, enabled } = payload
         setPluginEnabled(id, enabled)
         invalidateEnabledSkillsCache()
+        return { success: true }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : "设置失败" }
       } finally {
         pluginMutex.release()
       }

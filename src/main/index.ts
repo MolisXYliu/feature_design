@@ -13,6 +13,7 @@ import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { LocalSandbox } from "./agent/local-sandbox"
+import { closeRuntime } from "./agent/runtime"
 
 let mainWindow: BrowserWindow | null = null
 
@@ -124,5 +125,6 @@ app.on("will-quit", () => {
   LocalSandbox.killAll()
   stopScheduler()
   stopHeartbeat()
+  closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
   flush()
 })

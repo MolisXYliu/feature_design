@@ -24,6 +24,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { useAppStore } from "@/lib/store"
 import type { PluginMetadata, PluginManifest } from "@/types"
 
 interface PluginDetail {
@@ -221,6 +222,7 @@ function UploadPluginDialog(props: {
 }
 
 export function PluginsPanel(): React.JSX.Element {
+  const bumpPluginVersion = useAppStore((s) => s.bumpPluginVersion)
   const [plugins, setPlugins] = useState<PluginMetadata[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<PluginMetadata | null>(null)
   const [detail, setDetail] = useState<PluginDetail | null>(null)
@@ -250,6 +252,7 @@ export function PluginsPanel(): React.JSX.Element {
   const handleInstallSuccess = useCallback(() => {
     window.api.plugins.list().then((list) => {
       setPlugins(list)
+      bumpPluginVersion()
       if (selectedPlugin) {
         const updated = list.find((p) => p.id === selectedPlugin.id || p.name === selectedPlugin.name)
         if (updated) {
@@ -291,6 +294,7 @@ export function PluginsPanel(): React.JSX.Element {
         const newEnabled = !plugin.enabled
         await window.api.plugins.setEnabled(plugin.id, newEnabled)
         refreshPlugins()
+        bumpPluginVersion()
         if (selectedPlugin?.id === plugin.id) {
           setSelectedPlugin((prev) => (prev ? { ...prev, enabled: newEnabled } : prev))
         }
@@ -317,6 +321,7 @@ export function PluginsPanel(): React.JSX.Element {
           setDetail(null)
         }
         refreshPlugins()
+        bumpPluginVersion()
       } else {
         setErrorMsg(res.error || "卸载失败")
       }

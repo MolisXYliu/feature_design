@@ -57,6 +57,10 @@ interface AppState {
 
   // Customize actions
   setShowCustomizeView: (show: boolean) => void
+
+  // Plugin state sync — increment to trigger RightPanel refresh
+  pluginVersion: number
+  bumpPluginVersion: () => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -72,6 +76,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showKanbanView: false,
   showSubagentsInKanban: true,
   showCustomizeView: false,
+  pluginVersion: 0,
 
   // Thread actions
   loadThreads: async () => {
@@ -194,5 +199,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       set({ showCustomizeView: false })
     }
+  },
+
+  bumpPluginVersion: () => {
+    set((state) => ({ pluginVersion: state.pluginVersion + 1 }))
   }
 }))
