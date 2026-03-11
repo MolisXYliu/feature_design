@@ -3,9 +3,10 @@ import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "fs"
-import { readdir, readFile, rm, mkdir, copyFile, stat, chmod } from "fs/promises"
+import { readdir, readFile, rm, mkdir } from "fs/promises"
 import { app } from "electron"
 import type { PluginMetadata, PluginMcpServerConfig } from "./types"
+import { copyDirRecursive, createAsyncMutex } from "./utils/fs"
 const OPENWORK_DIR = join(homedir(), ".cmbcoworkagent")
 const ENV_FILE = join(OPENWORK_DIR, ".env")
 
@@ -207,30 +208,6 @@ function computeEnabledSkillsFingerprint(disabledList: string[], sourceDirs: str
   return createHash("sha256").update(parts.join(":")).digest("hex").slice(0, 16)
 }
 
-/**
- * Recursively copy a directory tree from src to dest.
- * Uses copyFile + mkdir instead of fs.promises.cp (experimental in Node < 22).
- */
-async function copyDirRecursive(src: string, dest: string): Promise<void> {
-  await mkdir(dest, { recursive: true })
-  const entries = await readdir(src, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = join(src, entry.name)
-    const destPath = join(dest, entry.name)
-    if (entry.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath)
-    } else if (entry.isFile()) {
-      await copyFile(srcPath, destPath)
-      // Preserve executable permission bits (e.g. .py / .sh scripts in skills)
-      // chmod is a no-op on Windows but harmless
-      try {
-        const srcStat = await stat(srcPath)
-        await chmod(destPath, srcStat.mode)
-      } catch { /* ignore permission errors on restricted filesystems */ }
-    }
-  }
-}
-
 async function copyEnabledSkillsFromSourceAsync(sourceDir: string, disabled: Set<string>): Promise<number> {
   let count = 0
   const entries = await readdir(sourceDir, { withFileTypes: true })
@@ -312,6 +289,8 @@ async function _ensureEnabledSkillsDirImpl(): Promise<string> {
  */
 export function invalidateEnabledSkillsCache(): void {
   _enabledSkillsFingerprint = null
+  _pluginSkillsCache = null
+  _pluginMcpCache = null
 }
 
 /**
@@ -1045,6 +1024,8 @@ export function saveHeartbeatContent(content: string): void {
 
 const PLUGINS_DIR = join(OPENWORK_DIR, "plugins")
 const PLUGINS_FILE = join(OPENWORK_DIR, "plugins.json")
+let _pluginSkillsCache: string[] | null = null
+let _pluginMcpCache: Record<string, PluginMcpServerConfig> | null = null
 
 export function getPluginsDir(): string {
   if (!existsSync(PLUGINS_DIR)) {
@@ -1104,6 +1085,7 @@ export function setPluginEnabled(id: string, enabled: boolean): void {
 }
 
 export function getEnabledPluginSkillsSources(): string[] {
+  if (_pluginSkillsCache) return _pluginSkillsCache
   const plugins = getPlugins().filter((p) => p.enabled && p.skillCount > 0)
   const sources: string[] = []
   for (const plugin of plugins) {
@@ -1111,17 +1093,18 @@ export function getEnabledPluginSkillsSources(): string[] {
     if (existsSync(skillsDir)) {
       sources.push(skillsDir)
     } else {
-      // Fallback: root-level SKILL.md (simple plugin structure with "." skill dir)
       const rootSkillMd = join(plugin.path, "SKILL.md")
       if (existsSync(rootSkillMd)) {
         sources.push(plugin.path)
       }
     }
   }
+  _pluginSkillsCache = sources
   return sources
 }
 
 export function getEnabledPluginMcpConfigs(): Record<string, PluginMcpServerConfig> {
+  if (_pluginMcpCache) return _pluginMcpCache
   const plugins = getPlugins().filter((p) => p.enabled && p.mcpServerCount > 0)
   const configs: Record<string, PluginMcpServerConfig> = {}
   for (const plugin of plugins) {
@@ -1129,9 +1112,10 @@ export function getEnabledPluginMcpConfigs(): Record<string, PluginMcpServerConf
     const servers = parseMcpJsonFile(mcpJsonPath)
     if (!servers) continue
     for (const [name, cfg] of Object.entries(servers)) {
-      configs[`${plugin.name}/${name}`] = cfg
+      configs[`plugin:${plugin.id}/${name}`] = cfg
     }
   }
+  _pluginMcpCache = configs
   return configs
 }
 
@@ -1140,13 +1124,15 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
   try {
     const content = readFileSync(filePath, "utf-8")
     const parsed = JSON.parse(content) as Record<string, unknown>
-    const servers = (parsed.mcpServers ?? parsed) as Record<string, PluginMcpServerConfig>
+    const servers = (parsed.mcpServers ?? parsed) as Record<string, unknown>
     if (typeof servers !== "object" || servers === null) return null
     const result: Record<string, PluginMcpServerConfig> = {}
     for (const [name, cfg] of Object.entries(servers)) {
-      if (cfg && typeof cfg === "object") {
-        result[name] = cfg
-      }
+      if (!cfg || typeof cfg !== "object") continue
+      const entry = cfg as Record<string, unknown>
+      // Must have at least a "command" or "url" field to be a valid MCP server config
+      if (typeof entry.command !== "string" && typeof entry.url !== "string") continue
+      result[name] = cfg as PluginMcpServerConfig
     }
     return Object.keys(result).length > 0 ? result : null
   } catch {

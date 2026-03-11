@@ -13,6 +13,7 @@ import {
   invalidateEnabledSkillsCache,
   parseMcpJsonFile
 } from "../storage"
+import { copyDirRecursive, createAsyncMutex } from "../utils/fs"
 import type { PluginManifest, PluginMetadata, PluginMcpServerConfig } from "../types"
 
 interface ParsedPlugin {
@@ -100,20 +101,6 @@ function formatAuthor(author: PluginManifest["author"]): string {
   return author.name || ""
 }
 
-async function copyDirRecursive(src: string, dest: string): Promise<void> {
-  await fs.mkdir(dest, { recursive: true })
-  const entries = await fs.readdir(src, { withFileTypes: true })
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name)
-    const destPath = path.join(dest, entry.name)
-    if (entry.isDirectory()) {
-      await copyDirRecursive(srcPath, destPath)
-    } else if (entry.isFile()) {
-      await fs.copyFile(srcPath, destPath)
-    }
-  }
-}
-
 async function installPluginFromDir(
   dirPath: string
 ): Promise<{ success: boolean; pluginName?: string; error?: string }> {
@@ -123,14 +110,27 @@ async function installPluginFromDir(
       return { success: false, error: "未检测到有效的 skills 或 MCP 配置" }
     }
 
-    const pluginName = sanitizePluginName(parsed.name)
     const pluginsDir = getPluginsDir()
-    const destDir = path.join(pluginsDir, pluginName)
 
-    // Check for existing plugin with same name
+    // Check for existing plugin with same name (update scenario)
     const existing = getPlugins().find(
-      (p) => p.name === parsed.name || path.basename(p.path) === pluginName
+      (p) => p.name === parsed.name
     )
+
+    // Determine unique directory name — avoid collision with other plugins' directories
+    let pluginDirName = sanitizePluginName(parsed.name)
+    if (!existing) {
+      let suffix = 1
+      while (existsSync(path.join(pluginsDir, pluginDirName))) {
+        suffix++
+        pluginDirName = `${sanitizePluginName(parsed.name)}-${suffix}`
+      }
+    } else {
+      // Reuse the existing plugin's directory basename
+      pluginDirName = path.basename(existing.path)
+    }
+    const destDir = path.join(pluginsDir, pluginDirName)
+
     if (existing) {
       // Update existing: backup old directory, then copy new, restore on failure
       const backupDir = existing.path + `_backup_${Date.now()}`
@@ -182,13 +182,25 @@ async function installPluginFromDir(
   }
 }
 
+const MAX_EXTRACTED_SIZE = 50 * 1024 * 1024 // 50 MB
+
 async function installPluginFromZip(
-  buffer: ArrayBuffer,
-  _fileName: string
+  buffer: ArrayBuffer
 ): Promise<{ success: boolean; pluginName?: string; error?: string }> {
   try {
     const zip = new AdmZip(Buffer.from(buffer))
     const entries = zip.getEntries()
+
+    // Check total uncompressed size before extracting
+    let totalSize = 0
+    for (const entry of entries) {
+      if (!entry.isDirectory) {
+        totalSize += entry.header.size
+        if (totalSize > MAX_EXTRACTED_SIZE) {
+          return { success: false, error: `ZIP 解压后大小超过 ${MAX_EXTRACTED_SIZE / 1024 / 1024}MB 限制` }
+        }
+      }
+    }
 
     // Determine root prefix — the zip may have a single root directory
     let rootPrefix = ""
@@ -255,6 +267,7 @@ async function installPluginFromZip(
 
 export function registerPluginHandlers(ipcMain: IpcMain): void {
   console.log("[Plugins] Registering plugin handlers...")
+  const pluginMutex = createAsyncMutex()
 
   ipcMain.handle("plugins:list", async (): Promise<PluginMetadata[]> => {
     return getPlugins()
@@ -270,7 +283,12 @@ export function registerPluginHandlers(ipcMain: IpcMain): void {
       if (!buffer || !fileName) {
         return { success: false, error: "无效的文件" }
       }
-      return installPluginFromZip(buffer, fileName)
+      await pluginMutex.acquire()
+      try {
+      return await installPluginFromZip(buffer)
+      } finally {
+        pluginMutex.release()
+      }
     }
   )
 
@@ -284,7 +302,12 @@ export function registerPluginHandlers(ipcMain: IpcMain): void {
       if (result.canceled || result.filePaths.length === 0) {
         return { success: false, error: "已取消" }
       }
-      return installPluginFromDir(result.filePaths[0])
+      await pluginMutex.acquire()
+      try {
+        return await installPluginFromDir(result.filePaths[0])
+      } finally {
+        pluginMutex.release()
+      }
     }
   )
 
@@ -294,20 +317,25 @@ export function registerPluginHandlers(ipcMain: IpcMain): void {
       if (!id || typeof id !== "string") {
         return { success: false, error: "无效的 Plugin ID" }
       }
-      const plugins = getPlugins()
-      const plugin = plugins.find((p) => p.id === id)
-      if (!plugin) {
-        return { success: false, error: "Plugin 不存在" }
-      }
+      await pluginMutex.acquire()
       try {
-        if (existsSync(plugin.path)) {
-          rmSync(plugin.path, { recursive: true, force: true })
+        const plugins = getPlugins()
+        const plugin = plugins.find((p) => p.id === id)
+        if (!plugin) {
+          return { success: false, error: "Plugin 不存在" }
         }
-        deletePluginStorage(id)
-        invalidateEnabledSkillsCache()
-        return { success: true }
-      } catch (e) {
-        return { success: false, error: e instanceof Error ? e.message : "删除失败" }
+        try {
+          if (existsSync(plugin.path)) {
+            rmSync(plugin.path, { recursive: true, force: true })
+          }
+          deletePluginStorage(id)
+          invalidateEnabledSkillsCache()
+          return { success: true }
+        } catch (e) {
+          return { success: false, error: e instanceof Error ? e.message : "删除失败" }
+        }
+      } finally {
+        pluginMutex.release()
       }
     }
   )
@@ -315,9 +343,14 @@ export function registerPluginHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(
     "plugins:setEnabled",
     async (_event, payload: { id: string; enabled: boolean }): Promise<void> => {
-      const { id, enabled } = payload
-      setPluginEnabled(id, enabled)
-      invalidateEnabledSkillsCache()
+      await pluginMutex.acquire()
+      try {
+        const { id, enabled } = payload
+        setPluginEnabled(id, enabled)
+        invalidateEnabledSkillsCache()
+      } finally {
+        pluginMutex.release()
+      }
     }
   )
 

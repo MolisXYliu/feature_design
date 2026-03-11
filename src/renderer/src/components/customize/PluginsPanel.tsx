@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog"
@@ -29,6 +30,58 @@ interface PluginDetail {
   skills: string[]
   mcpServers: string[]
   manifest: PluginManifest | null
+}
+
+function ConfirmDeleteDialog(props: {
+  open: boolean
+  pluginName: string
+  onConfirm: () => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const { open, pluginName, onConfirm, onCancel } = props
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel() }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>确认卸载</DialogTitle>
+          <DialogDescription>
+            确定要卸载插件「{pluginName}」吗？此操作不可撤销。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            取消
+          </Button>
+          <Button variant="destructive" size="sm" onClick={onConfirm}>
+            卸载
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ErrorDialog(props: {
+  open: boolean
+  message: string
+  onClose: () => void
+}): React.JSX.Element {
+  const { open, message, onClose } = props
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>操作失败</DialogTitle>
+          <DialogDescription>{message}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            确定
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function UploadPluginDialog(props: {
@@ -175,6 +228,13 @@ export function PluginsPanel(): React.JSX.Element {
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const [deleteTarget, setDeleteTarget] = useState<PluginMetadata | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => clearTimeout(debounceTimer.current)
+  }, [])
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value)
@@ -185,6 +245,22 @@ export function PluginsPanel(): React.JSX.Element {
   const refreshPlugins = useCallback(() => {
     window.api.plugins.list().then(setPlugins).catch(console.error)
   }, [])
+
+  // After install/update, refresh the selected plugin's detail if it was affected
+  const handleInstallSuccess = useCallback(() => {
+    window.api.plugins.list().then((list) => {
+      setPlugins(list)
+      if (selectedPlugin) {
+        const updated = list.find((p) => p.id === selectedPlugin.id || p.name === selectedPlugin.name)
+        if (updated) {
+          setSelectedPlugin(updated)
+          window.api.plugins.getDetail(updated.id).then(setDetail).catch(() => {
+            setDetail({ skills: [], mcpServers: [], manifest: null })
+          })
+        }
+      }
+    }).catch(console.error)
+  }, [selectedPlugin])
 
   useEffect(() => {
     refreshPlugins()
@@ -221,22 +297,25 @@ export function PluginsPanel(): React.JSX.Element {
     [selectedPlugin, refreshPlugins]
   )
 
-  const handleDelete = useCallback(
-    async (plugin: PluginMetadata) => {
-      if (!confirm(`确定要卸载插件「${plugin.name}」吗？`)) return
-      const res = await window.api.plugins.delete(plugin.id)
-      if (res.success) {
-        if (selectedPlugin?.id === plugin.id) {
-          setSelectedPlugin(null)
-          setDetail(null)
-        }
-        refreshPlugins()
-      } else {
-        alert(res.error || "卸载失败")
+  const handleDeleteRequest = useCallback((plugin: PluginMetadata) => {
+    setDeleteTarget(plugin)
+  }, [])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return
+    const plugin = deleteTarget
+    setDeleteTarget(null)
+    const res = await window.api.plugins.delete(plugin.id)
+    if (res.success) {
+      if (selectedPlugin?.id === plugin.id) {
+        setSelectedPlugin(null)
+        setDetail(null)
       }
-    },
-    [selectedPlugin, refreshPlugins]
-  )
+      refreshPlugins()
+    } else {
+      setErrorMsg(res.error || "卸载失败")
+    }
+  }, [deleteTarget, selectedPlugin, refreshPlugins])
 
   const filteredPlugins = useMemo(() => {
     const q = debouncedQuery.trim().toLowerCase()
@@ -357,13 +436,26 @@ export function PluginsPanel(): React.JSX.Element {
         plugin={selectedPlugin}
         detail={detail}
         onToggleEnabled={handleToggleEnabled}
-        onDelete={handleDelete}
+        onDelete={handleDeleteRequest}
       />
 
       <UploadPluginDialog
         open={uploadDialogOpen}
         onOpenChange={setUploadDialogOpen}
-        onSuccess={refreshPlugins}
+        onSuccess={handleInstallSuccess}
+      />
+
+      <ConfirmDeleteDialog
+        open={deleteTarget !== null}
+        pluginName={deleteTarget?.name ?? ""}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ErrorDialog
+        open={errorMsg !== null}
+        message={errorMsg ?? ""}
+        onClose={() => setErrorMsg(null)}
       />
     </>
   )
