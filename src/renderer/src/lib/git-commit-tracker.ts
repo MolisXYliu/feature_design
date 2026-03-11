@@ -8,23 +8,11 @@ interface CommitRecord {
   timestamp: number
   commitMessage: string
   cardNumber?: string
-  sessionId: string // 当前会话ID，用于区分不同的对话会话
   operationId: string // 操作ID，用于唯一标识本次操作
 }
 
 class GitCommitTracker {
   private static STORAGE_KEY = "git_commit_records"
-  private static SESSION_KEY = "git_session_id"
-
-  // 获取当前会话ID，如果不存在则生成新的
-  private static getSessionId(): string {
-    let sessionId = localStorage.getItem(this.SESSION_KEY)
-    if (!sessionId) {
-      sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-      localStorage.setItem(this.SESSION_KEY, sessionId)
-    }
-    return sessionId
-  }
 
   // 生成操作记录的唯一键（基于operationId）
   private static getRecordKey(operationId: string): string {
@@ -62,42 +50,32 @@ class GitCommitTracker {
     }
   }
 
-  // 检查操作是否已经提交过（基于operationId）
+  // 检查操作是否已经提交过（基于operationId，不依赖会话）
   static hasCommittedOperation(operationId: string): boolean {
     const records = this.getRecords()
-    const record = records.get(operationId)
-
-    if (!record) return false
-
-    // 检查是否是当前会话的提交
-    const currentSessionId = this.getSessionId()
-    return record.sessionId === currentSessionId
+    return records.has(operationId)
   }
 
-  // 检查文件在当前会话是否有提交记录（用于显示历史）
+  // 检查文件是否有提交记录（用于显示历史，不限制会话）
   static hasCommittedFile(filePath: string, operation: string): boolean {
     const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
 
     return Array.from(records.values()).some(
       (record) =>
         record.filePath === filePath &&
-        record.operation === operation &&
-        record.sessionId === currentSessionId
+        record.operation === operation
     )
   }
 
-  // 获取文件的最新提交记录
+  // 获取文件的最新提交记录（不限制会话）
   static getLatestCommitRecord(filePath: string, operation: string): CommitRecord | null {
     const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
 
     const fileRecords = Array.from(records.values())
       .filter(
         (record) =>
           record.filePath === filePath &&
-          record.operation === operation &&
-          record.sessionId === currentSessionId
+          record.operation === operation
       )
       .sort((a, b) => b.timestamp - a.timestamp)
 
@@ -114,7 +92,6 @@ class GitCommitTracker {
     commitHash?: string
   ): void {
     const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
 
     const record: CommitRecord = {
       filePath,
@@ -123,7 +100,6 @@ class GitCommitTracker {
       timestamp: Date.now(),
       commitMessage,
       cardNumber,
-      sessionId: currentSessionId,
       operationId
     }
 
@@ -133,37 +109,25 @@ class GitCommitTracker {
     console.log(`Git commit recorded for operation: ${operationId} - ${filePath} (${operation})`)
   }
 
-  // 获取文件的提交记录
+  // 获取特定操作的提交记录
+  static getOperationCommitRecord(operationId: string): CommitRecord | null {
+    const records = this.getRecords()
+    return records.get(operationId) || null
+  }
+
+  // 获取文件的提交记录（不限制会话）
   static getCommitRecord(filePath: string, operation: string): CommitRecord | null {
     const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
 
     const fileRecords = Array.from(records.values())
       .filter(
         (record) =>
           record.filePath === filePath &&
-          record.operation === operation &&
-          record.sessionId === currentSessionId
+          record.operation === operation
       )
       .sort((a, b) => b.timestamp - a.timestamp)
 
     return fileRecords[0] || null
-  }
-
-  // 清除当前会话的所有记录
-  static clearSessionRecords(): void {
-    const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
-
-    // 只删除当前会话的记录
-    for (const [key, record] of records.entries()) {
-      if (record.sessionId === currentSessionId) {
-        records.delete(key)
-      }
-    }
-
-    this.saveRecords(records)
-    console.log("Cleared current session git commit records")
   }
 
   // 清除所有记录（用于调试）
@@ -172,13 +136,13 @@ class GitCommitTracker {
     console.log("Cleared all git commit records")
   }
 
-  // 清除过期记录（超过7天）
+  // 清除过期记录（超过30天，延长保存时间以支持跨会话检查）
   static cleanupExpiredRecords(): void {
     const records = this.getRecords()
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
 
     for (const [key, record] of records.entries()) {
-      if (record.timestamp < sevenDaysAgo) {
+      if (record.timestamp < thirtyDaysAgo) {
         records.delete(key)
       }
     }
@@ -186,20 +150,20 @@ class GitCommitTracker {
     this.saveRecords(records)
   }
 
-  // 获取当前会话的所有提交记录
-  static getCurrentSessionRecords(): CommitRecord[] {
+  // 获取所有提交记录（按时间倒序）
+  static getAllCommitRecords(): CommitRecord[] {
     const records = this.getRecords()
-    const currentSessionId = this.getSessionId()
 
     return Array.from(records.values())
-      .filter((record) => record.sessionId === currentSessionId)
       .sort((a, b) => b.timestamp - a.timestamp) // 按时间倒序
   }
 
-  // 开始新会话（清除当前会话ID，下次访问时会生成新的）
-  static startNewSession(): void {
-    localStorage.removeItem(this.SESSION_KEY)
-    console.log("Started new git commit tracking session")
+  // 删除特定操作的提交记录（用于调试）
+  static removeOperationRecord(operationId: string): void {
+    const records = this.getRecords()
+    records.delete(operationId)
+    this.saveRecords(records)
+    console.log(`Removed git commit record for operation: ${operationId}`)
   }
 }
 

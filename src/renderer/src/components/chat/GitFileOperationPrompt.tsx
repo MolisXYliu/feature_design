@@ -18,8 +18,21 @@ export function GitFileOperationPrompt({
   operationId
 }: GitFileOperationPromptProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
+  // 基于文件路径和操作类型生成稳定的ID，而不是基于时间戳
   const currentOperationId = useMemo(() => {
-    return operationId || `${operation}_${filePath}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    if (operationId) {
+      return operationId
+    }
+
+    // 生成基于文件路径和操作类型的稳定哈希
+    const content = `${operation}_${filePath}`
+    let hash = 0
+    for (let i = 0; i < content.length; i++) {
+      const char = content.charCodeAt(i)
+      hash = ((hash << 5) - hash) + char
+      hash = hash & hash // Convert to 32-bit integer
+    }
+    return `${operation}_${Math.abs(hash).toString(36)}_${filePath.split('/').pop()}`
   }, [operationId, operation, filePath])
 
   const [showGitOptions, setShowGitOptions] = useState(false)
@@ -152,11 +165,11 @@ export function GitFileOperationPrompt({
   }, [filePath])
 
   useEffect(() => {
-    // 检查当前操作是否已经提交过
+    // 检查当前操作是否已经提交过（不依赖会话）
     const isCurrentOpCommitted = GitCommitTracker.hasCommittedOperation(currentOperationId)
     setIsCurrentOperationCommitted(isCurrentOpCommitted)
 
-    // 检查文件是否有提交历史
+    // 检查文件是否有提交历史（不限制会话）
     const hasFileHistory = GitCommitTracker.hasCommittedFile(filePath, operation)
     setHasFileCommitHistory(hasFileHistory)
 
@@ -166,7 +179,7 @@ export function GitFileOperationPrompt({
       setLatestCommitRecord(latest)
     }
 
-    // 如果当前操作已提交，不需要执行后续逻辑（获取Git信息等）
+    // 如果当前操作已提交，不需要执行后续逻辑（获取Git信息等��
     if (isCurrentOpCommitted) {
       return
     }
@@ -284,9 +297,8 @@ export function GitFileOperationPrompt({
 
   // 如果当前操作已提交，显示已提交状态
   if (isCurrentOperationCommitted && !showGitOptions) {
-    // 获取当前操作的提交记录
-    const records = GitCommitTracker.getCurrentSessionRecords()
-    const currentRecord = records.find(r => r.operationId === currentOperationId)
+    // 获取当前操作的提交记录（直接通过operationId获取）
+    const currentRecord = GitCommitTracker.getOperationCommitRecord(currentOperationId)
 
     if (currentRecord) {
       return (
@@ -326,7 +338,7 @@ export function GitFileOperationPrompt({
           {/* 显示文件历史提交信息（如果有的话） */}
           {hasFileCommitHistory && latestCommitRecord && (
             <div className="text-blue-600 dark:text-blue-400 mt-1 text-[10px]">
-              💡 此文件在本会话中已有提交记录: {latestCommitRecord.commitMessage}
+              💡 此文件已有提交记录: {latestCommitRecord.commitMessage}
               ({new Date(latestCommitRecord.timestamp).toLocaleString()})
             </div>
           )}

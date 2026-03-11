@@ -764,6 +764,7 @@ export function ToolCallRenderer({
               <GitFileOperationPrompt
                 filePath={path}
                 operation={toolCall.name}
+                operationId={toolCall.id}
                 onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
               />
             </div>
