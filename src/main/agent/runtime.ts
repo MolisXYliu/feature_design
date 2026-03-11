@@ -495,7 +495,7 @@ The workspace root is: ${workspacePath}`
   if (mcpConnectors.length > 0 || Object.keys(pluginMcpConfigs).length > 0) {
     const fingerprint = computeMcpConfigFingerprint([
       ...mcpConnectors,
-      ...Object.entries(pluginMcpConfigs).map(([k, v]) => ({ id: k, url: v.url ?? "", advanced: v }))
+      ...Object.entries(pluginMcpConfigs).map(([k, v]) => ({ id: k, url: v.url ?? v.command ?? "", advanced: v }))
     ])
     const cached = _mcpToolsCache
     const cacheValid = cached
@@ -515,7 +515,12 @@ The workspace root is: ${workspacePath}`
         }
         // Add plugin MCP servers
         for (const [name, cfg] of Object.entries(pluginMcpConfigs)) {
-          if (cfg.url) {
+          if (cfg.command) {
+            mcpServers[name] = {
+              command: cfg.command,
+              args: cfg.args ?? []
+            }
+          } else if (cfg.url) {
             mcpServers[name] = buildMcpServerConfig({
               url: cfg.url,
               advanced: { headers: cfg.headers, transport: cfg.transport }

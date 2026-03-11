@@ -1096,8 +1096,7 @@ export function deletePlugin(id: string): void {
 
 export function setPluginEnabled(id: string, enabled: boolean): void {
   const items = getPlugins()
-  const target = items.find((i) => i.id === id)
-  if (!target) return
+  if (!items.some((i) => i.id === id)) return
   const next = items.map((i) =>
     i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
   )
@@ -1111,6 +1110,12 @@ export function getEnabledPluginSkillsSources(): string[] {
     const skillsDir = join(plugin.path, "skills")
     if (existsSync(skillsDir)) {
       sources.push(skillsDir)
+    } else {
+      // Fallback: root-level SKILL.md (simple plugin structure with "." skill dir)
+      const rootSkillMd = join(plugin.path, "SKILL.md")
+      if (existsSync(rootSkillMd)) {
+        sources.push(plugin.path)
+      }
     }
   }
   return sources
@@ -1121,21 +1126,31 @@ export function getEnabledPluginMcpConfigs(): Record<string, PluginMcpServerConf
   const configs: Record<string, PluginMcpServerConfig> = {}
   for (const plugin of plugins) {
     const mcpJsonPath = join(plugin.path, ".mcp.json")
-    if (!existsSync(mcpJsonPath)) continue
-    try {
-      const content = readFileSync(mcpJsonPath, "utf-8")
-      const parsed = JSON.parse(content) as Record<string, unknown>
-      const servers = (parsed.mcpServers ?? parsed) as Record<string, PluginMcpServerConfig>
-      if (typeof servers === "object" && servers !== null) {
-        for (const [name, cfg] of Object.entries(servers)) {
-          if (cfg && typeof cfg === "object") {
-            configs[`${plugin.name}/${name}`] = cfg
-          }
-        }
-      }
-    } catch {
-      console.warn(`[Plugins] Failed to read .mcp.json for plugin ${plugin.name}`)
+    const servers = parseMcpJsonFile(mcpJsonPath)
+    if (!servers) continue
+    for (const [name, cfg] of Object.entries(servers)) {
+      configs[`${plugin.name}/${name}`] = cfg
     }
   }
   return configs
+}
+
+export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServerConfig> | null {
+  if (!existsSync(filePath)) return null
+  try {
+    const content = readFileSync(filePath, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const servers = (parsed.mcpServers ?? parsed) as Record<string, PluginMcpServerConfig>
+    if (typeof servers !== "object" || servers === null) return null
+    const result: Record<string, PluginMcpServerConfig> = {}
+    for (const [name, cfg] of Object.entries(servers)) {
+      if (cfg && typeof cfg === "object") {
+        result[name] = cfg
+      }
+    }
+    return Object.keys(result).length > 0 ? result : null
+  } catch {
+    console.warn(`[Plugins] Failed to parse .mcp.json at ${filePath}`)
+    return null
+  }
 }

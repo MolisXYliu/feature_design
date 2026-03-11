@@ -10,7 +10,8 @@ import {
   upsertPlugin,
   deletePlugin as deletePluginStorage,
   setPluginEnabled,
-  invalidateEnabledSkillsCache
+  invalidateEnabledSkillsCache,
+  parseMcpJsonFile
 } from "../storage"
 import type { PluginManifest, PluginMetadata, PluginMcpServerConfig } from "../types"
 
@@ -88,22 +89,7 @@ async function parsePluginDir(dirPath: string): Promise<ParsedPlugin> {
 
   // Read .mcp.json
   const mcpJsonPath = path.join(dirPath, ".mcp.json")
-  if (existsSync(mcpJsonPath)) {
-    try {
-      const content = await fs.readFile(mcpJsonPath, "utf-8")
-      const parsed = JSON.parse(content) as Record<string, unknown>
-      const servers = (parsed.mcpServers ?? parsed) as Record<string, PluginMcpServerConfig>
-      if (typeof servers === "object" && servers !== null) {
-        for (const [srvName, cfg] of Object.entries(servers)) {
-          if (cfg && typeof cfg === "object") {
-            mcpConfigs[srvName] = cfg
-          }
-        }
-      }
-    } catch {
-      console.warn("[Plugins] Failed to parse .mcp.json in", dirPath)
-    }
-  }
+  mcpConfigs = parseMcpJsonFile(mcpJsonPath) ?? {}
 
   return { manifest, skillDirs, mcpConfigs, name }
 }
@@ -146,14 +132,31 @@ async function installPluginFromDir(
       (p) => p.name === parsed.name || path.basename(p.path) === pluginName
     )
     if (existing) {
-      // Update existing: remove old directory
+      // Update existing: backup old directory, then copy new, restore on failure
+      const backupDir = existing.path + `_backup_${Date.now()}`
       if (existsSync(existing.path)) {
-        rmSync(existing.path, { recursive: true, force: true })
+        await fs.rename(existing.path, backupDir)
       }
+      try {
+        await copyDirRecursive(dirPath, destDir)
+      } catch (copyErr) {
+        // Restore from backup
+        if (existsSync(backupDir)) {
+          if (existsSync(destDir)) {
+            rmSync(destDir, { recursive: true, force: true })
+          }
+          await fs.rename(backupDir, existing.path)
+        }
+        throw copyErr
+      }
+      // Copy succeeded, remove backup
+      if (existsSync(backupDir)) {
+        rmSync(backupDir, { recursive: true, force: true })
+      }
+    } else {
+      // Fresh install
+      await copyDirRecursive(dirPath, destDir)
     }
-
-    // Copy to plugins directory
-    await copyDirRecursive(dirPath, destDir)
 
     const now = new Date().toISOString()
     const meta: PluginMetadata = {
@@ -218,10 +221,11 @@ async function installPluginFromZip(
         if (!relativePath) continue
 
         const destPath = path.resolve(tempDir, relativePath)
-        // Path traversal check
-        if (!destPath.startsWith(path.resolve(tempDir) + path.sep) && destPath !== path.resolve(tempDir)) {
-          console.warn(`[Plugins] Skipping ZIP entry with path traversal: ${entry.entryName}`)
-          continue
+        // Path traversal check — normalize both sides so separator style is consistent
+        const normalDest = path.normalize(destPath)
+        const normalBase = path.normalize(path.resolve(tempDir))
+        if (!normalDest.startsWith(normalBase + path.sep) && normalDest !== normalBase) {
+          throw new Error(`ZIP 包含路径穿越条目: ${entry.entryName}`)
         }
         const destDirPath = path.dirname(destPath)
         mkdirSync(destDirPath, { recursive: true })
