@@ -175,10 +175,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Resolve the base path once for reuse
     let baseFull: string
     try {
-      baseFull = this._resolvePath(resolved === "/" ? "." : resolved)
+      baseFull = this._resolvePath(resolved === "/" ? "." : (resolved || "."))
     } catch {
       return []
     }
+    // Early exit if path doesn't exist; cache stat for reuse below
+    let baseStat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      baseStat = await fs.stat(baseFull)
+    } catch {
+      return []
+    }
+    const isFile = baseStat.isFile()
 
     // Call parent's private ripgrepSearch directly to distinguish
     // "rg found nothing" ({}) from "rg unavailable" (null)
@@ -191,7 +199,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (typeof ripgrepSearch === "function") {
       rgResult = await ripgrepSearch.call(this, pattern, baseFull, glob ?? null)
     }
-    const parentMs = Date.now() - t0
+    const rgMs = Date.now() - t0
     // undefined = method missing (upstream API changed), treat same as unavailable
     const rgAvailable = rgResult !== null && rgResult !== undefined
 
@@ -205,33 +213,27 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
-    let source = results.length > 0 ? "ripgrep" : "none"
-
     // When path points to a specific file, filter results to only include
     // matches from the intended file (ripgrep may return broader results).
-    if (results.length > 0 && resolved !== "/") {
-      try {
-        const stat = await fs.stat(baseFull)
-        if (stat.isFile()) {
-          let expectedPath: string
-          if (this._virtualMode) {
-            const relative = path.relative(this._cwd, baseFull)
-            expectedPath = "/" + relative.split(path.sep).join("/")
-          } else {
-            expectedPath = baseFull
-          }
-          results = results.filter((m) => m.path === expectedPath)
-        }
-      } catch (err: any) {
-        if (err?.code !== "ENOENT") {
-          console.warn("[LocalSandbox] grepRaw file-filter stat failed:", err?.message)
-        }
+    if (results.length > 0 && resolved !== "/" && isFile) {
+      let expectedPath: string
+      if (this._virtualMode) {
+        const relative = path.relative(this._cwd, baseFull)
+        expectedPath = "/" + relative.split(path.sep).join("/")
+      } else {
+        expectedPath = baseFull
       }
+      results = results.filter((m) => m.path === expectedPath)
     }
 
-    // Only fall back to encoding-aware literal search when ripgrep is unavailable
-    // (not when it simply found no matches — that's the normal case).
-    if (!rgAvailable) {
+    let source = results.length > 0 ? "ripgrep" : "none"
+
+    // Fall back to encoding-aware literal search when:
+    // - ripgrep is unavailable (null/undefined), OR
+    // - ripgrep returned empty for a single file (may be non-UTF-8 / binary-detected,
+    //   e.g. GBK/Shift-JIS files that ripgrep skips as "binary")
+    // For directory-level searches, empty ripgrep results are normal — skip fallback.
+    if (!rgAvailable || (results.length === 0 && isFile)) {
       const t1 = Date.now()
       const rawResults = await this.encodingAwareLiteralSearch(pattern, baseFull, glob ?? null)
       const fallbackMs = Date.now() - t1
@@ -247,7 +249,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     console.log(
-      `[LocalSandbox] grepRaw: source=${source}, pattern="${pattern}", results=${results.length}, parentMs=${parentMs}`
+      `[LocalSandbox] grepRaw: source=${source}, pattern="${pattern}", results=${results.length}, rgMs=${rgMs}`
     )
 
     if (results.length === 0) return results
