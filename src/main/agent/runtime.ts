@@ -509,9 +509,18 @@ ${subagentShellGuidance}
 The workspace root is: ${workspacePath}`
 
   const skillsSources = await getEnabledSkillsSources()
+  console.log("[Runtime] Raw skills sources from getEnabledSkillsSources():", skillsSources)
+  console.log("[Runtime] Raw skills sources count:", skillsSources.length)
+  console.log("[Runtime] Raw skills sources content:", JSON.stringify(skillsSources, null, 2))
+
   // Merge plugin skills sources
   const pluginSkillsSources = getEnabledPluginSkillsSources()
+  console.log("[Runtime] Plugin skills sources:", pluginSkillsSources)
+  console.log("[Runtime] Plugin skills sources count:", pluginSkillsSources.length)
+
   const allSkillsSources = [...skillsSources, ...pluginSkillsSources]
+  console.log("[Runtime] All skills sources combined:", allSkillsSources)
+  console.log("[Runtime] All skills sources count:", allSkillsSources.length)
   console.log("[Runtime] Skills sources:", skillsSources, "Plugin skills:", pluginSkillsSources)
 
   // Initialize memory system (gated by user setting)
@@ -647,6 +656,8 @@ The workspace root is: ${workspacePath}`
     trimTokensToSummarize: trimForSummary
   })
 
+  console.log("[Runtime] Agent created with skills parameter:", allSkillsSources.length > 0 ? allSkillsSources : undefined)
+  console.log("[Runtime] Final skills passed to createDeepAgent:", JSON.stringify(allSkillsSources.length > 0 ? allSkillsSources : undefined, null, 2))
   console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
   return agent
 }

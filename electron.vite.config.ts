@@ -72,6 +72,26 @@ export default defineConfig({
         "@renderer": resolve("src/renderer/src")
       }
     },
-    plugins: [react(), tailwindcss()]
+    plugins: [react(), tailwindcss()],
+    server: {
+      proxy: {
+        // 访问 /api 开头的请求会转发
+        "/api": {
+          target: "http://localhost:3000", // 后端地址
+          changeOrigin: true,
+          // 去掉 /api 前缀
+          rewrite: (path) => path.replace(/^\/api/, "")
+        },
+
+        // 修复marketplace代理配置
+        "/marketplace": {
+          target: "https://api.cmbcowork.com",
+          changeOrigin: true,
+          secure: true,
+          // 直接转发到目标服务器，不需要重写路径
+          rewrite: (path) => path
+        }
+      }
+    }
   }
 })
