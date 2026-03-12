@@ -42,13 +42,29 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 import { createHash } from "crypto"
 import path from "path"
 import { join, delimiter } from "path"
-import { existsSync } from "fs"
+import { existsSync, createWriteStream } from "fs"
+import { createReadStream } from "fs"
+import { createGunzip } from "zlib"
+import { pipeline } from "stream/promises"
 import { app } from "electron"
 import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { getWindowsSandboxMode } from "../storage"
+
+/** Decompress codex.exe.gz → codex.exe if needed (skip if exe already up-to-date). */
+async function ensureCodexExe(exePath: string): Promise<void> {
+  const gzPath = exePath + ".gz"
+  if (!existsSync(gzPath)) return
+  if (existsSync(exePath)) return  // already extracted
+  try {
+    await pipeline(createReadStream(gzPath), createGunzip(), createWriteStream(exePath))
+    console.log("[Runtime] codex.exe extracted from .gz")
+  } catch (e) {
+    console.error("[Runtime] Failed to extract codex.exe:", e)
+  }
+}
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -438,6 +454,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
 
   // Codex Windows sandbox (unelevated): reuse rgDir which already points to resources/bin/win32
   const codexExePath = join(rgDir, "codex.exe")
+  if (process.platform === "win32") await ensureCodexExe(codexExePath)
   const codexExists = process.platform === "win32" && existsSync(codexExePath)
   const windowsSandbox = process.platform === "win32" ? getWindowsSandboxMode() : "none"
   console.log(`[Runtime] codex.exe: ${codexExePath}, exists: ${codexExists}, sandboxMode: ${windowsSandbox}`)
