@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Upload } from "lucide-react"
+import { Upload, Copy, Check, ChevronDown, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -17,7 +17,11 @@ interface UniversalUploadDialogProps {
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
   resourceType: "skill" | "mcp" | "plugin"
-  onUpload: (file: File, name: string, description: string) => Promise<{ success: boolean; error?: string }>
+  onUpload: (
+    file: File,
+    name: string,
+    description: string
+  ) => Promise<{ success: boolean; error?: string }>
 }
 
 export function UniversalUploadDialog({
@@ -160,6 +164,7 @@ export function UniversalUploadDialog({
         setName("")
         setDescription("")
         setError(null)
+        setShowJsonTemplate(false)
       }
     }
   }
@@ -175,6 +180,42 @@ export function UniversalUploadDialog({
       default:
         return "上���到市场"
     }
+  }
+
+  const [jsonTemplateCopied, setJsonTemplateCopied] = useState(false)
+  const [showJsonTemplate, setShowJsonTemplate] = useState(false)
+
+  const handleCopyJsonTemplate = () => {
+    const template = `{
+  "mcpServers": {
+    "pubmed": {
+      "type": "sse",
+      "name": "测试MCP服务",
+      "url": "http://test.com",
+      "enabled": false,
+      "advanced": {
+        "headers": {
+          "Token": "xxx"
+        },
+        "transport": "sse",
+        "reconnect": {
+          "enabled": true,
+          "maxAttempts": 3,
+          "delayMs": 1000
+        }
+      }
+    }
+  }
+}`
+    navigator.clipboard
+      .writeText(template)
+      .then(() => {
+        setJsonTemplateCopied(true)
+        setTimeout(() => setJsonTemplateCopied(false), 2000)
+      })
+      .catch(() => {
+        setError("复制模板失败，请手动复制")
+      })
   }
 
   return (
@@ -252,6 +293,62 @@ export function UniversalUploadDialog({
               className="w-full p-2 text-sm border rounded-md focus:ring-1 focus:ring-primary focus:outline-none disabled:opacity-50"
             />
           </div>
+
+          {/* JSON Template for MCP */}
+          {resourceType === "mcp" && (
+            <div className="p-4 bg-muted rounded-md">
+              <p className="text-sm text-muted-foreground mb-3">
+                需要帮助？可以复制 JSON 模板，按需修改后上传。
+              </p>
+              <div className="flex items-center gap-2 mb-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyJsonTemplate}
+                  disabled={uploading}
+                >
+                  {jsonTemplateCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                  {jsonTemplateCopied ? "模板已复制" : "复制 JSON 模板"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowJsonTemplate(!showJsonTemplate)}
+                  disabled={uploading}
+                >
+                  {showJsonTemplate ? <ChevronDown className="mr-2 h-4 w-4" /> : <ChevronRight className="mr-2 h-4 w-4" />}
+                  {showJsonTemplate ? "隐藏模板" : "查看模板"}
+                </Button>
+              </div>
+              {showJsonTemplate && (
+                <div className="mt-3">
+                  <pre className="bg-background p-3 rounded border text-xs overflow-x-auto">
+                    <code>{`{
+  "mcpServers": {
+    "pubmed": {
+      "type": "sse",
+      "name": "测试MCP服务",
+      "url": "http://test.com",
+      "enabled": false,
+      "advanced": {
+        "headers": {
+          "Token": "xxx"
+        },
+        "transport": "sse",
+        "reconnect": {
+          "enabled": true,
+          "maxAttempts": 3,
+          "delayMs": 1000
+        }
+      }
+    }
+  }
+}`}</code>
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
