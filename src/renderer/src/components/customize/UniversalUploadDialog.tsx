@@ -321,7 +321,7 @@ export function UniversalUploadDialog({
                 </Button>
               </div>
               {showJsonTemplate && (
-                <div className="mt-3">
+                <div className="mt-3 h-[150px] overflow-auto">
                   <pre className="bg-background p-3 rounded border text-xs overflow-x-auto">
                     <code>{`{
   "mcpServers": {
