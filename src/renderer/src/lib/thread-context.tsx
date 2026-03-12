@@ -335,11 +335,6 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       return `上下文窗口已满 (${usedK}K / ${maxK}K tokens)，请开启新对话。`
     }
 
-    // Check for model not found (404 — wrong model name)
-    if (errorMessage.includes("404") || (error as Error & { lc_error_code?: string }).lc_error_code === "MODEL_NOT_FOUND") {
-      return `模型不存在，请检查设置中的模型名称是否正确。\n${errorMessage}`
-    }
-
     // Check for rate limit errors
     if (errorMessage.includes("rate_limit") || errorMessage.includes("429")) {
       return "请求频率超限，请稍后再试。"
@@ -352,6 +347,13 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
       errorMessage.includes("authentication")
     ) {
       return "认证失败，请检查设置中的 API Key。"
+    }
+
+    // Check for model not found (404 — wrong model name)
+    // Use lc_error_code as primary signal; fall back to pattern matching "404" + model-related keywords
+    const lcCode = (error as Error & { lc_error_code?: string }).lc_error_code
+    if (lcCode === "MODEL_NOT_FOUND" || (/\b404\b/.test(errorMessage) && /model|not.found|does.not.exist/i.test(errorMessage))) {
+      return `模型不存在，请检查设置中的模型名称是否正确。\n${errorMessage}`
     }
 
     // Check for API-side termination (common with proxy/relay services)
