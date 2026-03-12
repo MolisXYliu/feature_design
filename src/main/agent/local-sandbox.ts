@@ -157,13 +157,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Override grepRaw to:
    * 1. Filter results when path is a file (defends against parent's literalSearch
    *    bug that expands single-file paths to full directory searches)
-   * 2. Fall back to encoding-aware search when parent returns no results
+   * 2. Fall back to encoding-aware search only when ripgrep is unavailable
    *    (parent's literalSearch is hardcoded UTF-8, misses non-UTF-8 files)
    * 3. Cap results for codebase exploration to avoid pressuring small context windows
    *
    * Defence layers: runtime.ts patches process.env.PATH so ripgrep is found;
-   * this filter (#1) catches parent literalSearch bug if ripgrep still fails;
-   * encodingAwareLiteralSearch has its own single-file fix as a final fallback.
+   * this method calls ripgrepSearch directly to distinguish "no matches" from
+   * "rg unavailable"; encodingAwareLiteralSearch serves as a final fallback.
    */
   async grepRaw(
     pattern: string,
@@ -171,26 +171,54 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     glob?: string | null
   ): Promise<GrepMatch[] | string> {
     const resolved = dirPath ?? "/"
-    const t0 = Date.now()
-    let results = await super.grepRaw(pattern, resolved, glob)
-    const parentMs = Date.now() - t0
-    if (typeof results === "string") return results
 
-    // When path points to a specific file, the parent's literalSearch fallback
-    // (triggered when ripgrep is unavailable) has a bug where it searches the
-    // entire parent directory instead of just the target file. Filter results
-    // to only include matches from the intended file.
+    // Resolve the base path once for reuse
+    let baseFull: string
+    try {
+      baseFull = this._resolvePath(resolved === "/" ? "." : resolved)
+    } catch {
+      return []
+    }
+
+    // Call parent's private ripgrepSearch directly to distinguish
+    // "rg found nothing" ({}) from "rg unavailable" (null)
+    const ripgrepSearch = (this as any).ripgrepSearch as
+      | ((p: string, b: string, g: string | null) => Promise<Record<string, Array<[number, string]>> | null>)
+      | undefined
+
+    const t0 = Date.now()
+    let rgResult: Record<string, Array<[number, string]>> | null | undefined
+    if (typeof ripgrepSearch === "function") {
+      rgResult = await ripgrepSearch.call(this, pattern, baseFull, glob ?? null)
+    }
+    const parentMs = Date.now() - t0
+    // undefined = method missing (upstream API changed), treat same as unavailable
+    const rgAvailable = rgResult !== null && rgResult !== undefined
+
+    // Convert ripgrep dict → flat array
+    let results: GrepMatch[] = []
+    if (rgResult) {
+      for (const [fpath, items] of Object.entries(rgResult)) {
+        for (const [lineNum, lineText] of items) {
+          results.push({ path: fpath, line: lineNum, text: lineText })
+        }
+      }
+    }
+
+    let source = results.length > 0 ? "ripgrep" : "none"
+
+    // When path points to a specific file, filter results to only include
+    // matches from the intended file (ripgrep may return broader results).
     if (results.length > 0 && resolved !== "/") {
       try {
-        const targetFull = this._resolvePath(resolved)
-        const stat = await fs.stat(targetFull)
+        const stat = await fs.stat(baseFull)
         if (stat.isFile()) {
           let expectedPath: string
           if (this._virtualMode) {
-            const relative = path.relative(this._cwd, targetFull)
+            const relative = path.relative(this._cwd, baseFull)
             expectedPath = "/" + relative.split(path.sep).join("/")
           } else {
-            expectedPath = targetFull
+            expectedPath = baseFull
           }
           results = results.filter((m) => m.path === expectedPath)
         }
@@ -201,15 +229,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
-    let source = results.length > 0 ? "ripgrep" : "none"
-
-    if (results.length === 0) {
-      let baseFull: string
-      try {
-        baseFull = this._resolvePath(resolved === "/" ? "." : resolved)
-      } catch {
-        return results
-      }
+    // Only fall back to encoding-aware literal search when ripgrep is unavailable
+    // (not when it simply found no matches — that's the normal case).
+    if (!rgAvailable) {
       const t1 = Date.now()
       const rawResults = await this.encodingAwareLiteralSearch(pattern, baseFull, glob ?? null)
       const fallbackMs = Date.now() - t1
@@ -586,7 +608,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     includeGlob: string | null
   ): Promise<Record<string, Array<[number, string]>>> {
     const results: Record<string, Array<[number, string]>> = {}
-    const stat = await fs.stat(baseFull)
+    let stat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      stat = await fs.stat(baseFull)
+    } catch {
+      return results // path does not exist — return empty
+    }
     const isFile = stat.isFile()
     const cwd = isFile ? path.dirname(baseFull) : baseFull
     // If baseFull points to a single file, only search that file
