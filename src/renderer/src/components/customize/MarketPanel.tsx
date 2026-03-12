@@ -8,7 +8,6 @@ import {
   Puzzle,
   Trash2,
   CheckCircle,
-  Upload,
   Plus
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -255,15 +254,55 @@ const marketApi = {
         }
       }
 
-      // For MCPs and Plugins, handle file download
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      // For plugins, we need to handle the downloaded file similar to skills
+      if (type === "plugin") {
+        try {
+          const arrayBuffer = await blob.arrayBuffer()
+          if (typeof window.api?.plugins?.install === "function") {
+            const installResult = await window.api.plugins.install(arrayBuffer, filename)
+            return {
+              success: installResult.success,
+              error: installResult.error
+            }
+          }
+        } catch (installError) {
+          console.error("Failed to install downloaded plugin:", installError)
+          return {
+            success: false,
+            error: "Failed to install downloaded plugin"
+          }
+        }
+      }
+
+      // For MCPs, handle JSON file content and add to system
+      if (type === "mcp") {
+        try {
+          const text = await blob.text()
+          const mcpConfig = JSON.parse(text)
+          const config = mcpConfig?.mcpServer?.pubmed ||{}
+
+          if (!config.name || !config.url) {
+            return {
+              success: false,
+              error: "No valid MCP connectors found in configuration"
+            }
+          }
+
+          // Create all connectors
+          if (typeof window.api?.mcp?.create === "function") {
+            await window.api.mcp.create(config)
+            return {
+              success: true
+            }
+          }
+        } catch (parseError) {
+          console.error("Failed to parse or install MCP connector:", parseError)
+          return {
+            success: false,
+            error: "Failed to parse MCP configuration or install connector"
+          }
+        }
+      }
 
       return { success: true }
     } catch (error) {
@@ -639,8 +678,15 @@ export function MarketPanel(): React.JSX.Element {
     if (!deleteDialog.item) return
 
     try {
-      const itemName = deleteDialog.item.name || deleteDialog.item.id
-      const itemType = deleteDialog.item.type!
+      const itemName = deleteDialog.item.name || deleteDialog.item.id || ''
+      // 修复type=undefined的问题：使用当前activeTab作为type
+      const itemType = deleteDialog.item.type || activeTab
+
+      if (!itemName) {
+        console.error("Item name is required for deletion")
+        return
+      }
+
       const response = await marketApi.deleteItem(itemName, itemType)
       if (response.message) {
         // Remove item from localStorage tracking
@@ -674,7 +720,13 @@ export function MarketPanel(): React.JSX.Element {
     setDownloadingItems(prev => new Set(prev).add(itemKey))
 
     try {
-      const itemName = item.name || item.id
+      const itemName = item.name || item.id || ''
+
+      if (!itemName) {
+        console.error("Item name is required for download")
+        return
+      }
+
       // Use current activeTab as the type
       const response = await marketApi.downloadItem(itemName, activeTab)
       if (response.success) {
@@ -791,10 +843,10 @@ export function MarketPanel(): React.JSX.Element {
             <ScrollArea className="h-full">
               <div className="p-4 space-y-3">
                 {loading ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">Loading...</div>
+                  <div className="text-center py-8 text-muted-foreground text-sm">加载中...</div>
                 ) : filteredData.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground text-sm">
-                    {searchQuery ? "No items found matching your search" : "No items available"}
+                    {searchQuery ? "未找到匹配的项目" : "暂无可用项目"}
                   </div>
                 ) : (
                   filteredData.map((item) => (
@@ -819,18 +871,17 @@ export function MarketPanel(): React.JSX.Element {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogTitle>确认删除</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete &quot;{deleteDialog.item?.name}&quot;? This action
-              cannot be undone.
+              您确定要删除 &quot;{deleteDialog.item?.name}&quot; 吗？此操作无法撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialog({ open: false, item: null })}>
-              Cancel
+              取消
             </Button>
             <Button variant="destructive" onClick={confirmDelete}>
-              Delete
+              删除
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -844,16 +895,16 @@ export function MarketPanel(): React.JSX.Element {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle className="size-5 text-green-500" />
-              Download Successful
+              下载成功
             </DialogTitle>
             <DialogDescription>
-              &quot;{downloadSuccess.itemName}&quot; has been successfully downloaded and added to your {activeTab === "skill" ? "Skills" : activeTab === "mcp" ? "MCPs" : "Plugins"}.
-              {activeTab === "skill" && " You can find it in the Skills panel."}
+              &quot;{downloadSuccess.itemName}&quot; 已成功下载并添加到您的{activeTab === "skill" ? "技能" : activeTab === "mcp" ? "MCP连接器" : "插件"}中。
+              {activeTab === "skill" && " 您可以在技能面板中找到它。"}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setDownloadSuccess({ open: false, itemName: "" })}>
-              OK
+              确定
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -884,7 +935,7 @@ export function MarketPanel(): React.JSX.Element {
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setUploadSuccess({ open: false, type: "skill" })}>
-              确定
+              确���
             </Button>
           </DialogFooter>
         </DialogContent>
