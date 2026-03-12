@@ -42,7 +42,7 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 import { createHash } from "crypto"
 import path from "path"
 import { join, delimiter } from "path"
-import { existsSync, createWriteStream } from "fs"
+import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
 import { createReadStream } from "fs"
 import { createGunzip } from "zlib"
 import { pipeline } from "stream/promises"
@@ -53,11 +53,16 @@ import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { getWindowsSandboxMode } from "../storage"
 
-/** Decompress codex.exe.gz → codex.exe if needed (skip if exe already up-to-date). */
+/** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
 async function ensureCodexExe(exePath: string): Promise<void> {
   const gzPath = exePath + ".gz"
   if (!existsSync(gzPath)) return
-  if (existsSync(exePath)) return  // already extracted
+  if (existsSync(exePath)) {
+    // Skip if exe is up-to-date (gz not newer)
+    if (statSync(exePath).mtimeMs >= statSync(gzPath).mtimeMs) return
+    // gz is newer — remove stale exe before re-extracting
+    try { unlinkSync(exePath) } catch { /* ignore */ }
+  }
   try {
     await pipeline(createReadStream(gzPath), createGunzip(), createWriteStream(exePath))
     console.log("[Runtime] codex.exe extracted from .gz")
