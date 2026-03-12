@@ -10,6 +10,7 @@ import { registerHeartbeatHandlers } from "./ipc/heartbeat"
 import { registerMemoryHandlers } from "./ipc/memory"
 import { registerGitHandlers } from "./ipc/git"
 import { registerPluginHandlers } from "./ipc/plugins"
+import { registerSandboxHandlers } from "./ipc/sandbox"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -116,6 +117,7 @@ if (!gotTheLock) {
     registerMemoryHandlers(ipcMain)
     registerGitHandlers()
     registerPluginHandlers(ipcMain)
+    registerSandboxHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {

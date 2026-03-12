@@ -48,6 +48,7 @@ import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
+import { getWindowsSandboxMode } from "../storage"
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -229,11 +230,15 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(): { name: string; isBashLike: boolean } {
-  const resolved = LocalSandbox.resolvedShell()
-  const base = path.basename(resolved).replace(/\.exe$/i, "")
+function getShellInfo(windowsSandbox?: "none" | "unelevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isUnelevated = process.platform === "win32" && windowsSandbox === "unelevated"
+  const resolved = isUnelevated
+    ? LocalSandbox.resolvedWindowsSandboxShell()
+    : LocalSandbox.resolvedShell()
+  const base = path.basename(resolved).replace(/\.exe$/i, "").toLowerCase()
   const isBashLike = ["bash", "sh", "zsh"].includes(base)
-  return { name: base, isBashLike }
+  const isPowerShell = ["pwsh", "powershell"].includes(base)
+  return { name: base, isBashLike, isPowerShell }
 }
 
 /** Format a Date as local ISO-8601 with UTC offset, e.g. 2026-03-08T23:01:26+08:00 */
@@ -257,17 +262,19 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const { name: shell, isBashLike } = getShellInfo()
+  const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
   const examplePath = isWindows
     ? `${workspacePath}\\src\\index.ts`
     : `${workspacePath}/src/index.ts`
 
   const shellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
-    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
+    : isPowerShell
+      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const workingDirSection = `
@@ -429,26 +436,36 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     : undefined
   console.log(`[Runtime] ripgrep bin: ${rgBin}, exists: ${rgExists}, platform: ${process.platform}`)
 
+  // Codex Windows sandbox (unelevated): reuse rgDir which already points to resources/bin/win32
+  const codexExePath = join(rgDir, "codex.exe")
+  const codexExists = process.platform === "win32" && existsSync(codexExePath)
+  const windowsSandbox = process.platform === "win32" ? getWindowsSandboxMode() : "none"
+  console.log(`[Runtime] codex.exe: ${codexExePath}, exists: ${codexExists}, sandboxMode: ${windowsSandbox}`)
+
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
     timeout: 600_000,
     maxOutputBytes,
-    env
+    env,
+    windowsSandbox,
+    codexExePath: codexExists ? codexExePath : undefined
   })
 
-  let systemPrompt = getSystemPrompt(workspacePath)
+  let systemPrompt = getSystemPrompt(workspacePath, windowsSandbox)
   if (extraSystemPrompt) {
     systemPrompt += "\n\n" + extraSystemPrompt
   }
 
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const { name: shell, isBashLike } = getShellInfo()
+  const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
 
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
-    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
+    : isPowerShell
+      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
 

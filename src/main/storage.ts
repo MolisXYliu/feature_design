@@ -1161,3 +1161,23 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
     return null
   }
 }
+
+// ── Windows Sandbox Settings ──────────────────────────────────────────────────
+
+const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
+
+export function getWindowsSandboxMode(): "none" | "unelevated" {
+  if (!existsSync(SANDBOX_SETTINGS_FILE)) return "none"
+  try {
+    const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
+    return parsed.mode === "unelevated" ? "unelevated" : "none"
+  } catch (err) {
+    console.warn("[Storage] Failed to load sandbox settings:", err)
+    return "none"
+  }
+}
+
+export function setWindowsSandboxMode(mode: "none" | "unelevated"): void {
+  getOpenworkDir()
+  writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ mode }, null, 2))
+}

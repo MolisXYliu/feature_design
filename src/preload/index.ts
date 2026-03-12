@@ -472,6 +472,17 @@ const api = {
       ipcRenderer.invoke("plugins:setEnabled", { id, enabled }) as Promise<void>,
     getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+  },
+  sandbox: {
+    getMode: (): Promise<"none" | "unelevated"> =>
+      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated">,
+    setMode: (mode: "none" | "unelevated"): Promise<void> =>
+      ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
+    onChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => { callback() }
+      ipcRenderer.on("sandbox:changed", handler)
+      return () => { ipcRenderer.removeListener("sandbox:changed", handler) }
+    }
   }
 }
 
