@@ -95,7 +95,7 @@ export function SandboxPanel(): React.JSX.Element {
         <div className="flex items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
           <Info className="size-4 mt-0.5 shrink-0" />
           <p>
-            沙箱模式在下一次 Agent 调用时生效。Unelevated 模式需要 <code className="font-mono text-xs bg-muted px-1 rounded">resources/bin/win32/codex.exe</code> 存在，不存在时自动降级为无沙箱。
+            切换沙箱模式后，将在下一次对话中生效。
           </p>
         </div>
 

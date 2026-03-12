@@ -858,12 +858,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
-    // cmd.exe: force UTF-8 code page; PowerShell: force UTF-8 output encoding (matches Codex SDK)
+    // Force UTF-8 output encoding for both cmd.exe and PowerShell.
+    // In sandbox (Constrained Language Mode), [Console]::OutputEncoding is
+    // blocked — use chcp 65001 which works in both cmd and PowerShell.
+    // Note: chcp only affects external-program stdout decoding; PowerShell
+    // cmdlet output still relies on $OutputEncoding, but CLM blocks most
+    // cmdlets anyway, so this is acceptable.
     const shellBase = path.basename(shell).replace(/\.exe$/i, "").toLowerCase()
     const effectiveCommand = shellBase === "cmd"
       ? `chcp 65001 >nul & ${command}`
       : shellBase === "pwsh" || shellBase === "powershell"
-        ? `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${command}`
+        ? `chcp 65001 >$null; ${command}`
         : command
 
     const sandboxArgs = [
