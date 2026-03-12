@@ -66,7 +66,7 @@ interface DownloadResponse {
 }
 
 // Updated API endpoints to match exact specification
-const API_BASE_URL = "/marketplace" // Replace with actual API URL
+const API_BASE_URL = "http://haha.com/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
@@ -944,7 +944,7 @@ export function MarketPanel(): React.JSX.Element {
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setUploadSuccess({ open: false, type: "skill" })}>
-              确���
+              确认
             </Button>
           </DialogFooter>
         </DialogContent>

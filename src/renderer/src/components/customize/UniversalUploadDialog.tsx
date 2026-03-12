@@ -54,9 +54,9 @@ export function UniversalUploadDialog({
   const getFileTypeDescription = () => {
     switch (resourceType) {
       case "skill":
-        return ".md 文件需包含 YAML frontmatter 中的 name 字段；.zip 文件需包含 SKILL.md"
+        return ".md 文件需包含 YAML frontmatter 中的 name 字段；.zip 文件需包含 SKILL.md。SKILL.md必须在根目录"
       case "mcp":
-        return "上传 .json 文件，包含 MCP 连接器配置"
+        return "上传 .json 文件，包含 MCP 连接器配置，必须是utf-8"
       case "plugin":
         return "上传 .zip 文件，包含插件代码和配置文件"
       default:
@@ -178,7 +178,7 @@ export function UniversalUploadDialog({
       case "plugin":
         return "上传插件到市场"
       default:
-        return "上���到市场"
+        return "上传到市场"
     }
   }
 
