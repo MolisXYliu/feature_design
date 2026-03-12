@@ -279,7 +279,7 @@ const marketApi = {
         try {
           const text = await blob.text()
           const mcpConfig = JSON.parse(text)
-          const config = mcpConfig?.mcpServer?.pubmed ||{}
+          const config = mcpConfig?.mcpServers?.pubmed ||{}
 
           if (!config.name || !config.url) {
             return {
@@ -290,7 +290,16 @@ const marketApi = {
 
           // Create all connectors
           if (typeof window.api?.mcp?.create === "function") {
-            await window.api.mcp.create(config)
+            const targetConfig = {
+              name: config?.name || name || '',
+              url:config?.url,
+              enabled: false,
+              advanced:{
+                ...(config?.advanced || {}),
+                transport: config?.type || config?.advanced?.transport || ''
+              }
+            }
+            await window.api.mcp.create(targetConfig)
             return {
               success: true
             }
