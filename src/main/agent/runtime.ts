@@ -452,9 +452,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   )
   const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
   const rgExists = existsSync(rgBin)
-  const env = rgExists
-    ? { ...process.env, PATH: `${rgDir}${delimiter}${process.env.PATH ?? ""}` }
-    : undefined
+  // Mutate process.env.PATH so deepagents' internal ripgrepSearch
+  // (spawns "rg" without custom env, inherits process.env) can find it.
+  const paths = (process.env.PATH ?? "").split(delimiter)
+  if (rgExists && !paths.includes(rgDir)) {
+    process.env.PATH = `${rgDir}${delimiter}${process.env.PATH ?? ""}`
+  }
   console.log(`[Runtime] ripgrep bin: ${rgBin}, exists: ${rgExists}, platform: ${process.platform}`)
 
   // Codex Windows sandbox (unelevated): reuse rgDir which already points to resources/bin/win32
@@ -469,7 +472,6 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     virtualMode: false,
     timeout: 600_000,
     maxOutputBytes,
-    env,
     windowsSandbox,
     codexExePath: codexExists ? codexExePath : undefined
   })

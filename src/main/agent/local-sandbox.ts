@@ -79,6 +79,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly workingDir: string
   private readonly windowsSandbox: "none" | "unelevated"
   private readonly codexExePath: string
+  /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
+  private readonly _resolvePath: (key: string) => string
+  private readonly _virtualMode: boolean
+  private readonly _cwd: string
+  private readonly _maxFileSizeBytes: number
 
   constructor(options: LocalSandboxOptions = {}) {
     super({
@@ -101,6 +106,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.workingDir = options.rootDir ?? process.cwd()
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
+
+    // Cache parent's private fields once to avoid scattered (this as any) casts
+    this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
+    this._virtualMode = ((this as any).virtualMode as boolean) ?? false
+    this._cwd = ((this as any).cwd as string) ?? this.workingDir
+    this._maxFileSizeBytes = ((this as any).maxFileSizeBytes as number) ?? 10 * 1024 * 1024
+    if ((this as any).virtualMode === undefined) {
+      console.warn("[LocalSandbox] parent virtualMode not found, defaulting to false")
+    }
+    if ((this as any).cwd === undefined) {
+      console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
+    }
 
     // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
     // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
@@ -138,9 +155,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /**
    * Override grepRaw to:
-   * 1. Fall back to encoding-aware search when parent returns no results
+   * 1. Filter results when path is a file (defends against parent's literalSearch
+   *    bug that expands single-file paths to full directory searches)
+   * 2. Fall back to encoding-aware search when parent returns no results
    *    (parent's literalSearch is hardcoded UTF-8, misses non-UTF-8 files)
-   * 2. Cap results for codebase exploration to avoid pressuring small context windows
+   * 3. Cap results for codebase exploration to avoid pressuring small context windows
+   *
+   * Defence layers: runtime.ts patches process.env.PATH so ripgrep is found;
+   * this filter (#1) catches parent literalSearch bug if ripgrep still fails;
+   * encodingAwareLiteralSearch has its own single-file fix as a final fallback.
    */
   async grepRaw(
     pattern: string,
@@ -153,12 +176,37 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const parentMs = Date.now() - t0
     if (typeof results === "string") return results
 
+    // When path points to a specific file, the parent's literalSearch fallback
+    // (triggered when ripgrep is unavailable) has a bug where it searches the
+    // entire parent directory instead of just the target file. Filter results
+    // to only include matches from the intended file.
+    if (results.length > 0 && resolved !== "/") {
+      try {
+        const targetFull = this._resolvePath(resolved)
+        const stat = await fs.stat(targetFull)
+        if (stat.isFile()) {
+          let expectedPath: string
+          if (this._virtualMode) {
+            const relative = path.relative(this._cwd, targetFull)
+            expectedPath = "/" + relative.split(path.sep).join("/")
+          } else {
+            expectedPath = targetFull
+          }
+          results = results.filter((m) => m.path === expectedPath)
+        }
+      } catch (err: any) {
+        if (err?.code !== "ENOENT") {
+          console.warn("[LocalSandbox] grepRaw file-filter stat failed:", err?.message)
+        }
+      }
+    }
+
     let source = results.length > 0 ? "ripgrep" : "none"
 
     if (results.length === 0) {
       let baseFull: string
       try {
-        baseFull = (this as any).resolvePath(resolved === "/" ? "." : resolved)
+        baseFull = this._resolvePath(resolved === "/" ? "." : resolved)
       } catch {
         return results
       }
@@ -388,7 +436,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Shared helper for read(), edit(), and other encoding-aware operations.
    */
   private async readFileBuffer(filePath: string): Promise<{ buffer: Buffer; resolvedPath: string }> {
-    const resolvedPath: string = (this as any).resolvePath(filePath)
+    const resolvedPath: string = this._resolvePath(filePath)
 
     let buffer: Buffer
     if (LocalSandbox.SUPPORTS_NOFOLLOW) {
@@ -538,20 +586,25 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     includeGlob: string | null
   ): Promise<Record<string, Array<[number, string]>>> {
     const results: Record<string, Array<[number, string]>> = {}
-    const cwd = (await fs.stat(baseFull)).isDirectory()
-      ? baseFull
-      : path.dirname(baseFull)
-    const files = await fg("**/*", {
-      cwd, absolute: true, onlyFiles: true, dot: true,
-      ignore: LocalSandbox.SEARCH_IGNORE
-    })
-    const maxBytes = ((this as any).maxFileSizeBytes as number) ?? 10 * 1024 * 1024
-    const virtualMode = (this as any).virtualMode as boolean | undefined
-    const cwdDir = virtualMode ? ((this as any).cwd as string) : ""
+    const stat = await fs.stat(baseFull)
+    const isFile = stat.isFile()
+    const cwd = isFile ? path.dirname(baseFull) : baseFull
+    // If baseFull points to a single file, only search that file
+    const files = isFile
+      ? [baseFull]
+      : await fg("**/*", {
+          cwd, absolute: true, onlyFiles: true, dot: true,
+          ignore: LocalSandbox.SEARCH_IGNORE
+        })
+    const maxBytes = this._maxFileSizeBytes
+    const cwdDir = this._virtualMode ? this._cwd : ""
 
     for (const fp of files) {
       try {
-        if (includeGlob && !micromatch.isMatch(path.basename(fp), includeGlob)) continue
+        // Single-file mode: skip glob filter — caller already specified the target file
+        // matchBase: when glob has no slashes (e.g. "*.ts"), match against
+        // basename only — consistent with ripgrep's --glob behavior.
+        if (!isFile && includeGlob && !micromatch.isMatch(path.relative(cwd, fp), includeGlob, { matchBase: true })) continue
         if ((await fs.stat(fp)).size > maxBytes) continue
 
         const buf = await fs.readFile(fp)
@@ -568,7 +621,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         const lines = content.split("\n")
 
         let virtPath: string | null = null
-        if (virtualMode) {
+        if (this._virtualMode) {
           try {
             const relative = path.relative(cwdDir, fp)
             if (relative.startsWith("..")) continue
