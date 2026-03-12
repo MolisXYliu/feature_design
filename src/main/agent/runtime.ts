@@ -640,8 +640,7 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    // TODO: 后续改回来，恢复 execute 审批
-    // interruptOn: { execute: true },
+    interruptOn: { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,
