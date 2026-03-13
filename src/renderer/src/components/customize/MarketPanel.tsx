@@ -9,7 +9,8 @@ import {
   CheckCircle,
   Plus,
   HardDrive,
-  Zap
+  Zap,
+  Tag
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,6 +33,7 @@ interface MarketItem {
   description: string
   filename: string
   created_at: string
+  category?: string // Add category field
   // Only keep essential UI fields for compatibility
   id?: string
   type?: MarketItemType
@@ -411,7 +413,17 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
       <div className="flex items-start justify-between mb-2">
-        <h3 className="font-medium text-sm line-clamp-1 flex-1">{item.name}</h3>
+        <div className="flex-1">
+          <h3 className="font-medium text-sm line-clamp-1 mb-1">{item.name}</h3>
+          {item.category && (
+            <div className="flex items-center gap-1 mb-1">
+              <Tag className="size-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {item.category}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1 ml-2">
           {isDownloading ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -450,7 +462,7 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground line-clamp-2">{item.description}</p>
+      <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{item.description}</p>
 
       <div className="text-xs text-muted-foreground">
         {item.filename} • Created {new Date(item.created_at).toLocaleDateString()}
@@ -643,7 +655,7 @@ export function MarketPanel(): React.JSX.Element {
       }
     } catch (error) {
       console.error("Failed to download item:", error)
-      setError(error instanceof Error ? error.message : "下载失败")
+      setError(error instanceof Error ? error.message : "下��失败")
     } finally {
       // Remove from downloading set
       setDownloadingItems(prev => {
