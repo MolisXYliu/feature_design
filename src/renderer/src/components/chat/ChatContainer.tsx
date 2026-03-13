@@ -29,7 +29,11 @@ import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble } from "./MessageBubble"
+import {
+  SkillCreateConfirmDialog,
+  type SkillConfirmRequest
+} from "./SkillCreateConfirmDialog"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -91,6 +95,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
+  // Skill creation human-confirmation state
+  const [skillConfirmRequest, setSkillConfirmRequest] = useState<SkillConfirmRequest | null>(null)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
@@ -441,6 +447,26 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [])
 
+  // ── Skill creation human-confirmation listener ──────────
+  useEffect(() => {
+    const cleanup = window.api.skillEvolution.onConfirmRequest((req) => {
+      console.log("[ChatContainer] Received skill confirm request:", req.requestId, req.name)
+      setSkillConfirmRequest(req)
+    })
+    return cleanup
+  }, [])
+
+  const handleSkillApprove = useCallback((requestId: string): void => {
+    void window.api.skillEvolution.confirmResponse(requestId, true)
+    setSkillConfirmRequest(null)
+  }, [])
+
+  const handleSkillReject = useCallback((requestId: string): void => {
+    void window.api.skillEvolution.confirmResponse(requestId, false)
+    setSkillConfirmRequest(null)
+  }, [])
+  // ────────────────────────────────────────────────────────
+
   const getSkillId = useCallback((skill: SkillMetadata): string => {
     const fromPath = skill.path.split("/").slice(-2, -1)[0]
     return (fromPath || skill.name || "").toLowerCase()
@@ -747,6 +773,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+      {/* Skill creation confirmation dialog */}
+      <SkillCreateConfirmDialog
+        request={skillConfirmRequest}
+        onApprove={handleSkillApprove}
+        onReject={handleSkillReject}
+      />
+
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">

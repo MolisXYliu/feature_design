@@ -20,17 +20,77 @@ import {
   readdirSync,
   rmSync
 } from "fs"
-import { BrowserWindow } from "electron"
+import { BrowserWindow, ipcMain } from "electron"
 import { getCustomSkillsDir, invalidateEnabledSkillsCache } from "../../storage"
+import { v4 as uuid } from "uuid"
 
 // ─────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────
 
-function notifyRenderer(channel: string): void {
+function notifyRenderer(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel)
+    win.webContents.send(channel, payload)
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// Human-confirmation gate for skill creation
+//
+// Flow:
+//   1. Tool calls requestSkillConfirmation() — sends IPC event to renderer
+//      with the proposed skill details (name, description, content preview).
+//   2. Renderer shows a dialog; user clicks Approve or Reject.
+//   3. Renderer calls ipcRenderer.invoke("skill:confirmResponse", { requestId, approved })
+//   4. Main process resolves the pending Promise and returns the decision.
+// ─────────────────────────────────────────────────────────
+
+interface SkillConfirmRequest {
+  requestId: string
+  skillId: string
+  name: string
+  description: string
+  content: string
+}
+
+// Map of pending confirmation promises keyed by requestId
+const _pendingConfirms = new Map<string, (approved: boolean) => void>()
+
+// Register the one-time IPC handler for confirm responses (idempotent)
+let _confirmHandlerRegistered = false
+function ensureConfirmHandler(): void {
+  if (_confirmHandlerRegistered) return
+  _confirmHandlerRegistered = true
+  ipcMain.handle("skill:confirmResponse", (_event, { requestId, approved }: { requestId: string; approved: boolean }) => {
+    const resolve = _pendingConfirms.get(requestId)
+    if (resolve) {
+      _pendingConfirms.delete(requestId)
+      resolve(approved)
+    }
+  })
+}
+
+/**
+ * Send a confirmation request to the renderer and wait for the user's decision.
+ * Times out after 5 minutes — defaults to rejected.
+ */
+async function requestSkillConfirmation(req: SkillConfirmRequest): Promise<boolean> {
+  ensureConfirmHandler()
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      _pendingConfirms.delete(req.requestId)
+      console.warn(`[SkillEvolution] Confirmation timed out for requestId: ${req.requestId}`)
+      resolve(false)
+    }, 5 * 60 * 1000)
+
+    _pendingConfirms.set(req.requestId, (approved) => {
+      clearTimeout(timeout)
+      resolve(approved)
+    })
+
+    notifyRenderer("skill:confirmRequest", req)
+    console.log(`[SkillEvolution] Sent confirmation request: ${req.requestId} for skill "${req.name}"`)
+  })
 }
 
 /** Sanitize a skill name into a safe directory name */
@@ -193,6 +253,28 @@ export function createSkillEvolutionTool() {
             return `Error: skill already exists: ${skillId}. Use action='patch' to update it.`
           }
 
+          // ── Human confirmation gate ──────────────────────
+          const requestId = uuid()
+          console.log(`[SkillEvolution] Requesting user confirmation for skill: "${input.name}" (${requestId})`)
+          const approved = await requestSkillConfirmation({
+            requestId,
+            skillId,
+            name: input.name,
+            description: input.description,
+            content: input.content
+          })
+
+          if (!approved) {
+            console.log(`[SkillEvolution] User rejected skill creation: "${input.name}"`)
+            return JSON.stringify({
+              success: false,
+              skillId,
+              name: input.name,
+              message: `User declined to create skill '${input.name}'. No files were written.`
+            })
+          }
+          // ────────────────────────────────────────────────
+
           mkdirSync(skillDir, { recursive: true })
           writeFileSync(join(skillDir, "SKILL.md"), input.content, "utf-8")
 
@@ -206,7 +288,7 @@ export function createSkillEvolutionTool() {
             skillId,
             name: input.name,
             path: skillDir,
-            message: `Skill '${input.name}' created. It will be active in the next conversation.`
+            message: `Skill '${input.name}' created successfully. It will be active in the next conversation.`
           })
         }
 

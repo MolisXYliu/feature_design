@@ -459,6 +459,28 @@ const api = {
       return () => { ipcRenderer.removeListener(channel, handler) }
     }
   },
+  skillEvolution: {
+    // Listen for skill creation confirmation requests from the main process
+    onConfirmRequest: (
+      callback: (req: {
+        requestId: string
+        skillId: string
+        name: string
+        description: string
+        content: string
+      }) => void
+    ): (() => void) => {
+      const handler = (
+        _: unknown,
+        req: { requestId: string; skillId: string; name: string; description: string; content: string }
+      ): void => { callback(req) }
+      ipcRenderer.on("skill:confirmRequest", handler)
+      return () => { ipcRenderer.removeListener("skill:confirmRequest", handler) }
+    },
+    // Send the user's approval / rejection back to main process
+    confirmResponse: (requestId: string, approved: boolean): Promise<void> =>
+      ipcRenderer.invoke("skill:confirmResponse", { requestId, approved }) as Promise<void>
+  },
   plugins: {
     list: (): Promise<PluginMetadata[]> =>
       ipcRenderer.invoke("plugins:list") as Promise<PluginMetadata[]>,
