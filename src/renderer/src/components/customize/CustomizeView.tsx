@@ -57,7 +57,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("connectors")}
           >
             <Plug className="size-4 shrink-0" />
-            模型连接协议
+            MCP 连接器
           </button>
           <button
             className={cn(
