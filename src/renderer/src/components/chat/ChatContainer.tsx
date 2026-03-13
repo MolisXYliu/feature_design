@@ -18,8 +18,8 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock
-} from "lucide-react"
+  Clock, Notebook, Megaphone
+} from "lucide-react";
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -801,7 +801,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
       {/* Copy notification */}
       {showCopyNotification && (
-        <div className="fixed top-[40vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
+        <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
           <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm px-4 py-2 shadow-lg">
             <div className="flex items-center gap-2 text-sm text-foreground">
               <div className="size-4 rounded-full bg-green-500 flex items-center justify-center">
@@ -809,7 +809,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               </div>
-              <span>已复制链接到剪切板，请在浏览器中打开查看</span>
+              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
             </div>
           </div>
         </div>
@@ -921,7 +921,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     {customSkillCards.length > 0 && (
                       <div className="space-y-2">
                         <div className="text-xs text-muted-foreground font-medium tracking-wider">
-                          我安装的技能
+                          <span>我安装的技能</span>
+                          <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           {customSkillCards.map(({ skill, label, icon }) => (
@@ -962,25 +963,73 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </div>
                     )}
-                    <div className="text-xs text-muted-foreground font-medium tracking-wider">
-                      可以去 [ 自定义 / 应用市场 ] 安装市场上的技能使用
-                    </div>
 
-                    <div
-                      className="text-blue-500 hover:text-blue-400 cursor-pointer text-sm underline"
-                      onClick={async () => {
-                        const instructionUrl = import.meta.env.VITE_INTRUCTION_URL
-                        handleCopyToClipboard(instructionUrl)
-                      }}
-                    >
-                      操作说明文档
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                        帮助
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <button
+                          onClick={async () => {
+                            const instructionUrl = import.meta.env.VITE_INTRUCTION_URL;
+                            handleCopyToClipboard(instructionUrl);
+                          }}
+                          type="button"
+                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              <Notebook size={14} />
+                            </div>
+                            <div className="text-xs text-foreground leading-5">操作说明文档</div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const instructionUrl = import.meta.env.VITE_PACKAGE_URL;
+                            handleCopyToClipboard(instructionUrl);
+                          }}
+                          type="button"
+                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              <Megaphone size={14} />
+                            </div>
+                            <div className="text-xs text-foreground leading-5">版本更新</div>
+                          </div>
+                        </button>
+
+
+                      </div>
+                      {customSkills.length > 8 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllCustomSkills((prev) => !prev)}
+                          className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                        >
+                          {showAllCustomSkills ? (
+                            <>
+                              <ChevronUp className="size-3.5" />
+                              <span>收起</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="size-3.5" />
+                              <span>展开更多（+{customSkills.length - 8}）</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
               </div>
             )}
             {displayMessages.map((message, index) => {
-              const previousMessage = index > 0 ? displayMessages[index - 1] : null
+              const previousMessage = index > 0 ? displayMessages[index - 1] : null;
 
               return (
                 <MessageBubble
@@ -991,15 +1040,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
                 />
-              )
+              );
             })}
-
-
             {/* todo 测试样式*/}
             {/*<MarkdownPreview content={mockMd} />*/}
             {/*<DisplayDiffTest/>*/}
-
-
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
@@ -1012,7 +1057,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
             )}
-
             {/* Error state */}
             {threadError && !isLoading && (
               <div className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-4">
@@ -1038,7 +1082,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
         </div>
       </ScrollArea>
-
       {/* Input */}
       <div className="p-4">
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
