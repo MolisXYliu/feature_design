@@ -28,6 +28,7 @@ import {
   listTracedThreads,
   readThreadTraces
 } from "../agent/trace/collector"
+import type { AgentTrace } from "../agent/trace/types"
 import { getCustomSkillsDir, invalidateEnabledSkillsCache } from "../storage"
 import { BrowserWindow } from "electron"
 
@@ -210,6 +211,23 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
         outcome,
         activeSkills
       }))
+    }
+  )
+
+  /**
+   * Get full trace detail by traceId (including steps + tool calls).
+   * Searches across all thread trace dirs.
+   */
+  ipcMain.handle(
+    "optimizer:traceDetail",
+    async (_event, { traceId }: { traceId: string }): Promise<AgentTrace | null> => {
+      const threads = listTracedThreads()
+      for (const threadId of threads) {
+        const traces = readThreadTraces(threadId)
+        const found = traces.find((t) => t.traceId === traceId)
+        if (found) return found
+      }
+      return null
     }
   )
 }

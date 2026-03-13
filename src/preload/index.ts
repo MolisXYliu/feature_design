@@ -598,7 +598,33 @@ const api = {
         totalToolCalls: number
         outcome: string
         activeSkills: string[]
-      }>>
+      }>>,
+    /** Get full trace detail (steps + tool calls) by traceId */
+    getTraceDetail: (traceId: string): Promise<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      endedAt: string
+      durationMs: number
+      userMessage: string
+      modelId: string
+      totalToolCalls: number
+      outcome: string
+      errorMessage?: string
+      activeSkills: string[]
+      steps: Array<{
+        index: number
+        startedAt: string
+        assistantText: string
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+      }>
+    } | null> =>
+      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<null>
   }
 }
 

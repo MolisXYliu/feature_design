@@ -164,9 +164,18 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       // Update tracer with resolved modelId
       if (effectiveModelId) tracer.setModelId(effectiveModelId)
 
-      // Trace: begin the first reasoning step
-      tracer.beginStep()
-      let stepAssistantText = ""
+      // ── Trace collection state ──────────────────────────────────────────────
+      // We collect from two sources:
+      //   • "messages" mode: streaming tokens → accumulate assistantText
+      //   • "values" mode:   complete state snapshot after each graph step
+      //     → extract tool_calls from AI messages (more reliable than chunks)
+      //
+      // Tool-call counting also moves to "values" to avoid double-counting
+      // token-by-token chunks (which don't carry complete tool_use blocks).
+      // ──────────────────────────────────────────────────────────────────────
+
+      // Track which AI message IDs we've already counted (values fires each step)
+      const _countedAiMsgIds = new Set<string>()
 
       let assistantText = ""
       for await (const chunk of stream) {
@@ -183,33 +192,69 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               const c = msgChunk.content
               if (typeof c === "string") {
                 assistantText += c
-                stepAssistantText += c
               } else if (Array.isArray(c)) {
-                const text = c
+                assistantText += c
                   .filter((b: { type: string }) => b?.type === "text")
                   .map((b: { text?: string }) => b.text ?? "")
                   .join("")
-                assistantText += text
-                stepAssistantText += text
               }
-              // Count tool_use blocks as tool calls
-              if (Array.isArray(c)) {
-                const toolUseBlocks = c.filter((b: { type: string }) => b?.type === "tool_use")
-                if (toolUseBlocks.length > 0) {
-                  const newCount = incrementToolCallCount(threadId)
-                  console.log(`[Agent] Tool call #${newCount} in thread ${threadId}`)
-                  // Record each tool call in the current trace step
-                  for (const block of toolUseBlocks) {
-                    tracer.recordToolCall({
-                      name: (block as { name?: string }).name ?? "unknown",
-                      args: (block as { input?: Record<string, unknown> }).input ?? {}
-                    })
-                  }
-                  // End current step and begin next one (new model message = new step)
-                  tracer.endStep(stepAssistantText)
-                  tracer.beginStep()
-                  stepAssistantText = ""
+            }
+          } catch { /* best-effort */ }
+        }
+
+        if (mode === "values") {
+          // "values" carries the full graph state after each node execution.
+          // AI messages here have complete tool_calls arrays — perfect for tracing.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const state = data as any
+            const msgs = state?.messages as Array<Record<string, unknown>> | undefined
+            if (Array.isArray(msgs)) {
+              for (const msg of msgs) {
+                const kwargs = (msg.kwargs || {}) as Record<string, unknown>
+                const className = (
+                  (msg.id as string[] | undefined)?.[msg.id ? (msg.id as string[]).length - 1 : 0] ?? ""
+                ).toString()
+                const isAI = className.includes("AI") || (msg as Record<string, unknown>).type === "ai"
+                if (!isAI) continue
+
+                const msgId = (kwargs.id as string) || JSON.stringify(kwargs).slice(0, 40)
+                if (_countedAiMsgIds.has(msgId)) continue
+
+                const toolCalls = kwargs.tool_calls as Array<{
+                  id?: string
+                  name?: string
+                  args?: Record<string, unknown>
+                }> | undefined
+
+                if (!toolCalls || toolCalls.length === 0) continue
+
+                // New AI message with tool calls — count + trace
+                _countedAiMsgIds.add(msgId)
+
+                // Extract assistant text for this step from content
+                const rawContent = kwargs.content ?? msg.content
+                let stepText = ""
+                if (typeof rawContent === "string") {
+                  stepText = rawContent
+                } else if (Array.isArray(rawContent)) {
+                  stepText = (rawContent as Array<{ type?: string; text?: string }>)
+                    .filter((b) => b?.type === "text")
+                    .map((b) => b.text ?? "")
+                    .join("")
                 }
+
+                // Record as a trace step
+                tracer.beginStep()
+                for (const tc of toolCalls) {
+                  tracer.recordToolCall({
+                    name: tc.name ?? "unknown",
+                    args: tc.args ?? {}
+                  })
+                  const newCount = incrementToolCallCount(threadId)
+                  console.log(`[Agent] Tool call #${newCount} (${tc.name}) in thread ${threadId}`)
+                }
+                tracer.endStep(stepText)
               }
             }
           } catch { /* best-effort */ }
@@ -223,9 +268,6 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           data: serialized
         })
       }
-
-      // Close the last open step
-      tracer.endStep(stepAssistantText)
 
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })

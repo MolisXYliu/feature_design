@@ -329,7 +329,7 @@ const checkpointers = new Map<string, SqlJsSaver>()
 // in each thread during the current session. Used to trigger
 // the skill-evolution nudge after SKILL_EVOLUTION_THRESHOLD calls.
 // ─────────────────────────────────────────────────────────
-const SKILL_EVOLUTION_THRESHOLD = 5
+export const SKILL_EVOLUTION_THRESHOLD = 5
 
 /** Per-thread tool-call counters (in-memory, reset on app restart) */
 const _threadToolCallCounts = new Map<string, number>()
