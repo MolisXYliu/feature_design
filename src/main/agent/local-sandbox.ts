@@ -702,11 +702,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     LocalSandbox.activeProcesses.clear()
   }
 
+  // Use SID *S-1-1-0 instead of "Everyone" to avoid locale issues on non-English Windows.
+  private static readonly EVERYONE_SID = "*S-1-1-0"
+
   /** Grant Everyone Modify on dir (for sandbox restricted token). */
   private static grantSandboxWriteAcl(dir: string): void {
     // (OI)(CI) = inherit to files & subdirs; (NP) = no propagate beyond
     // direct children — avoids slow recursive ACL propagation on large repos.
-    const r = spawnSync("icacls", [dir, "/grant", "Everyone:(OI)(CI)(NP)(M)"], { timeout: 30_000 })
+    const r = spawnSync("icacls", [dir, "/grant", `${LocalSandbox.EVERYONE_SID}:(OI)(CI)(NP)(M)`], { timeout: 30_000 })
     if (r.status !== 0) {
       console.warn(`[LocalSandbox] icacls grant failed on ${dir}: status=${r.status}, signal=${r.signal}, error=${r.error}`)
     }
@@ -714,7 +717,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /** Remove the Everyone ACE added by grantSandboxWriteAcl. */
   private static revokeSandboxWriteAcl(dir: string): void {
-    const r = spawnSync("icacls", [dir, "/remove:g", "Everyone"], { timeout: 30_000 })
+    const r = spawnSync("icacls", [dir, "/remove:g", LocalSandbox.EVERYONE_SID], { timeout: 30_000 })
     if (r.status !== 0) {
       console.warn(`[LocalSandbox] icacls revoke failed on ${dir}: status=${r.status}, signal=${r.signal}, error=${r.error}`)
     }
