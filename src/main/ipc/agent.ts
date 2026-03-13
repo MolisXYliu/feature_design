@@ -387,6 +387,42 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       const _countedAiMsgIds = new Set<string>()
       const _toolCallNames: string[] = []
+      let activeSkillNamesInTurn: string[] = []
+      const loadedSkillPathsInTurn = new Set<string>()
+      const _countedToolCallIds = new Set<string>()
+      let usedLoadedSkillInTurn = false
+
+      const normalizePath = (p: string): string =>
+        p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "")
+      const ALWAYS_ON_SKILL_NAMES = new Set(["scheduler-assistant", "skill-creator"])
+
+      const hasNonDefaultSkillsLoaded = (): boolean =>
+        activeSkillNamesInTurn.some((name) => !ALWAYS_ON_SKILL_NAMES.has(name))
+
+      const maybeMarkSkillUsedFromReadPath = (rawPath: string): void => {
+        if (!rawPath || usedLoadedSkillInTurn) return
+        const readPath = normalizePath(rawPath.trim())
+        if (!readPath) return
+        const lower = readPath.toLowerCase()
+
+        const matchedSkillPath = Array.from(loadedSkillPathsInTurn).some(
+          (skillPath) =>
+            skillPath === readPath ||
+            skillPath.endsWith(readPath) ||
+            readPath.endsWith(skillPath)
+        )
+
+        const likelySkillDocRead =
+          lower === "skill.md" ||
+          lower.endsWith("/skill.md") ||
+          lower.includes("/.cmbcoworkagent/sk") ||
+          lower.includes("/enabled-skills")
+
+        if ((matchedSkillPath || likelySkillDocRead) && hasNonDefaultSkillsLoaded()) {
+          usedLoadedSkillInTurn = true
+          console.log(`[Agent] Detected skill usage via read_file: ${readPath}`)
+        }
+      }
 
       let assistantText = ""
       for await (const chunk of stream) {
@@ -399,6 +435,61 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         // class array ["langchain_core","messages","AIMessageChunk"] only after
         // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
         const serialized = JSON.parse(JSON.stringify(data))
+
+        if (mode === "values") {
+          try {
+            const state = serialized as {
+              skillsMetadata?: Array<{ name?: string; path?: string }>
+              messages?: Array<{
+                kwargs?: {
+                  tool_calls?: Array<{
+                    id?: string
+                    name?: string
+                    args?: Record<string, unknown>
+                  }>
+                }
+              }>
+            }
+            const skillsMetadata = Array.isArray(state.skillsMetadata) ? state.skillsMetadata : []
+            if (skillsMetadata.length > 0) {
+              const names = skillsMetadata
+                .map((s) => (typeof s?.name === "string" ? s.name.trim() : ""))
+                .filter((n): n is string => n.length > 0)
+              if (names.length > 0) {
+                activeSkillNamesInTurn = Array.from(new Set([...activeSkillNamesInTurn, ...names]))
+                tracer.setActiveSkills(activeSkillNamesInTurn)
+              }
+
+              for (const skill of skillsMetadata) {
+                if (typeof skill?.path !== "string") continue
+                const normalized = normalizePath(skill.path.trim())
+                if (normalized) loadedSkillPathsInTurn.add(normalized)
+              }
+            }
+
+            // Values mode usually carries fuller tool-call args than messages mode.
+            if (Array.isArray(state.messages)) {
+              for (const msg of state.messages) {
+                const tcs = msg?.kwargs?.tool_calls
+                if (!Array.isArray(tcs)) continue
+                for (const tc of tcs) {
+                  const tcId = typeof tc?.id === "string" ? tc.id : ""
+                  if (tcId && _countedToolCallIds.has(tcId)) continue
+                  if (tcId) _countedToolCallIds.add(tcId)
+
+                  if (tc?.name !== "read_file") continue
+                  const readPathRaw =
+                    (typeof tc.args?.path === "string" && tc.args.path) ||
+                    (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
+                    ""
+                  if (readPathRaw) maybeMarkSkillUsedFromReadPath(readPathRaw)
+                }
+              }
+            }
+          } catch (e) {
+            console.error("[Agent] skillsMetadata extraction error:", e)
+          }
+        }
 
         if (mode === "messages") {
           try {
@@ -452,6 +543,15 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               const tcName = tc.name ?? "unknown"
               tracer.recordToolCall({ name: tcName, args: tc.args ?? {} })
               _toolCallNames.push(tcName)
+
+              if (tcName === "read_file") {
+                const readPathRaw =
+                  (typeof tc.args?.path === "string" && tc.args.path) ||
+                  (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
+                  ""
+                if (readPathRaw) maybeMarkSkillUsedFromReadPath(readPathRaw)
+              }
+
               const newCount = incrementToolCallCount(threadId)
               console.log(`[Agent] Tool call #${newCount} (${tcName}) in thread ${threadId}`)
             }
@@ -473,6 +573,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
 
         // Finish trace
+        tracer.setActiveSkills(activeSkillNamesInTurn)
         await tracer.finish("success")
 
         // Check if this turn crossed the skill-evolution threshold.
@@ -480,10 +581,17 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         const turnToolCallCount = getToolCallCount(threadId)
         if (turnToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
           resetToolCallCount(threadId)
-          console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), starting skill evolution flow`)
-          autoProposeSKill(threadId, message, assistantText, [..._toolCallNames]).catch((e) =>
-            console.warn("[Agent] autoProposeSKill failed:", e)
-          )
+          if (usedLoadedSkillInTurn) {
+            const names = activeSkillNamesInTurn.length > 0 ? ` [${activeSkillNamesInTurn.join(", ")}]` : ""
+            console.log(
+              `[Agent] Threshold reached (${turnToolCallCount} calls) but loaded skill was used${names}, skipping auto skill evolution`
+            )
+          } else {
+            console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), starting skill evolution flow`)
+            autoProposeSKill(threadId, message, assistantText, [..._toolCallNames]).catch((e) =>
+              console.warn("[Agent] autoProposeSKill failed:", e)
+            )
+          }
         }
 
         const conversation = assistantText.trim()

@@ -1,6 +1,24 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage } from "electron"
 import { join } from "path"
 
+function withEpipeGuard<T extends (...args: unknown[]) => void>(fn: T): T {
+  return ((...args: Parameters<T>) => {
+    try {
+      fn(...args)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "EPIPE") return
+      throw err
+    }
+  }) as T
+}
+
+// Guard console writes so broken stdout/stderr pipes don't crash main process.
+console.log = withEpipeGuard(console.log.bind(console))
+console.info = withEpipeGuard(console.info.bind(console))
+console.warn = withEpipeGuard(console.warn.bind(console))
+console.error = withEpipeGuard(console.error.bind(console))
+console.debug = withEpipeGuard(console.debug.bind(console))
+
 // Suppress EPIPE errors that occur when stdout/stderr pipe closes (e.g. during dev mode
 // or when the renderer window is destroyed while the main process is still logging).
 process.stdout.on("error", (err: NodeJS.ErrnoException) => {
