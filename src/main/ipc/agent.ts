@@ -183,10 +183,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
         const [mode, data] = chunk as [string, unknown]
 
+        // Serialize first — live BaseMessage objects must be serialized before
+        // we can inspect the LangChain class path (msgChunk.id becomes the
+        // class array ["langchain_core","messages","AIMessageChunk"] only after
+        // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
+        const serialized = JSON.parse(JSON.stringify(data))
+
         if (mode === "messages") {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const [msgChunk] = data as [any]
+            const [msgChunk] = serialized as [any]
             if (!msgChunk) continue
 
             const kwargs = (msgChunk.kwargs || {}) as Record<string, unknown>
@@ -237,10 +243,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               console.log(`[Agent] Tool call #${newCount} (${tc.name}) in thread ${threadId}`)
             }
             tracer.endStep(stepText)
-          } catch { /* best-effort */ }
+          } catch (e) {
+            console.error("[Agent] Tool-call extraction error:", e)
+          }
         }
-
-        const serialized = JSON.parse(JSON.stringify(data))
 
         window.webContents.send(channel, {
           type: "stream",
