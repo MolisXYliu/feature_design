@@ -67,7 +67,7 @@ interface DownloadResponse {
 }
 
 // Updated API endpoints to match exact specification
-const API_BASE_URL = "http://haha.com/marketplace" // Replace with actual API URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
