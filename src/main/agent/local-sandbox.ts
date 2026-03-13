@@ -9,7 +9,7 @@
  * handled via HITL configuration.
  */
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { constants as fsConstants, existsSync } from "node:fs"
 import fs from "node:fs/promises"
@@ -702,6 +702,24 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     LocalSandbox.activeProcesses.clear()
   }
 
+  /** Grant Everyone Modify on dir (for sandbox restricted token). */
+  private static grantSandboxWriteAcl(dir: string): void {
+    // (OI)(CI) = inherit to files & subdirs; (NP) = no propagate beyond
+    // direct children — avoids slow recursive ACL propagation on large repos.
+    const r = spawnSync("icacls", [dir, "/grant", "Everyone:(OI)(CI)(NP)(M)"], { timeout: 30_000 })
+    if (r.status !== 0) {
+      console.warn(`[LocalSandbox] icacls grant failed on ${dir}: status=${r.status}, signal=${r.signal}, error=${r.error}`)
+    }
+  }
+
+  /** Remove the Everyone ACE added by grantSandboxWriteAcl. */
+  private static revokeSandboxWriteAcl(dir: string): void {
+    const r = spawnSync("icacls", [dir, "/remove:g", "Everyone"], { timeout: 30_000 })
+    if (r.status !== 0) {
+      console.warn(`[LocalSandbox] icacls revoke failed on ${dir}: status=${r.status}, signal=${r.signal}, error=${r.error}`)
+    }
+  }
+
   private static readonly SIGKILL_TIMEOUT_MS = 200
 
   /**
@@ -801,7 +819,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Uses restricted token + NTFS ACL for isolation (no admin required).
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
@@ -820,7 +838,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       shell, ...shellFlags, effectiveCommand
     ]
 
-    return new Promise<ExecuteResponse>((resolve) => {
+    // Grant Everyone Modify ACL on writable roots so the restricted-token
+    // sandbox process can actually write to cwd and TMPDIR.
+    const aclDirs = [this.workingDir]
+    const tmpDir = process.env.TEMP || process.env.TMP
+    if (tmpDir && tmpDir !== this.workingDir) {
+      aclDirs.push(tmpDir)
+    }
+    for (const dir of aclDirs) {
+      LocalSandbox.grantSandboxWriteAcl(dir)
+    }
+
+    try {
+    return await new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
       let totalBytes = 0
@@ -940,6 +970,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         })
       })
     })
+    } finally {
+      for (const dir of aclDirs) {
+        LocalSandbox.revokeSandboxWriteAcl(dir)
+      }
+    }
   }
 
   private executeOnce(
