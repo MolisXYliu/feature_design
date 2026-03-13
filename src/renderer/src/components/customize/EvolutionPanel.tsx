@@ -2,14 +2,14 @@
  * EvolutionPanel — Skill Optimization & LangSmith-style Trace Viewer
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock,
   Loader2, RefreshCw, Sparkles, Activity, Trash2, Wrench,
   MessageSquare, AlertCircle, User, Bot, Terminal, ArrowLeft,
-  Timer, Hash, Cpu, Zap
+  Timer, Hash, Cpu, Zap, Settings2
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -543,8 +543,20 @@ export function EvolutionPanel(): React.JSX.Element {
   const [tracesLoading, setTracesLoading] = useState(false)
   const [selectedTrace, setSelectedTrace] = useState<TraceDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [autoPropose, setAutoPropose] = useState<boolean>(true)
 
   const { pendingEvolution, setPendingEvolution } = useAppStore()
+
+  // Load auto-propose setting
+  useEffect(() => {
+    window.api.optimizer.getAutoPropose().then(setAutoPropose).catch(console.warn)
+  }, [])
+
+  const toggleAutoPropose = useCallback(async () => {
+    const next = !autoPropose
+    setAutoPropose(next)
+    await window.api.optimizer.setAutoPropose(next).catch(console.warn)
+  }, [autoPropose])
 
   const runOptimizer = useCallback(async () => {
     setRunning(true); setSummary(null)
@@ -624,6 +636,27 @@ export function EvolutionPanel(): React.JSX.Element {
           {running ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
           {running ? "分析中…" : "分析 Traces"}
         </Button>
+      </div>
+
+      {/* Auto-propose toggle */}
+      <div className="shrink-0 border-b border-border px-4 py-2 flex items-center gap-2 bg-muted/20">
+        <Settings2 className="size-3.5 text-muted-foreground/60 shrink-0" />
+        <span className="text-xs text-muted-foreground flex-1">
+          对话结束后自动弹出技能创建确认框
+        </span>
+        <button
+          onClick={toggleAutoPropose}
+          className={cn(
+            "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none shrink-0",
+            autoPropose ? "bg-violet-500" : "bg-muted-foreground/30"
+          )}
+          title={autoPropose ? "关闭：由模型自行决定是否创建技能" : "开启：满足条件后自动弹出确认框"}
+        >
+          <span className={cn(
+            "inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform",
+            autoPropose ? "translate-x-4" : "translate-x-0.5"
+          )} />
+        </button>
       </div>
 
       {autoTriggerBanner && (

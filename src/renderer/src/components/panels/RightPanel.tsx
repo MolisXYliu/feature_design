@@ -25,10 +25,12 @@ import {
   Sparkles,
   Puzzle,
   Plug,
-  Power
+  Power,
+  AlertCircle
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
+import { useShallow } from "zustand/react/shallow"
 import { useThreadState } from "@/lib/thread-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -124,7 +126,14 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 export function RightPanel(): React.JSX.Element {
-  const { currentThreadId, pluginVersion } = useAppStore()
+  const { currentThreadId, pluginVersion, skillGenerationAgent, setSkillGenerationPhase } = useAppStore(
+    useShallow((s) => ({
+      currentThreadId: s.currentThreadId,
+      pluginVersion: s.pluginVersion,
+      skillGenerationAgent: s.skillGenerationAgent,
+      setSkillGenerationPhase: s.setSkillGenerationPhase
+    }))
+  )
   const threadState = useThreadState(currentThreadId)
   const todos = threadState?.todos ?? []
   const workspaceFiles = threadState?.workspaceFiles ?? []
@@ -159,6 +168,22 @@ export function RightPanel(): React.JSX.Element {
   useEffect(() => {
     window.api.plugins.list().then(setPlugins).catch(console.error)
   }, [pluginVersion])
+
+  // Auto-open agents panel when skill generation starts
+  useEffect(() => {
+    if (skillGenerationAgent.phase === "generating") {
+      setAgentsOpen(true)
+    }
+  }, [skillGenerationAgent.phase])
+
+  // When confirmRequest arrives (phase becomes "done"), clear virtual card after short delay
+  useEffect(() => {
+    if (skillGenerationAgent.phase === "done") {
+      const t = setTimeout(() => setSkillGenerationPhase(null), 3000)
+      return () => clearTimeout(t)
+    }
+    return undefined
+  }, [skillGenerationAgent.phase, setSkillGenerationPhase])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -514,7 +539,7 @@ export function RightPanel(): React.JSX.Element {
         <SectionHeader
           title="代理"
           icon={GitBranch}
-          badge={subagents.length}
+          badge={subagents.length + (skillGenerationAgent.phase !== null ? 1 : 0)}
           isOpen={agentsOpen}
           onToggle={() => setAgentsOpen((prev) => !prev)}
         />
@@ -1126,12 +1151,98 @@ function FileIcon({
   }
 }
 
+function SkillGenerationCard({
+  phase,
+  streamedText,
+  errorText
+}: {
+  phase: "generating" | "done" | "error"
+  streamedText: string
+  errorText: string
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+
+  const statusBadge = phase === "generating"
+    ? { icon: Loader2, variant: "info" as const, label: "生成中", spin: true }
+    : phase === "done"
+      ? { icon: CheckCircle2, variant: "nominal" as const, label: "已完成", spin: false }
+      : { icon: AlertCircle, variant: "critical" as const, label: "失败", spin: false }
+
+  const StatusIcon = statusBadge.icon
+
+  return (
+    <div className={cn(
+      "rounded-lg border bg-card text-card-foreground shadow-sm",
+      phase === "generating" && "border-status-info/50"
+    )}>
+      {/* Header */}
+      <div className="p-3 pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-medium truncate">
+            <Sparkles className={cn(
+              "size-4 shrink-0",
+              phase === "generating" ? "text-status-info" : "text-muted-foreground"
+            )} />
+            <span className="truncate">技能草稿生成</span>
+          </div>
+          <Badge variant={statusBadge.variant} className="shrink-0">
+            <StatusIcon className={cn("size-3 mr-1", statusBadge.spin && "animate-spin")} />
+            {statusBadge.label}
+          </Badge>
+        </div>
+        <Badge variant="outline" className="w-fit text-[10px] mt-1">
+          SKILL-GEN
+        </Badge>
+      </div>
+
+      {/* Body */}
+      <div className="px-3 pb-3 space-y-2">
+        {phase === "error" ? (
+          <p className="text-xs text-destructive">{errorText}</p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              {phase === "generating" ? "AI 正在分析对话并生成技能草稿…" : "草稿已生成，等待确认"}
+            </p>
+            {streamedText && (
+              <div className="rounded border border-border overflow-hidden">
+                <button
+                  className="w-full flex items-center justify-between px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted/40 transition-colors"
+                  onClick={() => setExpanded((v) => !v)}
+                >
+                  <span>查看生成内容</span>
+                  {expanded
+                    ? <ChevronDown className="size-3" />
+                    : <ChevronRight className="size-3" />
+                  }
+                </button>
+                {expanded && (
+                  <pre className="px-2 py-1.5 text-[10px] font-mono text-foreground/70 whitespace-pre-wrap break-all leading-relaxed max-h-40 overflow-y-auto border-t border-border">
+                    {streamedText}
+                  </pre>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AgentsContent(): React.JSX.Element {
-  const { currentThreadId } = useAppStore()
+  const { currentThreadId, skillGenerationAgent } = useAppStore(
+    useShallow((s) => ({
+      currentThreadId: s.currentThreadId,
+      skillGenerationAgent: s.skillGenerationAgent
+    }))
+  )
   const threadState = useThreadState(currentThreadId)
   const subagents = threadState?.subagents ?? []
 
-  if (subagents.length === 0) {
+  const hasSkillGen = skillGenerationAgent.phase !== null
+
+  if (subagents.length === 0 && !hasSkillGen) {
     return (
       <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
         <GitBranch className="size-8 mb-2 opacity-50" />
@@ -1143,6 +1254,14 @@ function AgentsContent(): React.JSX.Element {
 
   return (
     <div className="p-3 space-y-3">
+      {/* Virtual skill generation card — shown above regular subagents */}
+      {hasSkillGen && (
+        <SkillGenerationCard
+          phase={skillGenerationAgent.phase!}
+          streamedText={skillGenerationAgent.streamedText}
+          errorText={skillGenerationAgent.errorText}
+        />
+      )}
       {subagents.map((agent) => (
         <SubagentCard key={agent.id} subagent={agent} />
       ))}

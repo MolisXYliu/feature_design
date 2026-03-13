@@ -349,6 +349,23 @@ export function resetToolCallCount(threadId: string): void {
   _threadToolCallCounts.delete(threadId)
 }
 
+/**
+ * Threads that need the skill-evolution nudge injected on the NEXT invocation.
+ * Used when auto-propose is disabled and we want the agent to decide itself.
+ */
+const _pendingNudgeThreads = new Set<string>()
+
+export function scheduleSkillNudge(threadId: string): void {
+  _pendingNudgeThreads.add(threadId)
+}
+
+/** Returns and clears the nudge flag for the given thread. */
+export function consumeSkillNudge(threadId: string): boolean {
+  const had = _pendingNudgeThreads.has(threadId)
+  _pendingNudgeThreads.delete(threadId)
+  return had
+}
+
 // Global MCP tools cache: single shared client, lifecycle managed here (not per-thread)
 const MCP_TOOLS_CACHE_TTL_MS = 5 * 60 * 1000
 let _mcpToolsCache: {

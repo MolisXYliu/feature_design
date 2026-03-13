@@ -21,11 +21,10 @@ import { ChatOpenAI } from "@langchain/openai"
 import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { join } from "path"
 import { existsSync, readdirSync, readFileSync } from "fs"
-import { homedir } from "os"
 import { v4 as uuid } from "uuid"
 import { getCustomSkillsDir } from "../../storage"
 import { readRecentTraces, readThreadTraces } from "../trace/collector"
-import type { AgentTrace, TraceStep } from "../trace/types"
+import type { AgentTrace } from "../trace/types"
 
 // ─────────────────────────────────────────────────────────
 // Types

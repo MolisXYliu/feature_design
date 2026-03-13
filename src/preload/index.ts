@@ -460,7 +460,20 @@ const api = {
     }
   },
   skillEvolution: {
-    // Listen for skill creation confirmation requests from the main process
+    // ── Phase 1: Intent banner ("Want to save as skill?") ──────────
+    onIntentRequest: (
+      callback: (req: { requestId: string; summary: string; toolCallCount: number }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, req: { requestId: string; summary: string; toolCallCount: number }): void => {
+        callback(req)
+      }
+      ipcRenderer.on("skill:intentRequest", handler)
+      return () => { ipcRenderer.removeListener("skill:intentRequest", handler) }
+    },
+    intentResponse: (requestId: string, accepted: boolean): Promise<void> =>
+      ipcRenderer.invoke("skill:intentResponse", { requestId, accepted }) as Promise<void>,
+
+    // ── Phase 2: Full confirmation dialog ("Adopt / Reject") ───────
     onConfirmRequest: (
       callback: (req: {
         requestId: string
@@ -477,9 +490,19 @@ const api = {
       ipcRenderer.on("skill:confirmRequest", handler)
       return () => { ipcRenderer.removeListener("skill:confirmRequest", handler) }
     },
-    // Send the user's approval / rejection back to main process
     confirmResponse: (requestId: string, approved: boolean): Promise<void> =>
-      ipcRenderer.invoke("skill:confirmResponse", { requestId, approved }) as Promise<void>
+      ipcRenderer.invoke("skill:confirmResponse", { requestId, approved }) as Promise<void>,
+
+    // ── Streaming generation progress ──────────────────────────
+    onGenerating: (
+      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, evt: { phase: "start" | "token" | "done" | "error"; text: string }): void => {
+        callback(evt)
+      }
+      ipcRenderer.on("skill:generating", handler)
+      return () => { ipcRenderer.removeListener("skill:generating", handler) }
+    }
   },
   plugins: {
     list: (): Promise<PluginMetadata[]> =>
@@ -632,7 +655,11 @@ const api = {
         }>
       }>
     } | null> =>
-      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<null>
+      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<null>,
+    getAutoPropose: (): Promise<boolean> =>
+      ipcRenderer.invoke("optimizer:getAutoPropose") as Promise<boolean>,
+    setAutoPropose: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setAutoPropose", enabled) as Promise<void>
   }
 }
 

@@ -1,5 +1,20 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage } from "electron"
 import { join } from "path"
+
+// Suppress EPIPE errors that occur when stdout/stderr pipe closes (e.g. during dev mode
+// or when the renderer window is destroyed while the main process is still logging).
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") return
+  console.error("[Main] stdout error:", err)
+})
+process.stderr.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") return
+  // Don't re-log to stderr here to avoid infinite loop
+})
+process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") return // silently ignore broken pipe
+  console.error("[Main] Uncaught exception:", err)
+})
 import { registerAgentHandlers } from "./ipc/agent"
 import { registerThreadHandlers } from "./ipc/threads"
 import { registerModelHandlers } from "./ipc/models"

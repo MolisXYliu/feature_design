@@ -65,6 +65,15 @@ interface AppState {
   // Skill evolution — true when threshold reached, clears when Evolution panel opens
   pendingEvolution: boolean
   setPendingEvolution: (v: boolean) => void
+
+  // Skill generation virtual subagent — shown in the right panel agents section
+  skillGenerationAgent: {
+    phase: "generating" | "done" | "error" | null
+    streamedText: string
+    errorText: string
+  }
+  setSkillGenerationPhase: (phase: "generating" | "done" | "error" | null, text?: string) => void
+  appendSkillGenerationToken: (token: string) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -210,5 +219,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   pendingEvolution: false,
-  setPendingEvolution: (v) => set({ pendingEvolution: v })
+  setPendingEvolution: (v) => set({ pendingEvolution: v }),
+
+  skillGenerationAgent: { phase: null, streamedText: "", errorText: "" },
+  setSkillGenerationPhase: (phase, text = "") =>
+    set({
+      skillGenerationAgent:
+        phase === null
+          ? { phase: null, streamedText: "", errorText: "" }
+          : phase === "error"
+            ? { phase: "error", streamedText: "", errorText: text }
+            : { phase, streamedText: "", errorText: "" }
+    }),
+  appendSkillGenerationToken: (token) =>
+    set((state) => ({
+      skillGenerationAgent: {
+        ...state.skillGenerationAgent,
+        streamedText: state.skillGenerationAgent.streamedText + token
+      }
+    }))
 }))

@@ -27,7 +27,7 @@
  *   }
  */
 
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect } from "vitest"
 
 // ─────────────────────────────────────────────────────────
 // Extracted logic under test

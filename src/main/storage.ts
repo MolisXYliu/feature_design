@@ -133,6 +133,31 @@ export function getSkillsSources(): string[] {
   return sources
 }
 
+// ── Skill auto-propose setting ──
+
+const SKILL_EVOLUTION_SETTINGS_FILE = join(OPENWORK_DIR, "skill-evolution-settings.json")
+
+/**
+ * When true (default), after a conversation meets the tool-call threshold the
+ * main process automatically generates a skill proposal and shows a confirmation
+ * dialog.  When false, the agent model is given a nudge prompt and decides
+ * whether to call manage_skill itself.
+ */
+export function isSkillAutoProposeEnabled(): boolean {
+  if (!existsSync(SKILL_EVOLUTION_SETTINGS_FILE)) return true
+  try {
+    const parsed = JSON.parse(readFileSync(SKILL_EVOLUTION_SETTINGS_FILE, "utf-8"))
+    return parsed.autoPropose !== false
+  } catch {
+    return true
+  }
+}
+
+export function setSkillAutoProposeEnabled(enabled: boolean): void {
+  getOpenworkDir()
+  writeFileSync(SKILL_EVOLUTION_SETTINGS_FILE, JSON.stringify({ autoPropose: enabled }, null, 2))
+}
+
 // ── Memory settings ──
 
 const MEMORY_SETTINGS_FILE = join(OPENWORK_DIR, "memory-settings.json")

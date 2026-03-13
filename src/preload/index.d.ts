@@ -244,6 +244,12 @@ interface CustomAPI {
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {
+    /** Phase 1 — intent banner: "Want to save this as a skill?" */
+    onIntentRequest: (
+      callback: (req: { requestId: string; summary: string; toolCallCount: number }) => void
+    ) => () => void
+    intentResponse: (requestId: string, accepted: boolean) => Promise<void>
+    /** Phase 2 — full detail dialog: show skill preview for final adoption */
     onConfirmRequest: (
       callback: (req: {
         requestId: string
@@ -254,6 +260,10 @@ interface CustomAPI {
       }) => void
     ) => () => void
     confirmResponse: (requestId: string, approved: boolean) => Promise<void>
+    /** Listen to streaming generation progress from the main process */
+    onGenerating: (
+      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+    ) => () => void
   }
   optimizer: {
     run: (opts?: { threadId?: string; traceLimit?: number }) => Promise<{
@@ -324,6 +334,8 @@ interface CustomAPI {
         }>
       }>
     } | null>
+    getAutoPropose: () => Promise<boolean>
+    setAutoPropose: (enabled: boolean) => Promise<void>
   }
 }
 

@@ -30,7 +30,13 @@ import { v4 as uuid } from "uuid"
 
 function notifyRenderer(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send(channel, payload)
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(channel, payload)
+      }
+    } catch {
+      // Window may have been destroyed between check and send — ignore
+    }
   }
 }
 
@@ -45,7 +51,7 @@ function notifyRenderer(channel: string, payload?: unknown): void {
 //   4. Main process resolves the pending Promise and returns the decision.
 // ─────────────────────────────────────────────────────────
 
-interface SkillConfirmRequest {
+export interface SkillConfirmRequest {
   requestId: string
   skillId: string
   name: string
@@ -53,48 +59,94 @@ interface SkillConfirmRequest {
   content: string
 }
 
-// Map of pending confirmation promises keyed by requestId
-const _pendingConfirms = new Map<string, (approved: boolean) => void>()
+// ─────────────────────────────────────────────────────────
+// Generic pending-response helper
+// ─────────────────────────────────────────────────────────
 
-// Register the one-time IPC handler for confirm responses (idempotent)
-let _confirmHandlerRegistered = false
-function ensureConfirmHandler(): void {
-  if (_confirmHandlerRegistered) return
-  _confirmHandlerRegistered = true
-  ipcMain.handle("skill:confirmResponse", (_event, { requestId, approved }: { requestId: string; approved: boolean }) => {
-    const resolve = _pendingConfirms.get(requestId)
+/** Generic map of pending one-shot IPC responses keyed by requestId */
+const _pendingResponses = new Map<string, (value: boolean) => void>()
+
+let _responseHandlerRegistered = false
+function ensureResponseHandler(): void {
+  if (_responseHandlerRegistered) return
+  _responseHandlerRegistered = true
+
+  // Handle both intent responses ("yes / no, create skill?") and full confirm responses ("adopt / reject")
+  ipcMain.handle("skill:intentResponse", (_event, { requestId, accepted }: { requestId: string; accepted: boolean }) => {
+    const resolve = _pendingResponses.get(requestId)
     if (resolve) {
-      _pendingConfirms.delete(requestId)
+      _pendingResponses.delete(requestId)
+      resolve(accepted)
+    }
+  })
+
+  ipcMain.handle("skill:confirmResponse", (_event, { requestId, approved }: { requestId: string; approved: boolean }) => {
+    const resolve = _pendingResponses.get(requestId)
+    if (resolve) {
+      _pendingResponses.delete(requestId)
       resolve(approved)
     }
   })
 }
 
-/**
- * Send a confirmation request to the renderer and wait for the user's decision.
- * Times out after 5 minutes — defaults to rejected.
- */
-async function requestSkillConfirmation(req: SkillConfirmRequest): Promise<boolean> {
-  ensureConfirmHandler()
+function waitForResponse(requestId: string, timeoutMs = 5 * 60 * 1000): Promise<boolean> {
+  ensureResponseHandler()
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      _pendingConfirms.delete(req.requestId)
-      console.warn(`[SkillEvolution] Confirmation timed out for requestId: ${req.requestId}`)
+    const timer = setTimeout(() => {
+      _pendingResponses.delete(requestId)
+      console.warn(`[SkillEvolution] Response timed out for requestId: ${requestId}`)
       resolve(false)
-    }, 5 * 60 * 1000)
+    }, timeoutMs)
 
-    _pendingConfirms.set(req.requestId, (approved) => {
-      clearTimeout(timeout)
-      resolve(approved)
+    _pendingResponses.set(requestId, (value) => {
+      clearTimeout(timer)
+      resolve(value)
     })
-
-    notifyRenderer("skill:confirmRequest", req)
-    console.log(`[SkillEvolution] Sent confirmation request: ${req.requestId} for skill "${req.name}"`)
   })
 }
 
+// ─────────────────────────────────────────────────────────
+// Phase 1 — Intent: "Do you want to save this as a skill?"
+// ─────────────────────────────────────────────────────────
+
+export interface SkillIntentRequest {
+  requestId: string
+  /** Short summary of what the conversation accomplished */
+  summary: string
+  /** Number of tool calls made */
+  toolCallCount: number
+}
+
+/**
+ * Ask the user (via a lightweight banner) whether they want to create a skill
+ * from the current conversation.  Returns true if they click "Yes".
+ */
+export async function requestSkillIntent(req: SkillIntentRequest): Promise<boolean> {
+  const promise = waitForResponse(req.requestId)
+  notifyRenderer("skill:intentRequest", req)
+  console.log(`[SkillEvolution] Sent intent request: ${req.requestId}`)
+  return promise
+}
+
+// ─────────────────────────────────────────────────────────
+// Phase 2 — Confirmation: show full skill detail for final approval
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Send a confirmation request to the renderer and wait for the user's decision.
+ * Times out after 5 minutes — defaults to rejected.
+ *
+ * Exported so the auto-trigger path in agent.ts can reuse the same flow.
+ */
+export async function requestSkillConfirmation(req: SkillConfirmRequest): Promise<boolean> {
+  const promise = waitForResponse(req.requestId)
+  notifyRenderer("skill:confirmRequest", req)
+  console.log(`[SkillEvolution] Sent confirmation request: ${req.requestId} for skill "${req.name}"`)
+  return promise
+}
+
 /** Sanitize a skill name into a safe directory name */
-function sanitizeSkillId(name: string): string {
+export function sanitizeSkillId(name: string): string {
   return name
     .toLowerCase()
     .trim()

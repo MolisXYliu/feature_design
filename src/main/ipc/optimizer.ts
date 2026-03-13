@@ -29,7 +29,7 @@ import {
   readThreadTraces
 } from "../agent/trace/collector"
 import type { AgentTrace } from "../agent/trace/types"
-import { getCustomSkillsDir, invalidateEnabledSkillsCache } from "../storage"
+import { getCustomSkillsDir, invalidateEnabledSkillsCache, isSkillAutoProposeEnabled, setSkillAutoProposeEnabled } from "../storage"
 import { BrowserWindow } from "electron"
 
 // ─────────────────────────────────────────────────────────
@@ -230,4 +230,17 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
       return null
     }
   )
+
+  /**
+   * Get / set the skill auto-propose setting.
+   * When true (default), main process auto-generates a skill proposal dialog.
+   * When false, the agent model gets a nudge prompt and decides itself.
+   */
+  ipcMain.handle("optimizer:getAutoPropose", async (): Promise<boolean> => {
+    return isSkillAutoProposeEnabled()
+  })
+
+  ipcMain.handle("optimizer:setAutoPropose", async (_event, enabled: boolean): Promise<void> => {
+    setSkillAutoProposeEnabled(enabled)
+  })
 }

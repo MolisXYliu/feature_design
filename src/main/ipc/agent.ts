@@ -1,5 +1,5 @@
 import { IpcMain, BrowserWindow } from "electron"
-import { HumanMessage } from "@langchain/core/messages"
+import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
 import {
   createAgentRuntime,
@@ -12,9 +12,17 @@ import { getThread } from "../db"
 import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
-import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
+import { getCustomModelConfigs, isMemoryEnabled, getCustomSkillsDir, invalidateEnabledSkillsCache, isSkillAutoProposeEnabled } from "../storage"
 import { notifyIfBackground } from "../services/notify"
 import { TraceCollector } from "../agent/trace/collector"
+import {
+  requestSkillIntent,
+  requestSkillConfirmation,
+  sanitizeSkillId
+} from "../agent/tools/skill-evolution-tool"
+import { mkdirSync, writeFileSync } from "fs"
+import { join } from "path"
+import { v4 as uuid } from "uuid"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -28,40 +36,251 @@ const MIN_CHARS_FOR_MEMORY = 200
 const activeRuns = new Map<string, AbortController>()
 
 // ─────────────────────────────────────────────────────────
-// Skill Evolution Nudge Prompt
-// Injected into the system prompt after SKILL_EVOLUTION_THRESHOLD
-// tool calls have been made in the current session.
+// Auto skill proposal: generate a skill from conversation context
 // ─────────────────────────────────────────────────────────
-const SKILL_EVOLUTION_NUDGE_PROMPT = `
-## 技能进化提示 (Skill Evolution)
 
-你在本次会话中已执行了多个工具调用，完成了一项有一定复杂度的任务。
-请在完成当前任务后，思考是否值得将这次的方法或流程固化为一个可复用的技能（Skill）。
+const SKILL_PROPOSAL_SYSTEM_PROMPT = `You are an expert at capturing reusable agent skills from conversation history.
 
-### 何时应该创建技能？
+Given a conversation between a user and an AI agent, your job is to extract a reusable skill.
 
-符合以下任一条件，建议使用 \`manage_skill\` 工具创建技能：
-- 这个任务**未来可能反复出现**（如：部署、测试、代码审查流程）
-- 你在执行过程中**摸索了规律**，下次能做得更快
-- 任务涉及**项目特定知识**（目录结构、命名规范、API 约定等）
-- 你进行了**多次尝试/修正**，最终找到正确的方法
+Output ONLY valid JSON (no markdown, no explanation) with this exact shape:
+{
+  "name": "Short Human-Readable Name (3-6 words)",
+  "skillId": "snake_case_identifier",
+  "description": "One sentence: WHEN should this skill be loaded? Be specific about the trigger scenario.",
+  "content": "Full SKILL.md content (including YAML frontmatter)"
+}
 
-### 如何创建技能？
-
-使用 \`manage_skill\` 工具，action='create'，提供：
-- \`name\`: 技能名称（简短、描述性）
-- \`description\`: **触发描述**（最重要！描述在什么情况下使用此技能，让 Agent 在匹配场景时自动加载）
-- \`content\`: 完整的 SKILL.md 内容（含 YAML frontmatter + 操作指南）
-
-### 技能不适合的场景
-
-- 一次性任务，不会重复
-- 通用知识，已经内置于模型中
-- 任务太简单（1-2 步）
-
+SKILL.md format:
 ---
-如果本次任务不适合创建技能，可以忽略此提示，直接完成任务即可。
-`
+name: skill-name
+description: Trigger description
+version: 1.0.0
+---
+
+# Overview
+Brief description.
+
+## When to use
+Specific situations.
+
+## Steps / Guidelines
+Concrete instructions for the agent.
+
+Rules:
+- description is the MOST important — it controls when the skill is injected
+- Make it specific: describe the exact user intent that should trigger it
+- Focus on REUSABLE patterns, not one-time tasks
+- Output ONLY valid JSON, no other text`
+
+/**
+ * Broadcast a skill generation progress event to all renderer windows.
+ * `phase`:
+ *   "start"    — generation beginning (clears previous output)
+ *   "token"    — incremental token chunk
+ *   "done"     — generation complete, full raw text in `text`
+ *   "error"    — generation failed
+ */
+function emitSkillGenerating(
+  phase: "start" | "token" | "done" | "error",
+  text = ""
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("skill:generating", { phase, text })
+  }
+}
+
+/**
+ * Use the default configured LLM to generate a skill proposal from the
+ * given conversation context.  Streams tokens to the renderer via
+ * `skill:generating` events so the user can see progress in real time.
+ * Returns null if no model is configured or the LLM response cannot be parsed.
+ */
+async function generateSkillProposal(
+  userMessage: string,
+  assistantText: string,
+  toolCallSummary: string
+): Promise<{ name: string; skillId: string; description: string; content: string } | null> {
+  const configs = getCustomModelConfigs()
+  const config = configs[0]
+  if (!config?.apiKey) return null
+
+  const model = new ChatOpenAI({
+    model: config.model,
+    apiKey: config.apiKey,
+    configuration: { baseURL: config.baseUrl },
+    maxTokens: 2048,
+    temperature: 0.3,
+    streaming: true
+  })
+
+  const userPrompt = `# Conversation to analyze
+
+## User request
+${userMessage.slice(0, 500)}
+
+## Agent response (summary)
+${assistantText.slice(0, 800)}
+
+## Tools used
+${toolCallSummary}
+
+Based on this conversation, generate a reusable skill. Output JSON only.`
+
+  try {
+    emitSkillGenerating("start")
+
+    let fullText = ""
+    const stream = await model.stream([
+      new SystemMessage(SKILL_PROPOSAL_SYSTEM_PROMPT),
+      new HumanMessage(userPrompt)
+    ])
+
+    for await (const chunk of stream) {
+      const token = typeof chunk.content === "string"
+        ? chunk.content
+        : ""
+      if (token) {
+        fullText += token
+        emitSkillGenerating("token", token)
+      }
+    }
+
+    emitSkillGenerating("done", fullText)
+
+    // Strip <think>...</think> reasoning blocks (deepseek-r1 and similar models)
+    // then strip markdown fences if present
+    const cleaned = fullText
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/^```json\s*/im, "")
+      .replace(/^```\s*/im, "")
+      .replace(/```\s*$/im, "")
+      .trim()
+
+    const parsed = JSON.parse(cleaned) as { name?: string; skillId?: string; description?: string; content?: string }
+    if (!parsed.name || !parsed.skillId || !parsed.description || !parsed.content) return null
+    return parsed as { name: string; skillId: string; description: string; content: string }
+  } catch (e) {
+    console.warn("[Agent] Failed to generate skill proposal:", e)
+    emitSkillGenerating("error", e instanceof Error ? e.message : String(e))
+    return null
+  }
+}
+
+/**
+ * Write an approved skill proposal to disk and notify the renderer.
+ */
+async function writeSkillToDisk(skillId: string, content: string, name: string): Promise<void> {
+  const skillDir = join(getCustomSkillsDir(), skillId)
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(join(skillDir, "SKILL.md"), content, "utf-8")
+  invalidateEnabledSkillsCache()
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("skills:changed")
+  }
+  console.log(`[Agent] Wrote skill "${name}" to ${skillDir}`)
+}
+
+/**
+ * After a conversation meets the threshold, this function runs as a
+ * fire-and-forget async task.
+ *
+ * MODE A — auto-propose ON (default):
+ *   1. Send `skill:intentRequest` → lightweight banner asks "Want to save as skill?"
+ *   2. User clicks YES → call LLM to generate skill proposal
+ *   3. Send `skill:confirmRequest` → full detail dialog (name/desc/content)
+ *   4. User "Adopt" → write to disk
+ *
+ * MODE B — auto-propose OFF:
+ *   1. Call LLM directly to judge whether this conversation warrants a skill
+ *   2. If LLM says yes → send `skill:confirmRequest` → full detail dialog
+ *   3. User "Adopt" → write to disk
+ */
+async function autoProposeSKill(
+  threadId: string,
+  userMessage: string,
+  assistantText: string,
+  toolCallNames: string[]
+): Promise<void> {
+  const toolCallSummary = toolCallNames.length > 0
+    ? toolCallNames.join(", ")
+    : "(none)"
+
+  if (isSkillAutoProposeEnabled()) {
+    // ── Mode A: ask human first, then generate ───────────────────
+    console.log(`[Agent][ModeA] Thread ${threadId}: asking user intent (${toolCallNames.length} tool calls)`)
+
+    const intentId = uuid()
+    const wantsSkill = await requestSkillIntent({
+      requestId: intentId,
+      summary: userMessage.slice(0, 120),
+      toolCallCount: toolCallNames.length
+    })
+
+    if (!wantsSkill) {
+      console.log("[Agent][ModeA] User declined skill intent")
+      return
+    }
+
+    // User said yes — now generate the skill content with LLM
+    console.log("[Agent][ModeA] User confirmed intent, generating skill proposal…")
+    const proposal = await generateSkillProposal(userMessage, assistantText, toolCallSummary)
+    if (!proposal) {
+      console.log("[Agent][ModeA] Could not generate skill proposal (no model or parse error)")
+      return
+    }
+
+    const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
+    if (!skillId) return
+
+    const confirmId = uuid()
+    const adopted = await requestSkillConfirmation({
+      requestId: confirmId,
+      skillId,
+      name: proposal.name,
+      description: proposal.description,
+      content: proposal.content
+    })
+
+    if (!adopted) {
+      console.log(`[Agent][ModeA] User rejected skill detail for "${proposal.name}"`)
+      return
+    }
+
+    await writeSkillToDisk(skillId, proposal.content, proposal.name)
+
+  } else {
+    // ── Mode B: let LLM decide first, then ask human ─────────────
+    console.log(`[Agent][ModeB] Thread ${threadId}: calling LLM to judge skill worthiness`)
+
+    const proposal = await generateSkillProposal(userMessage, assistantText, toolCallSummary)
+    if (!proposal) {
+      console.log("[Agent][ModeB] LLM declined or failed to generate a skill proposal")
+      return
+    }
+
+    const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
+    if (!skillId) return
+
+    console.log(`[Agent][ModeB] LLM proposed skill "${proposal.name}", asking user to adopt`)
+    const confirmId = uuid()
+    const adopted = await requestSkillConfirmation({
+      requestId: confirmId,
+      skillId,
+      name: proposal.name,
+      description: proposal.description,
+      content: proposal.content
+    })
+
+    if (!adopted) {
+      console.log(`[Agent][ModeB] User rejected skill "${proposal.name}"`)
+      return
+    }
+
+    await writeSkillToDisk(skillId, proposal.content, proposal.name)
+  }
+}
+
 
 export function registerAgentHandlers(ipcMain: IpcMain): void {
   console.log("[Agent] Registering agent handlers...")
@@ -167,6 +386,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       // ─────────────────────────────────────────────────────────────────────────
 
       const _countedAiMsgIds = new Set<string>()
+      const _toolCallNames: string[] = []
 
       let assistantText = ""
       for await (const chunk of stream) {
@@ -229,9 +449,11 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             // Record trace step + increment skill-evolution counter
             tracer.beginStep()
             for (const tc of toolCalls) {
-              tracer.recordToolCall({ name: tc.name ?? "unknown", args: tc.args ?? {} })
+              const tcName = tc.name ?? "unknown"
+              tracer.recordToolCall({ name: tcName, args: tc.args ?? {} })
+              _toolCallNames.push(tcName)
               const newCount = incrementToolCallCount(threadId)
-              console.log(`[Agent] Tool call #${newCount} (${tc.name}) in thread ${threadId}`)
+              console.log(`[Agent] Tool call #${newCount} (${tcName}) in thread ${threadId}`)
             }
             tracer.endStep(stepText)
           } catch (e) {
@@ -254,13 +476,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         await tracer.finish("success")
 
         // Check if this turn crossed the skill-evolution threshold.
-        // If so, notify the renderer immediately so it can auto-run the optimizer
-        // and show skill candidates to the user — no next-turn lag.
+        // autoProposeSKill handles both modes (A: ask human first; B: LLM judges first).
         const turnToolCallCount = getToolCallCount(threadId)
         if (turnToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
-          console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), notifying renderer for skill evolution`)
-          window.webContents.send("optimizer:autoTriggered", { threadId, toolCallCount: turnToolCallCount })
           resetToolCallCount(threadId)
+          console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), starting skill evolution flow`)
+          autoProposeSKill(threadId, message, assistantText, [..._toolCallNames]).catch((e) =>
+            console.warn("[Agent] autoProposeSKill failed:", e)
+          )
         }
 
         const conversation = assistantText.trim()
