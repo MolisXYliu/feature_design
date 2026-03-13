@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, GitBranch } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -11,8 +11,9 @@ import { HeartbeatPanel } from "./HeartbeatPanel"
 import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
+import { EvolutionPanel } from "./EvolutionPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "evolution"
 
 const isWindows = navigator.userAgent.toLowerCase().includes("windows")
 
@@ -134,6 +135,18 @@ export function CustomizeView(): React.JSX.Element {
               <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
             </button>
           )}
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "evolution"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("evolution")}
+          >
+            <GitBranch className="size-4 shrink-0" />
+            Evolution
+          </button>
         </nav>
       </div>
 
@@ -153,6 +166,8 @@ export function CustomizeView(): React.JSX.Element {
         <MarketPanel />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
+      ) : activeTab === "evolution" ? (
+        <EvolutionPanel />
       ) : null}
     </div>
   )

@@ -505,6 +505,100 @@ const api = {
       ipcRenderer.on("sandbox:changed", handler)
       return () => { ipcRenderer.removeListener("sandbox:changed", handler) }
     }
+  },
+  optimizer: {
+    /** Run the offline optimization loop — returns candidates for review */
+    run: (opts?: { threadId?: string; traceLimit?: number }): Promise<{
+      startedAt: string
+      endedAt: string
+      tracesAnalyzed: number
+      candidates: Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+      summary: string
+    }> =>
+      ipcRenderer.invoke("optimizer:run", opts) as Promise<{
+        startedAt: string
+        endedAt: string
+        tracesAnalyzed: number
+        candidates: Array<{
+          candidateId: string
+          action: "create" | "patch"
+          skillId: string
+          name: string
+          description: string
+          proposedContent: string
+          rationale: string
+          sourceTraceIds: string[]
+          generatedAt: string
+          status: "pending" | "approved" | "rejected"
+        }>
+        summary: string
+      }>,
+    /** Get current in-memory candidates */
+    getCandidates: (): Promise<Array<{
+      candidateId: string
+      action: "create" | "patch"
+      skillId: string
+      name: string
+      description: string
+      proposedContent: string
+      rationale: string
+      sourceTraceIds: string[]
+      generatedAt: string
+      status: "pending" | "approved" | "rejected"
+    }>> =>
+      ipcRenderer.invoke("optimizer:candidates") as Promise<Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>>,
+    /** Approve a candidate — writes the skill to disk */
+    approve: (candidateId: string): Promise<{ success: boolean; skillId?: string; error?: string }> =>
+      ipcRenderer.invoke("optimizer:approve", { candidateId }) as Promise<{ success: boolean; skillId?: string; error?: string }>,
+    /** Reject a candidate */
+    reject: (candidateId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("optimizer:reject", { candidateId }) as Promise<{ success: boolean }>,
+    /** Clear all candidates */
+    clear: (): Promise<void> =>
+      ipcRenderer.invoke("optimizer:clear") as Promise<void>,
+    /** List recent traces (metadata only) */
+    getTraces: (opts?: { threadId?: string; limit?: number }): Promise<Array<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      durationMs: number
+      userMessage: string
+      totalToolCalls: number
+      outcome: string
+      activeSkills: string[]
+    }>> =>
+      ipcRenderer.invoke("optimizer:traces", opts) as Promise<Array<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        durationMs: number
+        userMessage: string
+        totalToolCalls: number
+        outcome: string
+        activeSkills: string[]
+      }>>
   }
 }
 

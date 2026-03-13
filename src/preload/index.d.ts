@@ -243,6 +243,63 @@ interface CustomAPI {
     setMode: (mode: "none" | "unelevated") => Promise<void>
     onChanged: (callback: () => void) => () => void
   }
+  skillEvolution: {
+    onConfirmRequest: (
+      callback: (req: {
+        requestId: string
+        skillId: string
+        name: string
+        description: string
+        content: string
+      }) => void
+    ) => () => void
+    confirmResponse: (requestId: string, approved: boolean) => Promise<void>
+  }
+  optimizer: {
+    run: (opts?: { threadId?: string; traceLimit?: number }) => Promise<{
+      startedAt: string
+      endedAt: string
+      tracesAnalyzed: number
+      candidates: Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+      summary: string
+    }>
+    getCandidates: () => Promise<Array<{
+      candidateId: string
+      action: "create" | "patch"
+      skillId: string
+      name: string
+      description: string
+      proposedContent: string
+      rationale: string
+      sourceTraceIds: string[]
+      generatedAt: string
+      status: "pending" | "approved" | "rejected"
+    }>>
+    approve: (candidateId: string) => Promise<{ success: boolean; skillId?: string; error?: string }>
+    reject: (candidateId: string) => Promise<{ success: boolean }>
+    clear: () => Promise<void>
+    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<Array<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      durationMs: number
+      userMessage: string
+      totalToolCalls: number
+      outcome: string
+      activeSkills: string[]
+    }>>
+  }
 }
 
 declare global {

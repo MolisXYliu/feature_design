@@ -14,6 +14,7 @@ import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
 import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
 import { notifyIfBackground } from "../services/notify"
+import { TraceCollector } from "../agent/trace/collector"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -100,6 +101,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     }
     window.once("closed", onWindowClosed)
 
+    // Start trace collection for this invocation (modelId resolved later)
+    const tracer = new TraceCollector(threadId, message, modelId ?? "unknown")
+
     try {
       // Get workspace path from thread metadata - REQUIRED
       const thread = getThread(threadId)
@@ -114,6 +118,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           error: "WORKSPACE_REQUIRED",
           message: "Please select a workspace folder before sending messages."
         })
+        await tracer.finish("error", "WORKSPACE_REQUIRED")
         return
       }
 
@@ -156,6 +161,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         }
       )
 
+      // Update tracer with resolved modelId
+      if (effectiveModelId) tracer.setModelId(effectiveModelId)
+
+      // Trace: begin the first reasoning step
+      tracer.beginStep()
+      let stepAssistantText = ""
+
       let assistantText = ""
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
@@ -171,18 +183,32 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               const c = msgChunk.content
               if (typeof c === "string") {
                 assistantText += c
+                stepAssistantText += c
               } else if (Array.isArray(c)) {
-                assistantText += c
+                const text = c
                   .filter((b: { type: string }) => b?.type === "text")
                   .map((b: { text?: string }) => b.text ?? "")
                   .join("")
+                assistantText += text
+                stepAssistantText += text
               }
               // Count tool_use blocks as tool calls
               if (Array.isArray(c)) {
-                const toolUseCount = c.filter((b: { type: string }) => b?.type === "tool_use").length
-                if (toolUseCount > 0) {
+                const toolUseBlocks = c.filter((b: { type: string }) => b?.type === "tool_use")
+                if (toolUseBlocks.length > 0) {
                   const newCount = incrementToolCallCount(threadId)
                   console.log(`[Agent] Tool call #${newCount} in thread ${threadId}`)
+                  // Record each tool call in the current trace step
+                  for (const block of toolUseBlocks) {
+                    tracer.recordToolCall({
+                      name: (block as { name?: string }).name ?? "unknown",
+                      args: (block as { input?: Record<string, unknown> }).input ?? {}
+                    })
+                  }
+                  // End current step and begin next one (new model message = new step)
+                  tracer.endStep(stepAssistantText)
+                  tracer.beginStep()
+                  stepAssistantText = ""
                 }
               }
             }
@@ -198,9 +224,15 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
 
+      // Close the last open step
+      tracer.endStep(stepAssistantText)
+
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
+
+        // Finish trace
+        await tracer.finish("success")
 
         // Reset tool call counter after a full conversation turn completes
         // so the count reflects the current session's complexity
@@ -245,6 +277,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           error: errMsg
         })
         notifyIfBackground("❌ 任务失败", errMsg)
+        tracer.finish("error", errMsg).catch(() => {})
+      } else {
+        tracer.finish("cancelled").catch(() => {})
       }
     } finally {
       window.removeListener("closed", onWindowClosed)
