@@ -22,7 +22,7 @@ export function CustomizeView(): React.JSX.Element {
 
   return (
     <div className="flex h-full overflow-hidden bg-background">
-      <div className="w-[250px] shrink-0 border-r border-border flex flex-col">
+      <div className="w-[200px] shrink-0 border-r border-border flex flex-col">
         <div className="p-3 flex items-center gap-2">
           <Button
             variant="ghost"
@@ -45,7 +45,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("skills")}
           >
             <Sparkles className="size-4 shrink-0" />
-            技能（Skills）
+            技能
           </button>
           <button
             className={cn(
@@ -57,7 +57,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("connectors")}
           >
             <Plug className="size-4 shrink-0" />
-            模型连接协议（MCPs）
+            模型连接协议
           </button>
           <button
             className={cn(
@@ -69,7 +69,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("plugins")}
           >
             <Puzzle className="size-4 shrink-0" />
-            插件（Plugins）
+            插件
           </button>
           <button
             className={cn(
@@ -81,7 +81,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("scheduled")}
           >
             <Clock className="size-4 shrink-0" />
-            定时任务（Scheduled）
+            定时任务
           </button>
           <button
             className={cn(
@@ -93,7 +93,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("heartbeat")}
           >
             <HeartPulse className="size-4 shrink-0" />
-            心跳监控（Heartbeat）
+            心跳监控
           </button>
           <button
             className={cn(
@@ -105,7 +105,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("memory")}
           >
             <Brain className="size-4 shrink-0" />
-            记忆管理（Memory）
+            记忆管理
           </button>
           <button
             className={cn(
@@ -117,7 +117,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("market")}
           >
             <ShoppingBag className="size-4 shrink-0" />
-            应用市场（Market）
+            应用市场
           </button>
           {isWindows && (
             <button
@@ -130,7 +130,7 @@ export function CustomizeView(): React.JSX.Element {
               onClick={() => setActiveTab("sandbox")}
             >
               <Shield className="size-4 shrink-0" />
-              沙盒环境（Sandbox）
+              沙盒环境
               <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
             </button>
           )}

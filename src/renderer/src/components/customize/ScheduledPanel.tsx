@@ -165,9 +165,6 @@ export function ScheduledPanel(): React.JSX.Element {
               <Plus className="size-4" />
             </Button>
           </div>
-          <div className="text-xs text-muted-foreground leading-relaxed">
-            <p>定时任务允许您设置自动执行的AI任务，可按小时、每天、工作日或每周运行。适用于定期报告、数据处理等场景。</p>
-          </div>
           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-muted/50 text-xs text-muted-foreground">
             <Info className="size-3.5 shrink-0" />
             <span>定时任务仅在电脑唤醒状态下运行</span>

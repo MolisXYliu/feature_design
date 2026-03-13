@@ -426,9 +426,6 @@ export function SkillsPanel(): React.JSX.Element {
               </Button>
             </div>
           </div>
-          <div className="text-xs text-muted-foreground leading-relaxed">
-            <p>技能是可复用的功能模块，可以扩展AI助手的能力。您可以启用/禁用内置技能，或上传自定义技能包。</p>
-          </div>
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-3">
