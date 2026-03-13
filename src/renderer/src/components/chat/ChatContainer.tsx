@@ -92,6 +92,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
   const [showAllCustomSkills, setShowAllCustomSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
+  const [showCopyNotification, setShowCopyNotification] = useState(false)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
@@ -786,8 +787,34 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     [buildSkillPrompt, setInput]
   )
 
+  const handleCopyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setShowCopyNotification(true)
+        setTimeout(() => setShowCopyNotification(false), 2000)
+      },
+      (err) => console.error("Failed to copy text: ", err)
+    )
+  }
+
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+      {/* Copy notification */}
+      {showCopyNotification && (
+        <div className="fixed top-[40vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
+          <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm px-4 py-2 shadow-lg">
+            <div className="flex items-center gap-2 text-sm text-foreground">
+              <div className="size-4 rounded-full bg-green-500 flex items-center justify-center">
+                <svg className="size-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <span>已复制链接到剪切板，请在浏览器中打开查看</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">
@@ -858,7 +885,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               key={skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
-                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                              className=" group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                             >
                               <div className="flex items-center gap-3">
                                 <div
@@ -937,6 +964,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     )}
                     <div className="text-xs text-muted-foreground font-medium tracking-wider">
                       可以去 [ 自定义 / 应用市场 ] 安装市场上的技能使用
+                    </div>
+
+                    <div
+                      className="text-blue-500 hover:text-blue-400 cursor-pointer text-sm underline"
+                      onClick={async () => {
+                        const instructionUrl = import.meta.env.VITE_INTRUCTION_URL
+                        handleCopyToClipboard(instructionUrl)
+                      }}
+                    >
+                      操作说明文档
                     </div>
                   </div>
                 )}
