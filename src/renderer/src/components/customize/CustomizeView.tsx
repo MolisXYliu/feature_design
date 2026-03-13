@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -10,8 +10,11 @@ import { MemoryPanel } from "./MemoryPanel"
 import { HeartbeatPanel } from "./HeartbeatPanel"
 import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
+import { SandboxPanel } from "./SandboxPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
+
+const isWindows = navigator.userAgent.toLowerCase().includes("windows")
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView } = useAppStore()
@@ -116,6 +119,21 @@ export function CustomizeView(): React.JSX.Element {
             <ShoppingBag className="size-4 shrink-0" />
             Market
           </button>
+          {isWindows && (
+            <button
+              className={cn(
+                "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                activeTab === "sandbox"
+                  ? "bg-muted font-medium"
+                  : "text-muted-foreground hover:bg-muted/50"
+              )}
+              onClick={() => setActiveTab("sandbox")}
+            >
+              <Shield className="size-4 shrink-0" />
+              Sandbox
+              <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+            </button>
+          )}
         </nav>
       </div>
 
@@ -133,6 +151,8 @@ export function CustomizeView(): React.JSX.Element {
         <MemoryPanel />
       ) : activeTab === "market" ? (
         <MarketPanel />
+      ) : activeTab === "sandbox" ? (
+        <SandboxPanel />
       ) : null}
     </div>
   )

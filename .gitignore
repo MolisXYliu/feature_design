@@ -6,3 +6,5 @@ out
 *.log*
 *.tsbuildinfo
 release
+resources/bin/win32/codex.exe
+.idea/

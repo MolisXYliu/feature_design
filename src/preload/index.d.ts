@@ -238,6 +238,11 @@ interface CustomAPI {
     setEnabled: (id: string, enabled: boolean) => Promise<void>
     getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
+  sandbox: {
+    getMode: () => Promise<"none" | "unelevated">
+    setMode: (mode: "none" | "unelevated") => Promise<void>
+    onChanged: (callback: () => void) => () => void
+  }
 }
 
 declare global {

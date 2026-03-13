@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 import {
-  Download,
   Search,
   ShoppingBag,
   Sparkles,
@@ -8,7 +7,9 @@ import {
   Puzzle,
   Trash2,
   CheckCircle,
-  Plus
+  Plus,
+  HardDrive,
+  Zap
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -66,7 +67,7 @@ interface DownloadResponse {
 }
 
 // Updated API endpoints to match exact specification
-const API_BASE_URL = "http://haha.com/marketplace" // Replace with actual API URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
@@ -80,6 +81,18 @@ interface McpConnector {
   name: string
   description?: string
   version?: string
+}
+
+// Utility function to download blob as file
+const downloadBlobAsFile = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 // Updated API functions with the new endpoints
@@ -215,7 +228,7 @@ const marketApi = {
     }
   },
 
-  async downloadItem(name: string, type: MarketItemType): Promise<DownloadResponse> {
+  async downloadItem(name: string, type: MarketItemType, downloadToLocal = false): Promise<DownloadResponse> {
     try {
       console.log(`Downloading ${type} item: ${name}`)
       const response = await fetch(ENDPOINTS.download(type, name), {
@@ -233,6 +246,12 @@ const marketApi = {
       const blob = await response.blob()
       const contentDisposition = response.headers.get("Content-Disposition")
       const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.zip`
+
+      // If user wants to download to local file system
+      if (downloadToLocal) {
+        downloadBlobAsFile(blob, filename)
+        return { success: true }
+      }
 
       // For skills, we need to handle the downloaded file
       if (type === "skill") {
@@ -316,7 +335,7 @@ const marketApi = {
       return { success: true }
     } catch (error) {
       console.warn("API download failed, using mock response:", error)
-      return mockMarketApi.downloadItem(name, type)
+      return mockMarketApi.downloadItem(name, type, downloadToLocal)
     }
   },
 
@@ -462,8 +481,31 @@ const mockMarketApi = {
     return { message: `Successfully deleted ${name}` }
   },
 
-  async downloadItem(name: string, type: MarketItemType): Promise<DownloadResponse> {
+  async downloadItem(name: string, type: MarketItemType, downloadToLocal = false): Promise<DownloadResponse> {
     await new Promise((resolve) => setTimeout(resolve, 2000))
+
+    if (downloadToLocal) {
+      // Simulate downloading a file to local file system
+      const filename = `${name}.${type === 'mcp' ? 'json' : 'zip'}`
+      const content = type === 'mcp'
+        ? JSON.stringify({ name, type, description: `Mock ${type} content` }, null, 2)
+        : `Mock ${type} file content for ${name}`
+
+      const blob = new Blob([content], {
+        type: type === 'mcp' ? 'application/json' : 'application/zip'
+      })
+
+      // Trigger download
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+
     return { success: true }
   },
 
@@ -532,13 +574,17 @@ const localStorageHelper = {
 interface MarketItemCardProps {
   item: MarketItem
   onDelete: (item: MarketItem) => void
-  onDownload: (item: MarketItem) => void
+  onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
   isDownloading?: boolean
 }
 
 function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: MarketItemCardProps) {
-  const handleDownload = () => {
-    onDownload(item)
+  const handleInstallDownload = () => {
+    onDownload(item, false) // Install to application
+  }
+
+  const handleLocalDownload = () => {
+    onDownload(item, true) // Download to local file system
   }
 
   return (
@@ -546,19 +592,30 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
       <div className="flex items-start justify-between mb-2">
         <h3 className="font-medium text-sm line-clamp-1 flex-1">{item.name}</h3>
         <div className="flex items-center gap-1 ml-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={handleDownload}
-            disabled={isDownloading}
-          >
-            {isDownloading ? (
-              <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Download className="size-3" />
-            )}
-          </Button>
+          {isDownloading ? (
+            <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-3 gap-1"
+                onClick={handleInstallDownload}
+              >
+                <Zap className="size-3" />
+                安装
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-auto px-2 gap-1"
+                onClick={handleLocalDownload}
+              >
+                <HardDrive className="size-3 mr-2" />
+                下载
+              </Button>
+            </>
+          )}
           {item.canDelete && (
             <Button
               variant="ghost"
@@ -722,7 +779,7 @@ export function MarketPanel(): React.JSX.Element {
     }
   }
 
-  const handleDownload = async (item: MarketItem) => {
+  const handleDownload = async (item: MarketItem, downloadToLocal = false) => {
     const itemKey = item.id || item.name
 
     // Add to downloading set
@@ -736,16 +793,22 @@ export function MarketPanel(): React.JSX.Element {
         return
       }
 
-      // Use current activeTab as the type
-      const response = await marketApi.downloadItem(itemName, activeTab)
+      // Use current activeTab as the type and pass the downloadToLocal flag
+      const response = await marketApi.downloadItem(itemName, activeTab, downloadToLocal)
       if (response.success) {
         console.log(`Downloaded ${item.name}`)
 
-        // Show success message
-        setDownloadSuccess({ open: true, itemName: item.name })
+        // Show different success messages based on download type
+        if (downloadToLocal) {
+          // For local downloads, show a different message
+          setDownloadSuccess({ open: true, itemName: `${item.name} (已保存到本地)` })
+        } else {
+          // For application installs, show the original message
+          setDownloadSuccess({ open: true, itemName: item.name })
+        }
 
-        // For skills, the item is now available in the Skills panel
-        if (activeTab === "skill") {
+        // For skills, the item is now available in the Skills panel (only for app installs)
+        if (activeTab === "skill" && !downloadToLocal) {
           // Optional: You could trigger a refresh of the Skills panel here
           // by emitting an event or using a global state management solution
         }

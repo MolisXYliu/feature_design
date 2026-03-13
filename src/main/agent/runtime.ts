@@ -42,13 +42,35 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 import { createHash } from "crypto"
 import path from "path"
 import { join, delimiter } from "path"
-import { existsSync } from "fs"
+import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
+import { createReadStream } from "fs"
+import { createGunzip } from "zlib"
+import { pipeline } from "stream/promises"
 import { app } from "electron"
 import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
+import { getWindowsSandboxMode } from "../storage"
+
+/** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
+async function ensureCodexExe(exePath: string): Promise<void> {
+  const gzPath = exePath + ".gz"
+  if (!existsSync(gzPath)) return
+  if (existsSync(exePath)) {
+    // Skip if exe is up-to-date (gz not newer)
+    if (statSync(exePath).mtimeMs >= statSync(gzPath).mtimeMs) return
+    // gz is newer — remove stale exe before re-extracting
+    try { unlinkSync(exePath) } catch { /* ignore */ }
+  }
+  try {
+    await pipeline(createReadStream(gzPath), createGunzip(), createWriteStream(exePath))
+    console.log("[Runtime] codex.exe extracted from .gz")
+  } catch (e) {
+    console.error("[Runtime] Failed to extract codex.exe:", e)
+  }
+}
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -230,11 +252,15 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(): { name: string; isBashLike: boolean } {
-  const resolved = LocalSandbox.resolvedShell()
-  const base = path.basename(resolved).replace(/\.exe$/i, "")
+function getShellInfo(windowsSandbox?: "none" | "unelevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isUnelevated = process.platform === "win32" && windowsSandbox === "unelevated"
+  const resolved = isUnelevated
+    ? LocalSandbox.resolvedWindowsSandboxShell()
+    : LocalSandbox.resolvedShell()
+  const base = path.basename(resolved).replace(/\.exe$/i, "").toLowerCase()
   const isBashLike = ["bash", "sh", "zsh"].includes(base)
-  return { name: base, isBashLike }
+  const isPowerShell = ["pwsh", "powershell"].includes(base)
+  return { name: base, isBashLike, isPowerShell }
 }
 
 /** Format a Date as local ISO-8601 with UTC offset, e.g. 2026-03-08T23:01:26+08:00 */
@@ -258,17 +284,19 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const { name: shell, isBashLike } = getShellInfo()
+  const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
   const examplePath = isWindows
     ? `${workspacePath}\\src\\index.ts`
     : `${workspacePath}/src/index.ts`
 
   const shellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
-    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
+    : isPowerShell
+      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const workingDirSection = `
@@ -452,31 +480,44 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   )
   const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
   const rgExists = existsSync(rgBin)
-  const env = rgExists
-    ? { ...process.env, PATH: `${rgDir}${delimiter}${process.env.PATH ?? ""}` }
-    : undefined
+  // Mutate process.env.PATH so deepagents' internal ripgrepSearch
+  // (spawns "rg" without custom env, inherits process.env) can find it.
+  const paths = (process.env.PATH ?? "").split(delimiter)
+  if (rgExists && !paths.includes(rgDir)) {
+    process.env.PATH = `${rgDir}${delimiter}${process.env.PATH ?? ""}`
+  }
   console.log(`[Runtime] ripgrep bin: ${rgBin}, exists: ${rgExists}, platform: ${process.platform}`)
+
+  // Codex Windows sandbox (unelevated): reuse rgDir which already points to resources/bin/win32
+  const codexExePath = join(rgDir, "codex.exe")
+  if (process.platform === "win32") await ensureCodexExe(codexExePath)
+  const codexExists = process.platform === "win32" && existsSync(codexExePath)
+  const windowsSandbox = process.platform === "win32" ? getWindowsSandboxMode() : "none"
+  console.log(`[Runtime] codex.exe: ${codexExePath}, exists: ${codexExists}, sandboxMode: ${windowsSandbox}`)
 
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
     timeout: 600_000,
     maxOutputBytes,
-    env
+    windowsSandbox,
+    codexExePath: codexExists ? codexExePath : undefined
   })
 
-  let systemPrompt = getSystemPrompt(workspacePath)
+  let systemPrompt = getSystemPrompt(workspacePath, windowsSandbox)
   if (extraSystemPrompt) {
     systemPrompt += "\n\n" + extraSystemPrompt
   }
 
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
-  const { name: shell, isBashLike } = getShellInfo()
+  const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
 
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
-    : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
+    : isPowerShell
+      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
 
@@ -496,9 +537,18 @@ ${subagentShellGuidance}
 The workspace root is: ${workspacePath}`
 
   const skillsSources = await getEnabledSkillsSources()
+  console.log("[Runtime] Raw skills sources from getEnabledSkillsSources():", skillsSources)
+  console.log("[Runtime] Raw skills sources count:", skillsSources.length)
+  console.log("[Runtime] Raw skills sources content:", JSON.stringify(skillsSources, null, 2))
+
   // Merge plugin skills sources
   const pluginSkillsSources = getEnabledPluginSkillsSources()
+  console.log("[Runtime] Plugin skills sources:", pluginSkillsSources)
+  console.log("[Runtime] Plugin skills sources count:", pluginSkillsSources.length)
+
   const allSkillsSources = [...skillsSources, ...pluginSkillsSources]
+  console.log("[Runtime] All skills sources combined:", allSkillsSources)
+  console.log("[Runtime] All skills sources count:", allSkillsSources.length)
   console.log("[Runtime] Skills sources:", skillsSources, "Plugin skills:", pluginSkillsSources)
 
   // Initialize memory system (gated by user setting)
@@ -630,14 +680,15 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    // TODO: 后续改回来，恢复 execute 审批
-    // interruptOn: { execute: true },
+    interruptOn: { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,
     trimTokensToSummarize: trimForSummary
   })
 
+  console.log("[Runtime] Agent created with skills parameter:", allSkillsSources.length > 0 ? allSkillsSources : undefined)
+  console.log("[Runtime] Final skills passed to createDeepAgent:", JSON.stringify(allSkillsSources.length > 0 ? allSkillsSources : undefined, null, 2))
   console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
   return agent
 }

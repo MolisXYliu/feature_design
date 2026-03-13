@@ -44,6 +44,10 @@ export interface LocalSandboxOptions {
   maxOutputBytes?: number
   /** Environment variables to pass to commands (default: process.env) */
   env?: Record<string, string>
+  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'none' runs directly (default: 'none') */
+  windowsSandbox?: "none" | "unelevated"
+  /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
+  codexExePath?: string
 }
 
 /**
@@ -73,6 +77,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly maxOutputBytes: number
   private readonly env: Record<string, string>
   private readonly workingDir: string
+  private readonly windowsSandbox: "none" | "unelevated"
+  private readonly codexExePath: string
+  /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
+  private readonly _resolvePath: (key: string) => string
+  private readonly _virtualMode: boolean
+  private readonly _cwd: string
+  private readonly _maxFileSizeBytes: number
 
   constructor(options: LocalSandboxOptions = {}) {
     super({
@@ -93,6 +104,20 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
     this.env = baseEnv
     this.workingDir = options.rootDir ?? process.cwd()
+    this.windowsSandbox = options.windowsSandbox ?? "none"
+    this.codexExePath = options.codexExePath ?? "codex"
+
+    // Cache parent's private fields once to avoid scattered (this as any) casts
+    this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
+    this._virtualMode = ((this as any).virtualMode as boolean) ?? false
+    this._cwd = ((this as any).cwd as string) ?? this.workingDir
+    this._maxFileSizeBytes = ((this as any).maxFileSizeBytes as number) ?? 10 * 1024 * 1024
+    if ((this as any).virtualMode === undefined) {
+      console.warn("[LocalSandbox] parent virtualMode not found, defaulting to false")
+    }
+    if ((this as any).cwd === undefined) {
+      console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
+    }
 
     // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
     // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
@@ -130,9 +155,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /**
    * Override grepRaw to:
-   * 1. Fall back to encoding-aware search when parent returns no results
+   * 1. Filter results when path is a file (defends against parent's literalSearch
+   *    bug that expands single-file paths to full directory searches)
+   * 2. Fall back to encoding-aware search only when ripgrep is unavailable
    *    (parent's literalSearch is hardcoded UTF-8, misses non-UTF-8 files)
-   * 2. Cap results for codebase exploration to avoid pressuring small context windows
+   * 3. Cap results for codebase exploration to avoid pressuring small context windows
+   *
+   * Defence layers: runtime.ts patches process.env.PATH so ripgrep is found;
+   * this method calls ripgrepSearch directly to distinguish "no matches" from
+   * "rg unavailable"; encodingAwareLiteralSearch serves as a final fallback.
    */
   async grepRaw(
     pattern: string,
@@ -140,20 +171,69 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     glob?: string | null
   ): Promise<GrepMatch[] | string> {
     const resolved = dirPath ?? "/"
+
+    // Resolve the base path once for reuse
+    let baseFull: string
+    try {
+      baseFull = this._resolvePath(resolved === "/" ? "." : (resolved || "."))
+    } catch {
+      return []
+    }
+    // Early exit if path doesn't exist; cache stat for reuse below
+    let baseStat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      baseStat = await fs.stat(baseFull)
+    } catch {
+      return []
+    }
+    const isFile = baseStat.isFile()
+
+    // Call parent's private ripgrepSearch directly to distinguish
+    // "rg found nothing" ({}) from "rg unavailable" (null)
+    const ripgrepSearch = (this as any).ripgrepSearch as
+      | ((p: string, b: string, g: string | null) => Promise<Record<string, Array<[number, string]>> | null>)
+      | undefined
+
     const t0 = Date.now()
-    let results = await super.grepRaw(pattern, resolved, glob)
-    const parentMs = Date.now() - t0
-    if (typeof results === "string") return results
+    let rgResult: Record<string, Array<[number, string]>> | null | undefined
+    if (typeof ripgrepSearch === "function") {
+      rgResult = await ripgrepSearch.call(this, pattern, baseFull, glob ?? null)
+    }
+    const rgMs = Date.now() - t0
+    // undefined = method missing (upstream API changed), treat same as unavailable
+    const rgAvailable = rgResult !== null && rgResult !== undefined
+
+    // Convert ripgrep dict → flat array
+    let results: GrepMatch[] = []
+    if (rgResult) {
+      for (const [fpath, items] of Object.entries(rgResult)) {
+        for (const [lineNum, lineText] of items) {
+          results.push({ path: fpath, line: lineNum, text: lineText })
+        }
+      }
+    }
+
+    // When path points to a specific file, filter results to only include
+    // matches from the intended file (ripgrep may return broader results).
+    if (results.length > 0 && resolved !== "/" && isFile) {
+      let expectedPath: string
+      if (this._virtualMode) {
+        const relative = path.relative(this._cwd, baseFull)
+        expectedPath = "/" + relative.split(path.sep).join("/")
+      } else {
+        expectedPath = baseFull
+      }
+      results = results.filter((m) => m.path === expectedPath)
+    }
 
     let source = results.length > 0 ? "ripgrep" : "none"
 
-    if (results.length === 0) {
-      let baseFull: string
-      try {
-        baseFull = (this as any).resolvePath(resolved === "/" ? "." : resolved)
-      } catch {
-        return results
-      }
+    // Fall back to encoding-aware literal search when:
+    // - ripgrep is unavailable (null/undefined), OR
+    // - ripgrep returned empty for a single file (may be non-UTF-8 / binary-detected,
+    //   e.g. GBK/Shift-JIS files that ripgrep skips as "binary")
+    // For directory-level searches, empty ripgrep results are normal — skip fallback.
+    if (!rgAvailable || (results.length === 0 && isFile)) {
       const t1 = Date.now()
       const rawResults = await this.encodingAwareLiteralSearch(pattern, baseFull, glob ?? null)
       const fallbackMs = Date.now() - t1
@@ -169,7 +249,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     console.log(
-      `[LocalSandbox] grepRaw: source=${source}, pattern="${pattern}", results=${results.length}, parentMs=${parentMs}`
+      `[LocalSandbox] grepRaw: source=${source}, pattern="${pattern}", results=${results.length}, rgMs=${rgMs}`
     )
 
     if (results.length === 0) return results
@@ -380,7 +460,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Shared helper for read(), edit(), and other encoding-aware operations.
    */
   private async readFileBuffer(filePath: string): Promise<{ buffer: Buffer; resolvedPath: string }> {
-    const resolvedPath: string = (this as any).resolvePath(filePath)
+    const resolvedPath: string = this._resolvePath(filePath)
 
     let buffer: Buffer
     if (LocalSandbox.SUPPORTS_NOFOLLOW) {
@@ -530,20 +610,30 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     includeGlob: string | null
   ): Promise<Record<string, Array<[number, string]>>> {
     const results: Record<string, Array<[number, string]>> = {}
-    const cwd = (await fs.stat(baseFull)).isDirectory()
-      ? baseFull
-      : path.dirname(baseFull)
-    const files = await fg("**/*", {
-      cwd, absolute: true, onlyFiles: true, dot: true,
-      ignore: LocalSandbox.SEARCH_IGNORE
-    })
-    const maxBytes = ((this as any).maxFileSizeBytes as number) ?? 10 * 1024 * 1024
-    const virtualMode = (this as any).virtualMode as boolean | undefined
-    const cwdDir = virtualMode ? ((this as any).cwd as string) : ""
+    let stat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      stat = await fs.stat(baseFull)
+    } catch {
+      return results // path does not exist — return empty
+    }
+    const isFile = stat.isFile()
+    const cwd = isFile ? path.dirname(baseFull) : baseFull
+    // If baseFull points to a single file, only search that file
+    const files = isFile
+      ? [baseFull]
+      : await fg("**/*", {
+          cwd, absolute: true, onlyFiles: true, dot: true,
+          ignore: LocalSandbox.SEARCH_IGNORE
+        })
+    const maxBytes = this._maxFileSizeBytes
+    const cwdDir = this._virtualMode ? this._cwd : ""
 
     for (const fp of files) {
       try {
-        if (includeGlob && !micromatch.isMatch(path.basename(fp), includeGlob)) continue
+        // Single-file mode: skip glob filter — caller already specified the target file
+        // matchBase: when glob has no slashes (e.g. "*.ts"), match against
+        // basename only — consistent with ripgrep's --glob behavior.
+        if (!isFile && includeGlob && !micromatch.isMatch(path.relative(cwd, fp), includeGlob, { matchBase: true })) continue
         if ((await fs.stat(fp)).size > maxBytes) continue
 
         const buf = await fs.readFile(fp)
@@ -560,7 +650,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         const lines = content.split("\n")
 
         let virtPath: string | null = null
-        if (virtualMode) {
+        if (this._virtualMode) {
           try {
             const relative = path.relative(cwdDir, fp)
             if (relative.startsWith("..")) continue
@@ -596,6 +686,28 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Public accessor for the resolved shell path (used by system prompt). */
   static resolvedShell(): string {
     return LocalSandbox.resolveShell()
+  }
+
+  /**
+   * Resolve the best shell for Windows sandbox execution.
+   * Git Bash (MSYS2) crashes under restricted tokens (NtSetInformationToken fails),
+   * so we must skip it and use PowerShell or cmd.exe instead.
+   */
+  private static resolveWindowsSandboxShell(): { shell: string; flags: string[] } {
+    for (const ps of ["pwsh", "powershell"]) {
+      const fullPath = LocalSandbox.whichSync(ps)
+      if (fullPath) {
+        // -NoProfile: skip user profile scripts to avoid side-effects in output
+        // -Command: accept command string (consistent with Codex SDK behavior)
+        return { shell: fullPath, flags: ["-NoProfile", "-Command"] }
+      }
+    }
+    return { shell: process.env.COMSPEC || "cmd.exe", flags: ["/c"] }
+  }
+
+  /** Public accessor for the Windows sandbox shell (PowerShell or cmd.exe). */
+  static resolvedWindowsSandboxShell(): string {
+    return LocalSandbox.resolveWindowsSandboxShell().shell
   }
 
   private static resolveShell(): string {
@@ -730,6 +842,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
+    if (process.platform === "win32" && this.windowsSandbox === "unelevated") {
+      return this.executeInWindowsSandbox(command)
+    }
+
     const isWindows = process.platform === "win32"
     const shell = LocalSandbox.resolveShell()
     const shellBase = path.basename(shell).replace(/\.exe$/i, "")
@@ -760,6 +876,157 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       return result
     }
     return { output: "Error: Unexpected retry loop exit.", exitCode: 1, truncated: false }
+  }
+
+  /**
+   * Execute a command inside the Codex Windows unelevated sandbox.
+   * Uses restricted token + NTFS ACL for isolation (no admin required).
+   * Retries on EPERM (antivirus transient lock); reports error on other failures.
+   */
+  private executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
+    // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
+    const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
+
+    // Force UTF-8 output encoding for both cmd.exe and PowerShell.
+    // In sandbox (Constrained Language Mode), [Console]::OutputEncoding is
+    // blocked — use chcp 65001 which works in both cmd and PowerShell.
+    // Note: chcp only affects external-program stdout decoding; PowerShell
+    // cmdlet output still relies on $OutputEncoding, but CLM blocks most
+    // cmdlets anyway, so this is acceptable.
+    const shellBase = path.basename(shell).replace(/\.exe$/i, "").toLowerCase()
+    const effectiveCommand = shellBase === "cmd"
+      ? `chcp 65001 >nul & ${command}`
+      : shellBase === "pwsh" || shellBase === "powershell"
+        ? `chcp 65001 >$null; ${command}`
+        : command
+
+    const sandboxArgs = [
+      "sandbox", "windows",
+      "--full-auto",
+      "--",
+      shell, ...shellFlags, effectiveCommand
+    ]
+
+    return new Promise<ExecuteResponse>((resolve) => {
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      let totalBytes = 0
+      let resolved = false
+      let exited = false
+
+      // spawn() reports ENOENT asynchronously via the "error" event, not by throwing
+      const proc = spawn(this.codexExePath, sandboxArgs, {
+        cwd: this.workingDir,
+        env: this.env,
+        stdio: ["ignore", "pipe", "pipe"]
+      })
+
+      LocalSandbox.activeProcesses.add(proc)
+
+      let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+
+      const killProc = (): void => {
+        void LocalSandbox.killTree(proc, () => exited)
+      }
+
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true
+          LocalSandbox.activeProcesses.delete(proc)
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+          killProc()
+          resolve({
+            output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
+            exitCode: null,
+            truncated: false
+          })
+        }
+      }, this.timeout)
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        if (totalBytes < this.maxOutputBytes) {
+          stdoutChunks.push(chunk)
+          totalBytes += chunk.length
+        }
+      })
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        if (totalBytes < this.maxOutputBytes) {
+          stderrChunks.push(chunk)
+          totalBytes += chunk.length
+        }
+      })
+
+      const collectAndResolve = (code: number | null, signal: string | null): void => {
+        if (resolved) return
+        resolved = true
+        exited = true
+        LocalSandbox.activeProcesses.delete(proc)
+        clearTimeout(timeoutId)
+        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+
+        const stdoutBuf = Buffer.concat(stdoutChunks)
+        const stderrBuf = Buffer.concat(stderrChunks)
+        const enc = this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
+
+        let output = ""
+        if (stdoutBuf.length > 0) output += iconv.decode(stdoutBuf, enc)
+        if (stderrBuf.length > 0) {
+          const errText = iconv.decode(stderrBuf, enc)
+            .split("\n").filter((l) => l.length > 0)
+            .map((l) => `[stderr] ${l}`).join("\n")
+          if (errText) output += (output ? "\n" : "") + errText
+        }
+
+        let truncated = false
+        if (output.length > this.maxOutputBytes) {
+          output = output.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+          truncated = true
+        }
+        if (!output.trim()) output = "<no output>"
+
+        resolve({ output, exitCode: signal ? null : code, truncated })
+      }
+
+      proc.on("exit", (code, signal) => {
+        exited = true
+        windowsExitTimerId = setTimeout(() => {
+          collectAndResolve(code, signal as string | null)
+        }, 500)
+      })
+
+      proc.on("close", (code, signal) => {
+        exited = true
+        collectAndResolve(code, signal as string | null)
+      })
+
+      proc.on("error", (err) => {
+        if (resolved) return
+        resolved = true
+        exited = true
+        LocalSandbox.activeProcesses.delete(proc)
+        clearTimeout(timeoutId)
+        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+
+        const errno = err as NodeJS.ErrnoException
+        if (errno.code === "EPERM" && attempt <= LocalSandbox.SPAWN_RETRY_COUNT) {
+          console.warn(
+            `[LocalSandbox] codex.exe EPERM attempt ${attempt}/${LocalSandbox.SPAWN_RETRY_COUNT + 1}, retrying in ${LocalSandbox.SPAWN_RETRY_DELAY_MS}ms…`
+          )
+          setTimeout(() => {
+            resolve(this.executeInWindowsSandbox(command, attempt + 1))
+          }, LocalSandbox.SPAWN_RETRY_DELAY_MS)
+          return
+        }
+
+        console.error("[LocalSandbox] Windows sandbox spawn error:", err)
+        resolve({
+          output: `错误：沙箱启动失败，命令未执行。\n原因：${errno.message ?? String(err)}\n请检查沙箱配置或在设置中关闭沙箱模式后重试。`,
+          exitCode: null,
+          truncated: false
+        })
+      })
+    })
   }
 
   private executeOnce(
