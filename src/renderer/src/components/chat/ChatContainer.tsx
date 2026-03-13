@@ -90,6 +90,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [skillsLoading, setSkillsLoading] = useState(true)
   const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
+  const [showAllCustomSkills, setShowAllCustomSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
@@ -424,8 +425,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         ])
         if (!mounted) return
         const disabledSet = new Set(disabledList)
-        const builtinOnly = loadedSkills.filter((s) => s.source === "project" && !disabledSet.has(s.name))
-        setSkills([...builtinOnly].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+        // Include both built-in (project) and custom (user) skills
+        const availableSkills = loadedSkills.filter((s) =>
+          (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
+        )
+        setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
       } catch (error) {
         console.error("[ChatContainer] Failed to load skills:", error)
         if (mounted) setSkills([])
@@ -449,6 +453,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const buildSkillPrompt = useCallback(
     (skill: SkillMetadata): string => {
       const skillId = getSkillId(skill)
+
+      // For custom skills, use the skill's description if available
+      if (skill.source === "user") {
+        const skillName = skill.name || skillId
+        return [
+          `请使用 ${skillName} 技能帮我处理相关任务。`,
+          "需求说明：<请补充>",
+          "输出：结果、关键改动、验证方式。"
+        ].join("\n")
+      }
+
+      // Existing prompt mapping for built-in skills
       const promptMap: Record<string, string> = {
         "algorithmic-art": [
           "请帮我生成一套算法艺术方案。",
@@ -606,6 +622,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const getSkillSummary = useCallback(
     (skill: SkillMetadata): string => {
       const skillId = getSkillId(skill)
+
+      // For custom skills, use the skill's name or description
+      if (skill.source === "user") {
+        return skill.name || skillId || "自定义技能"
+      }
+
+      // Built-in skill summaries
       const summaryMap: Record<string, string> = {
         "algorithmic-art": "生成艺术图案",
         "brand-guidelines": "统一品牌风格",
@@ -704,10 +727,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     [getSkillId, programmingSkillIds]
   )
 
-  const { generalSkills, programmingSkills } = useMemo(() => {
-    const general = skills.filter((skill) => !isProgrammingSkill(skill))
-    const programming = skills.filter(isProgrammingSkill)
-    return { generalSkills: general, programmingSkills: programming }
+  const { generalSkills, programmingSkills, customSkills } = useMemo(() => {
+    const builtInSkills = skills.filter((skill) => skill.source === "project")
+    const userSkills = skills.filter((skill) => skill.source === "user")
+
+    const general = builtInSkills.filter((skill) => !isProgrammingSkill(skill))
+    const programming = builtInSkills.filter(isProgrammingSkill)
+
+    return {
+      generalSkills: general,
+      programmingSkills: programming,
+      customSkills: userSkills
+    }
   }, [skills, isProgrammingSkill])
 
   const visibleGeneralSkillCards = useMemo(() => {
@@ -729,6 +760,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       icon: getSkillIcon(skill)
     }))
   }, [showAllProgrammingSkills, programmingSkills, getSkillSummary, getSkillIcon])
+
+  const customSkillCards = useMemo(() => {
+    const source = showAllCustomSkills ? customSkills : customSkills.slice(0, 8)
+
+    return source.map((skill) => ({
+      skill,
+      label: getSkillSummary(skill),
+      icon: getSkillIcon(skill)
+    }))
+  }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
     (skill: SkillMetadata): void => {
@@ -849,6 +890,50 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                           </>
                         )}
                       </button>
+                    )}
+                    {customSkillCards.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                          我安装的技能
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {customSkillCards.map(({ skill, label, icon }) => (
+                            <button
+                              key={skill.path}
+                              type="button"
+                              onClick={() => handleUseSkillPrompt(skill)}
+                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                  {icon}
+                                </div>
+                                <div className="text-xs text-foreground leading-5">{label}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {customSkills.length > 8 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllCustomSkills((prev) => !prev)}
+                            className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                          >
+                            {showAllCustomSkills ? (
+                              <>
+                                <ChevronUp className="size-3.5" />
+                                <span>收起</span>
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="size-3.5" />
+                                <span>展开更多（+{customSkills.length - 8}）</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

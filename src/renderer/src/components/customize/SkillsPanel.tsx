@@ -435,7 +435,7 @@ export function SkillsPanel(): React.JSX.Element {
             />
             {customSkills.length > 0 && (
               <SkillSection
-                title="自定义技能"
+                title="我安装的技能"
                 skills={filteredCustom}
                 expandedSkills={expandedSkills}
                 skillFilesMap={skillFilesMap}
