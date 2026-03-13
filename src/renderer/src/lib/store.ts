@@ -61,6 +61,10 @@ interface AppState {
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
   bumpPluginVersion: () => void
+
+  // Skill evolution — true when threshold reached, clears when Evolution panel opens
+  pendingEvolution: boolean
+  setPendingEvolution: (v: boolean) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -203,5 +207,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   bumpPluginVersion: () => {
     set((state) => ({ pluginVersion: state.pluginVersion + 1 }))
-  }
+  },
+
+  pendingEvolution: false,
+  setPendingEvolution: (v) => set({ pendingEvolution: v })
 }))

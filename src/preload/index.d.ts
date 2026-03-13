@@ -299,6 +299,7 @@ interface CustomAPI {
       outcome: string
       activeSkills: string[]
     }>>
+    onAutoTriggered: (cb: (payload: { threadId: string; toolCallCount: number }) => void) => () => void
     getTraceDetail: (traceId: string) => Promise<{
       traceId: string
       threadId: string

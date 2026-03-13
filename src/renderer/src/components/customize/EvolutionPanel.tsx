@@ -9,12 +9,13 @@ import {
   ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock,
   Loader2, RefreshCw, Sparkles, Activity, Trash2, Wrench,
   MessageSquare, AlertCircle, User, Bot, Terminal, ArrowLeft,
-  Timer, Hash, Cpu
+  Timer, Hash, Cpu, Zap
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { useAppStore } from "@/lib/store"
 
 // ─────────────────────────────────────────────────────────
 // Types
@@ -536,11 +537,34 @@ export function EvolutionPanel(): React.JSX.Element {
   const [tab, setTab]             = useState<Tab>("candidates")
   const [running, setRunning]     = useState(false)
   const [summary, setSummary]     = useState<string | null>(null)
+  const [autoTriggerBanner, setAutoTriggerBanner] = useState(false)
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
   const [traces, setTraces]       = useState<TraceEntry[]>([])
   const [tracesLoading, setTracesLoading] = useState(false)
   const [selectedTrace, setSelectedTrace] = useState<TraceDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+
+  const { pendingEvolution, setPendingEvolution } = useAppStore()
+
+  const runOptimizer = useCallback(async () => {
+    setRunning(true); setSummary(null)
+    try {
+      const r = await window.api.optimizer.run()
+      setSummary(r.summary)
+      setCandidates(await window.api.optimizer.getCandidates())
+    } catch (e) { setSummary(`运行失败: ${e}`) }
+    setRunning(false)
+  }, [])
+
+  // Auto-run when panel opens and pendingEvolution is true
+  useEffect(() => {
+    if (pendingEvolution) {
+      setPendingEvolution(false)
+      setAutoTriggerBanner(true)
+      setTab("candidates")
+      runOptimizer()
+    }
+  }, [pendingEvolution, setPendingEvolution, runOptimizer])
 
   useEffect(() => {
     window.api.optimizer.getCandidates().then(setCandidates).catch(console.warn)
@@ -561,15 +585,7 @@ export function EvolutionPanel(): React.JSX.Element {
     setDetailLoading(false)
   }, [])
 
-  const handleRun = useCallback(async () => {
-    setRunning(true); setSummary(null)
-    try {
-      const r = await window.api.optimizer.run()
-      setSummary(r.summary)
-      setCandidates(await window.api.optimizer.getCandidates())
-    } catch (e) { setSummary(`运行失败: ${e}`) }
-    setRunning(false)
-  }, [])
+  const handleRun = runOptimizer
 
   const handleApprove = useCallback(async (id: string) => {
     const r = await window.api.optimizer.approve(id)
@@ -609,6 +625,16 @@ export function EvolutionPanel(): React.JSX.Element {
           {running ? "分析中…" : "分析 Traces"}
         </Button>
       </div>
+
+      {autoTriggerBanner && (
+        <div className="shrink-0 px-4 py-2 bg-orange-500/10 border-b border-orange-500/20 flex items-center gap-2">
+          <Zap className="size-3.5 text-orange-500 shrink-0" />
+          <p className="text-xs text-orange-700 dark:text-orange-400 flex-1">
+            检测到复杂任务（≥3次工具调用），正在自动分析并生成技能优化建议…
+          </p>
+          <button className="text-orange-500 hover:text-orange-700 text-xs" onClick={() => setAutoTriggerBanner(false)}>✕</button>
+        </div>
+      )}
 
       {summary && (
         <div className="shrink-0 px-4 py-2 bg-muted/50 border-b border-border">

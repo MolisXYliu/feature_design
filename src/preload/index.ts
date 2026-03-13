@@ -599,6 +599,14 @@ const api = {
         outcome: string
         activeSkills: string[]
       }>>,
+    /** Listen for auto-triggered skill evolution (main process fires this after threshold) */
+    onAutoTriggered: (
+      cb: (payload: { threadId: string; toolCallCount: number }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as { threadId: string; toolCallCount: number })
+      ipcRenderer.on("optimizer:autoTriggered", handler)
+      return () => ipcRenderer.removeListener("optimizer:autoTriggered", handler)
+    },
     /** Get full trace detail (steps + tool calls) by traceId */
     getTraceDetail: (traceId: string): Promise<{
       traceId: string

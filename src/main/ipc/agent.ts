@@ -132,23 +132,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       const effectiveModelId = modelId || (metadata.model as string | undefined)
 
-      // Build extra system prompt: inject skill-evolution nudge if threshold reached.
-      // Counter accumulates across turns (NOT reset every turn) so multi-turn sessions
-      // correctly trigger the nudge. Reset only after the nudge is injected so we
-      // don't spam the same nudge on every subsequent turn.
-      const currentToolCallCount = getToolCallCount(threadId)
-      let evolutionNudge: string | undefined
-      if (currentToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
-        evolutionNudge = SKILL_EVOLUTION_NUDGE_PROMPT
-        console.log(`[Agent] Tool call count (${currentToolCallCount}) reached threshold, injecting skill evolution nudge`)
-        resetToolCallCount(threadId)  // reset now so nudge fires only once per cycle
-      }
-
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
         modelId: effectiveModelId,
-        ...(evolutionNudge ? { extraSystemPrompt: evolutionNudge } : {})
       })
       const humanMessage = new HumanMessage(message)
 
@@ -266,9 +253,15 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         // Finish trace
         await tracer.finish("success")
 
-        // NOTE: tool-call counter is NOT reset here — it accumulates across turns
-        // so multi-turn sessions correctly hit the SKILL_EVOLUTION_THRESHOLD.
-        // It is reset only when the nudge fires (above) or when the thread is cleared.
+        // Check if this turn crossed the skill-evolution threshold.
+        // If so, notify the renderer immediately so it can auto-run the optimizer
+        // and show skill candidates to the user — no next-turn lag.
+        const turnToolCallCount = getToolCallCount(threadId)
+        if (turnToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
+          console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), notifying renderer for skill evolution`)
+          window.webContents.send("optimizer:autoTriggered", { threadId, toolCallCount: turnToolCallCount })
+          resetToolCallCount(threadId)
+        }
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`

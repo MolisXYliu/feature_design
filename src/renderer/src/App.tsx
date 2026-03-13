@@ -32,7 +32,7 @@ const RIGHT_MAX = 450
 const RIGHT_DEFAULT = 300
 
 function App(): React.JSX.Element {
-  const { currentThreadId, loadThreads, createThread, showKanbanView, showCustomizeView, sidebarCollapsed, toggleSidebar, rightPanelCollapsed, toggleRightPanel } = useAppStore()
+  const { currentThreadId, loadThreads, createThread, showKanbanView, showCustomizeView, sidebarCollapsed, toggleSidebar, rightPanelCollapsed, toggleRightPanel, setPendingEvolution } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
@@ -134,6 +134,13 @@ function App(): React.JSX.Element {
     }
     init()
   }, [loadThreads, createThread])
+
+  // Listen for skill-evolution threshold events — set badge on Evolution tab
+  useEffect(() => {
+    return window.api.optimizer.onAutoTriggered(() => {
+      setPendingEvolution(true)
+    })
+  }, [setPendingEvolution])
 
   // Reload thread list when main process signals a change (e.g. scheduled task created a thread).
   // Only update the list without auto-selecting (which would navigate away from customize view).

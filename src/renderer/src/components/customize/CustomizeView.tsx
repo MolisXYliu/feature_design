@@ -18,7 +18,7 @@ type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbe
 const isWindows = navigator.userAgent.toLowerCase().includes("windows")
 
 export function CustomizeView(): React.JSX.Element {
-  const { setShowCustomizeView } = useAppStore()
+  const { setShowCustomizeView, pendingEvolution, setPendingEvolution } = useAppStore()
   const [activeTab, setActiveTab] = useState<CustomizeTab>("skills")
 
   return (
@@ -142,10 +142,13 @@ export function CustomizeView(): React.JSX.Element {
                 ? "bg-muted font-medium"
                 : "text-muted-foreground hover:bg-muted/50"
             )}
-            onClick={() => setActiveTab("evolution")}
+            onClick={() => { setActiveTab("evolution"); setPendingEvolution(false) }}
           >
             <GitBranch className="size-4 shrink-0" />
-            Evolution
+            <span className="flex-1 text-left">Evolution</span>
+            {pendingEvolution && (
+              <span className="size-2 rounded-full bg-orange-500 shrink-0" />
+            )}
           </button>
         </nav>
       </div>
