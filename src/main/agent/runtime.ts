@@ -48,6 +48,7 @@ import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
+import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -295,6 +296,31 @@ ${shellGuidance}
 // Per-thread checkpointer cache
 const checkpointers = new Map<string, SqlJsSaver>()
 
+// ─────────────────────────────────────────────────────────
+// Tool-call counter: track how many tool calls have been made
+// in each thread during the current session. Used to trigger
+// the skill-evolution nudge after SKILL_EVOLUTION_THRESHOLD calls.
+// ─────────────────────────────────────────────────────────
+const SKILL_EVOLUTION_THRESHOLD = 5
+
+/** Per-thread tool-call counters (in-memory, reset on app restart) */
+const _threadToolCallCounts = new Map<string, number>()
+
+export function incrementToolCallCount(threadId: string): number {
+  const prev = _threadToolCallCounts.get(threadId) ?? 0
+  const next = prev + 1
+  _threadToolCallCounts.set(threadId, next)
+  return next
+}
+
+export function getToolCallCount(threadId: string): number {
+  return _threadToolCallCounts.get(threadId) ?? 0
+}
+
+export function resetToolCallCount(threadId: string): void {
+  _threadToolCallCounts.delete(threadId)
+}
+
 // Global MCP tools cache: single shared client, lifecycle managed here (not per-thread)
 const MCP_TOOLS_CACHE_TTL_MS = 5 * 60 * 1000
 let _mcpToolsCache: {
@@ -372,6 +398,8 @@ export interface CreateAgentRuntimeOptions {
   extraSystemPrompt?: string
   /** Skip the manage_scheduler tool (used by scheduled task / heartbeat execution to prevent recursive scheduling) */
   noSchedulerTool?: boolean
+  /** Skip the manage_skill tool (disable skill evolution for scheduled/heartbeat agents) */
+  noSkillEvolutionTool?: boolean
 }
 
 // Create agent runtime with configured model and checkpointer
@@ -582,6 +610,9 @@ The workspace root is: ${workspacePath}`
       modelId: options.modelId,
       threadId: options.threadId
     }))
+  }
+  if (!options.noSkillEvolutionTool) {
+    extraTools.push(createSkillEvolutionTool())
   }
 
   const triggerTokens = Math.floor(maxTokens * 0.75)

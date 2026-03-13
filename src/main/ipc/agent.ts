@@ -1,7 +1,13 @@
 import { IpcMain, BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
-import { createAgentRuntime } from "../agent/runtime"
+import {
+  createAgentRuntime,
+  incrementToolCallCount,
+  getToolCallCount,
+  resetToolCallCount,
+  SKILL_EVOLUTION_THRESHOLD
+} from "../agent/runtime"
 import { getThread } from "../db"
 import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
@@ -19,6 +25,42 @@ const MIN_CHARS_FOR_MEMORY = 200
 
 // Track active runs for cancellation
 const activeRuns = new Map<string, AbortController>()
+
+// ─────────────────────────────────────────────────────────
+// Skill Evolution Nudge Prompt
+// Injected into the system prompt after SKILL_EVOLUTION_THRESHOLD
+// tool calls have been made in the current session.
+// ─────────────────────────────────────────────────────────
+const SKILL_EVOLUTION_NUDGE_PROMPT = `
+## 技能进化提示 (Skill Evolution)
+
+你在本次会话中已执行了多个工具调用，完成了一项有一定复杂度的任务。
+请在完成当前任务后，思考是否值得将这次的方法或流程固化为一个可复用的技能（Skill）。
+
+### 何时应该创建技能？
+
+符合以下任一条件，建议使用 \`manage_skill\` 工具创建技能：
+- 这个任务**未来可能反复出现**（如：部署、测试、代码审查流程）
+- 你在执行过程中**摸索了规律**，下次能做得更快
+- 任务涉及**项目特定知识**（目录结构、命名规范、API 约定等）
+- 你进行了**多次尝试/修正**，最终找到正确的方法
+
+### 如何创建技能？
+
+使用 \`manage_skill\` 工具，action='create'，提供：
+- \`name\`: 技能名称（简短、描述性）
+- \`description\`: **触发描述**（最重要！描述在什么情况下使用此技能，让 Agent 在匹配场景时自动加载）
+- \`content\`: 完整的 SKILL.md 内容（含 YAML frontmatter + 操作指南）
+
+### 技能不适合的场景
+
+- 一次性任务，不会重复
+- 通用知识，已经内置于模型中
+- 任务太简单（1-2 步）
+
+---
+如果本次任务不适合创建技能，可以忽略此提示，直接完成任务即可。
+`
 
 export function registerAgentHandlers(ipcMain: IpcMain): void {
   console.log("[Agent] Registering agent handlers...")
@@ -84,10 +126,20 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       }
 
       const effectiveModelId = modelId || (metadata.model as string | undefined)
+
+      // Build extra system prompt: inject skill-evolution nudge if threshold reached
+      const currentToolCallCount = getToolCallCount(threadId)
+      let evolutionNudge: string | undefined
+      if (currentToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
+        evolutionNudge = SKILL_EVOLUTION_NUDGE_PROMPT
+        console.log(`[Agent] Tool call count (${currentToolCallCount}) reached threshold, injecting skill evolution nudge`)
+      }
+
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
-        modelId: effectiveModelId
+        modelId: effectiveModelId,
+        ...(evolutionNudge ? { extraSystemPrompt: evolutionNudge } : {})
       })
       const humanMessage = new HumanMessage(message)
 
@@ -125,6 +177,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                   .map((b: { text?: string }) => b.text ?? "")
                   .join("")
               }
+              // Count tool_use blocks as tool calls
+              if (Array.isArray(c)) {
+                const toolUseCount = c.filter((b: { type: string }) => b?.type === "tool_use").length
+                if (toolUseCount > 0) {
+                  const newCount = incrementToolCallCount(threadId)
+                  console.log(`[Agent] Tool call #${newCount} in thread ${threadId}`)
+                }
+              }
             }
           } catch { /* best-effort */ }
         }
@@ -141,6 +201,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
+
+        // Reset tool call counter after a full conversation turn completes
+        // so the count reflects the current session's complexity
+        resetToolCallCount(threadId)
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`
