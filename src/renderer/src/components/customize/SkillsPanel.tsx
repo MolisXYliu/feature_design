@@ -237,6 +237,10 @@ export function SkillsPanel(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    return () => clearTimeout(debounceTimer.current)
+  }, [])
+
+  useEffect(() => {
     window.api.skills.list().then(setSkills).catch(console.error)
   }, [])
 
@@ -362,6 +366,11 @@ export function SkillsPanel(): React.JSX.Element {
       setSelectedSkill(null)
       setSelectedFilePath(null)
       setSelectedFileContent(null)
+      setSkillFilesMap((prev) => {
+        const next = { ...prev }
+        delete next[skill.name]
+        return next
+      })
       setDisabledSkills((prev) => {
         const next = new Set(prev)
         next.delete(skill.name)
@@ -472,6 +481,7 @@ export function SkillsPanel(): React.JSX.Element {
         open={uploadDialogOpen}
         onOpenChange={setUploadDialogOpen}
         onSuccess={() => {
+          setSkillFilesMap({})
           window.api.skills.list().then(setSkills).catch(console.error)
         }}
       />
@@ -693,18 +703,54 @@ function SkillDetail(props: {
 
   if (!skill) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-        请选择一个技能文件查看详情
+      <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+        <div className="max-w-md space-y-6">
+          <div className="text-center space-y-3">
+            <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+              <Sparkles className="size-7 text-muted-foreground/60" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/80">Skills 技能</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              技能是可复用的 AI 提示词模板，让 AI 按照预设的指令和步骤完成特定任务。应用内置了一些常用技能，你也可以上传自定义技能来扩展 AI 的工作流。
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">技能的结构</p>
+              <p className="text-[13px] text-muted-foreground leading-relaxed">
+                每个技能是一个文件夹，核心是 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">SKILL.md</span> 文件，用来定义 AI 的行为指令——任务目标、执行步骤、输出格式等。技能分为<span className="font-medium text-foreground/60">内置技能</span>（随应用提供）和<span className="font-medium text-foreground/60">自定义技能</span>（用户上传），内置技能不可删除，自定义技能可随时管理。
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">如何添加和使用？</p>
+              <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span><span>点击 <span className="font-medium text-foreground/60">+</span> 按钮，支持上传 .md 或 .zip 格式的技能文件</span></li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span><span>上传后可在右侧预览文件内容，支持渲染和源码切换</span></li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span><span>通过开关可随时启用或禁用某个技能</span></li>
+              </ul>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">适用场景</p>
+              <p className="text-[13px] text-muted-foreground leading-relaxed">
+                代码审查、文档生成、Bug 分析、数据处理、翻译润色……任何你需要 AI 反复执行的任务，都可以封装成技能来提升效率。你还可以从 Market 中下载大家分享的技能。
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
 
   const description = skill.description || "暂无描述"
   const isMarkdown = !!selectedFilePath && /\.md$/i.test(selectedFilePath)
-  const frontmatterEnd = content?.indexOf("---", 4)
+  const hasFrontmatter = isMarkdown && !!content && content.startsWith("---")
+  const frontmatterEnd = hasFrontmatter ? content.indexOf("---", 3) : -1
   const previewContent =
-    isMarkdown && frontmatterEnd && frontmatterEnd > 0
-      ? content?.slice(content.indexOf("\n", frontmatterEnd) + 1).trim()
+    hasFrontmatter && frontmatterEnd > 0
+      ? content.slice(content.indexOf("\n", frontmatterEnd) + 1).trim()
       : content
   const binaryDataUrl =
     binaryBase64 && binaryMimeType ? `data:${binaryMimeType};base64,${binaryBase64}` : null
