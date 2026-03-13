@@ -935,6 +935,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </div>
                     )}
+                    <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                      可以去 [ 自定义 / 应用市场 ] 安装市场上的技能使用
+                    </div>
                   </div>
                 )}
               </div>
