@@ -452,9 +452,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   )
   const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
   const rgExists = existsSync(rgBin)
-  const env = rgExists
-    ? { ...process.env, PATH: `${rgDir}${delimiter}${process.env.PATH ?? ""}` }
-    : undefined
+  // Mutate process.env.PATH so deepagents' internal ripgrepSearch
+  // (spawns "rg" without custom env, inherits process.env) can find it.
+  const paths = (process.env.PATH ?? "").split(delimiter)
+  if (rgExists && !paths.includes(rgDir)) {
+    process.env.PATH = `${rgDir}${delimiter}${process.env.PATH ?? ""}`
+  }
   console.log(`[Runtime] ripgrep bin: ${rgBin}, exists: ${rgExists}, platform: ${process.platform}`)
 
   // Codex Windows sandbox (unelevated): reuse rgDir which already points to resources/bin/win32
@@ -469,7 +472,6 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     virtualMode: false,
     timeout: 600_000,
     maxOutputBytes,
-    env,
     windowsSandbox,
     codexExePath: codexExists ? codexExePath : undefined
   })
@@ -507,9 +509,18 @@ ${subagentShellGuidance}
 The workspace root is: ${workspacePath}`
 
   const skillsSources = await getEnabledSkillsSources()
+  console.log("[Runtime] Raw skills sources from getEnabledSkillsSources():", skillsSources)
+  console.log("[Runtime] Raw skills sources count:", skillsSources.length)
+  console.log("[Runtime] Raw skills sources content:", JSON.stringify(skillsSources, null, 2))
+
   // Merge plugin skills sources
   const pluginSkillsSources = getEnabledPluginSkillsSources()
+  console.log("[Runtime] Plugin skills sources:", pluginSkillsSources)
+  console.log("[Runtime] Plugin skills sources count:", pluginSkillsSources.length)
+
   const allSkillsSources = [...skillsSources, ...pluginSkillsSources]
+  console.log("[Runtime] All skills sources combined:", allSkillsSources)
+  console.log("[Runtime] All skills sources count:", allSkillsSources.length)
   console.log("[Runtime] Skills sources:", skillsSources, "Plugin skills:", pluginSkillsSources)
 
   // Initialize memory system (gated by user setting)
@@ -638,14 +649,15 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    // TODO: 后续改回来，恢复 execute 审批
-    // interruptOn: { execute: true },
+    interruptOn: { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,
     trimTokensToSummarize: trimForSummary
   })
 
+  console.log("[Runtime] Agent created with skills parameter:", allSkillsSources.length > 0 ? allSkillsSources : undefined)
+  console.log("[Runtime] Final skills passed to createDeepAgent:", JSON.stringify(allSkillsSources.length > 0 ? allSkillsSources : undefined, null, 2))
   console.log("[Runtime] Agent created with LocalSandbox at:", workspacePath)
   return agent
 }
