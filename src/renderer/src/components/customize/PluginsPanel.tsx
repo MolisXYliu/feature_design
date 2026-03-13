@@ -372,6 +372,9 @@ export function PluginsPanel(): React.JSX.Element {
               </Button>
             </div>
           </div>
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            <p>插件是包含多种功能的扩展包，可以同时提供技能、MCP连接器等功能。您可以安装、启用/禁用和管理插件。</p>
+          </div>
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">

@@ -106,6 +106,9 @@ export function McpPanel(): React.JSX.Element {
               </Button>
             </div>
           </div>
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            <p>模型连接协议（MCP）允许连接外部工具和服务，扩展AI助手的功能范围。您可以添加、配置和管理各种MCP连接器。</p>
+          </div>
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-2">

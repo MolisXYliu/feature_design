@@ -415,7 +415,7 @@ export function SkillsPanel(): React.JSX.Element {
                     type="button"
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
                     onClick={() => { setSearchQuery(""); setDebouncedQuery("") }}
-                    aria-label="清除"
+                    aria-label="清���"
                   >
                     <X className="size-3" />
                   </button>
@@ -425,6 +425,9 @@ export function SkillsPanel(): React.JSX.Element {
                 <Plus className="size-4" />
               </Button>
             </div>
+          </div>
+          <div className="text-xs text-muted-foreground leading-relaxed">
+            <p>技能是可复用的功能模块，可以扩展AI助手的能力。您可以启用/禁用内置技能，或上传自定义技能包。</p>
           </div>
         </div>
         <ScrollArea className="flex-1">
