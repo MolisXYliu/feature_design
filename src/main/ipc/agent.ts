@@ -132,12 +132,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       const effectiveModelId = modelId || (metadata.model as string | undefined)
 
-      // Build extra system prompt: inject skill-evolution nudge if threshold reached
+      // Build extra system prompt: inject skill-evolution nudge if threshold reached.
+      // Counter accumulates across turns (NOT reset every turn) so multi-turn sessions
+      // correctly trigger the nudge. Reset only after the nudge is injected so we
+      // don't spam the same nudge on every subsequent turn.
       const currentToolCallCount = getToolCallCount(threadId)
       let evolutionNudge: string | undefined
       if (currentToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
         evolutionNudge = SKILL_EVOLUTION_NUDGE_PROMPT
         console.log(`[Agent] Tool call count (${currentToolCallCount}) reached threshold, injecting skill evolution nudge`)
+        resetToolCallCount(threadId)  // reset now so nudge fires only once per cycle
       }
 
       const agent = await createAgentRuntime({
@@ -262,9 +266,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         // Finish trace
         await tracer.finish("success")
 
-        // Reset tool call counter after a full conversation turn completes
-        // so the count reflects the current session's complexity
-        resetToolCallCount(threadId)
+        // NOTE: tool-call counter is NOT reset here — it accumulates across turns
+        // so multi-turn sessions correctly hit the SKILL_EVOLUTION_THRESHOLD.
+        // It is reset only when the nudge fires (above) or when the thread is cleared.
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`
