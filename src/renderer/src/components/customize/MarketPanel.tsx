@@ -9,7 +9,8 @@ import {
   CheckCircle,
   Plus,
   HardDrive,
-  Zap
+  Zap,
+  Tag
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -32,6 +33,7 @@ interface MarketItem {
   description: string
   filename: string
   created_at: string
+  category?: string // Add category field
   // Only keep essential UI fields for compatibility
   id?: string
   type?: MarketItemType
@@ -67,7 +69,7 @@ interface DownloadResponse {
 }
 
 // Updated API endpoints to match exact specification
-const API_BASE_URL = "http://haha.com/marketplace" // Replace with actual API URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
@@ -75,13 +77,6 @@ const ENDPOINTS = {
   delete: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`
 }
 
-
-// MCP Connector interface
-interface McpConnector {
-  name: string
-  description?: string
-  version?: string
-}
 
 // Utility function to download blob as file
 const downloadBlobAsFile = (blob: Blob, filename: string) => {
@@ -98,420 +93,248 @@ const downloadBlobAsFile = (blob: Blob, filename: string) => {
 // Updated API functions with the new endpoints
 const marketApi = {
   async getSkills(): Promise<MarketApiResponse> {
-    try {
-      console.log("Fetching skills from API...")
-      const response = await fetch(ENDPOINTS.list("skill"), {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json"
-          // Remove placeholder auth token for now
-        }
-      })
-
-      if (!response.ok) {
-        console.error(`API request failed: ${response.status} ${response.statusText}`)
-        const errorText = await response.text()
-        console.error('Response body:', errorText)
-        throw new Error(`HTTP error! status: ${response.status}`)
+    console.log("Fetching skills from API...")
+    const response = await fetch(ENDPOINTS.list("skill"), {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+        // Remove placeholder auth token for now
       }
+    })
 
-      const contentType = response.headers.get("content-type")
-      if (!contentType || !contentType.includes("application/json")) {
-        const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
-      }
+    if (!response.ok) {
+      console.error(`API request failed: ${response.status} ${response.statusText}`)
+      const errorText = await response.text()
+      console.error('Response body:', errorText)
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
 
-      const data: MarketListResponse = await response.json()
-      return {
-        success: true,
-        data: data.items || []
-      }
-    } catch (error) {
-      console.warn("API call failed, using mock data:", error)
-      return mockMarketApi.getSkills()
+    const contentType = response.headers.get("content-type")
+    if (!contentType || !contentType.includes("application/json")) {
+      const responseText = await response.text()
+      console.error('Expected JSON but received:', responseText.substring(0, 200))
+      throw new Error('Response is not JSON')
+    }
+
+    const data: MarketListResponse = await response.json()
+    return {
+      success: true,
+      data: data.items || []
     }
   },
 
   async getMcps(): Promise<MarketApiResponse> {
-    try {
-      console.log("Fetching MCPs from API...")
-      const response = await fetch(ENDPOINTS.list("mcp"), {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json"
-          // Remove placeholder auth token for now
-        }
-      })
-
-      if (!response.ok) {
-        console.error(`API request failed: ${response.status} ${response.statusText}`)
-        const errorText = await response.text()
-        console.error('Response body:', errorText)
-        throw new Error(`HTTP error! status: ${response.status}`)
+    console.log("Fetching MCPs from API...")
+    const response = await fetch(ENDPOINTS.list("mcp"), {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+        // Remove placeholder auth token for now
       }
+    })
 
-      const contentType = response.headers.get("content-type")
-      if (!contentType || !contentType.includes("application/json")) {
-        const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
-      }
+    if (!response.ok) {
+      console.error(`API request failed: ${response.status} ${response.statusText}`)
+      const errorText = await response.text()
+      console.error('Response body:', errorText)
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
 
-      const data: MarketListResponse = await response.json()
-      return {
-        success: true,
-        data: data.items || []
-      }
-    } catch (error) {
-      console.warn("API call failed, using mock data:", error)
-      return mockMarketApi.getMcps()
+    const contentType = response.headers.get("content-type")
+    if (!contentType || !contentType.includes("application/json")) {
+      const responseText = await response.text()
+      console.error('Expected JSON but received:', responseText.substring(0, 200))
+      throw new Error('Response is not JSON')
+    }
+
+    const data: MarketListResponse = await response.json()
+    return {
+      success: true,
+      data: data.items || []
     }
   },
 
   async getPlugins(): Promise<MarketApiResponse> {
-    try {
-      console.log("Fetching plugins from API...")
-      const response = await fetch(ENDPOINTS.list("plugin"), {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json"
-          // Remove placeholder auth token for now
-        }
-      })
-
-      if (!response.ok) {
-        console.error(`API request failed: ${response.status} ${response.statusText}`)
-        const errorText = await response.text()
-        console.error('Response body:', errorText)
-        throw new Error(`HTTP error! status: ${response.status}`)
+    console.log("Fetching plugins from API...")
+    const response = await fetch(ENDPOINTS.list("plugin"), {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+        // Remove placeholder auth token for now
       }
+    })
 
-      const contentType = response.headers.get("content-type")
-      if (!contentType || !contentType.includes("application/json")) {
-        const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
-      }
+    if (!response.ok) {
+      console.error(`API request failed: ${response.status} ${response.statusText}`)
+      const errorText = await response.text()
+      console.error('Response body:', errorText)
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
 
-      const data: MarketListResponse = await response.json()
-      return {
-        success: true,
-        data: data.items || []
-      }
-    } catch (error) {
-      console.warn("API call failed, using mock data:", error)
-      return mockMarketApi.getPlugins()
+    const contentType = response.headers.get("content-type")
+    if (!contentType || !contentType.includes("application/json")) {
+      const responseText = await response.text()
+      console.error('Expected JSON but received:', responseText.substring(0, 200))
+      throw new Error('Response is not JSON')
+    }
+
+    const data: MarketListResponse = await response.json()
+    return {
+      success: true,
+      data: data.items || []
     }
   },
 
   async deleteItem(name: string, type: MarketItemType): Promise<MarketDeleteResponse> {
-    try {
-      console.log(`Deleting ${type} item: ${name}`)
-      const response = await fetch(ENDPOINTS.delete(type, name), {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer your-api-token"
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+    console.log(`Deleting ${type} item: ${name}`)
+    const response = await fetch(ENDPOINTS.delete(type, name), {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer your-api-token"
       }
+    })
 
-      const data: MarketDeleteResponse = await response.json()
-      return data
-    } catch (error) {
-      console.warn("API delete failed, using mock response:", error)
-      return mockMarketApi.deleteItem(name, type)
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
     }
+
+    return await response.json()
   },
 
   async downloadItem(name: string, type: MarketItemType, downloadToLocal = false): Promise<DownloadResponse> {
-    try {
-      console.log(`Downloading ${type} item: ${name}`)
-      const response = await fetch(ENDPOINTS.download(type, name), {
-        method: "GET",
-        headers: {
-          Authorization: "Bearer your-api-token"
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+    console.log(`Downloading ${type} item: ${name}`)
+    const response = await fetch(ENDPOINTS.download(type, name), {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer your-api-token"
       }
+    })
 
-      // For the actual download API, we get a file blob
-      const blob = await response.blob()
-      const contentDisposition = response.headers.get("Content-Disposition")
-      const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.zip`
-
-      // If user wants to download to local file system
-      if (downloadToLocal) {
-        downloadBlobAsFile(blob, filename)
-        return { success: true }
-      }
-
-      // For skills, we need to handle the downloaded file
-      if (type === "skill") {
-        try {
-          const arrayBuffer = await blob.arrayBuffer()
-          if (typeof window.api?.skills?.upload === "function") {
-            const uploadResult = await window.api.skills.upload(arrayBuffer, filename)
-            return {
-              success: uploadResult.success,
-              error: uploadResult.error
-            }
-          }
-        } catch (uploadError) {
-          console.error("Failed to upload downloaded skill:", uploadError)
-          return {
-            success: false,
-            error: "Failed to save downloaded skill"
-          }
-        }
-      }
-
-      // For plugins, we need to handle the downloaded file similar to skills
-      if (type === "plugin") {
-        try {
-          const arrayBuffer = await blob.arrayBuffer()
-          if (typeof window.api?.plugins?.install === "function") {
-            const installResult = await window.api.plugins.install(arrayBuffer, filename)
-            return {
-              success: installResult.success,
-              error: installResult.error
-            }
-          }
-        } catch (installError) {
-          console.error("Failed to install downloaded plugin:", installError)
-          return {
-            success: false,
-            error: "Failed to install downloaded plugin"
-          }
-        }
-      }
-
-      // For MCPs, handle JSON file content and add to system
-      if (type === "mcp") {
-        try {
-          const text = await blob.text()
-          const mcpConfig = JSON.parse(text)
-          const config = mcpConfig?.mcpServers?.pubmed ||{}
-
-          if (!config.name || !config.url) {
-            return {
-              success: false,
-              error: "No valid MCP connectors found in configuration"
-            }
-          }
-
-          // Create all connectors
-          if (typeof window.api?.mcp?.create === "function") {
-            const targetConfig = {
-              name: config?.name || name || '',
-              url:config?.url,
-              enabled: false,
-              advanced:{
-                ...(config?.advanced || {}),
-                transport: config?.type || config?.advanced?.transport || ''
-              }
-            }
-            await window.api.mcp.create(targetConfig)
-            return {
-              success: true
-            }
-          }
-        } catch (parseError) {
-          console.error("Failed to parse or install MCP connector:", parseError)
-          return {
-            success: false,
-            error: "Failed to parse MCP configuration or install connector"
-          }
-        }
-      }
-
-      return { success: true }
-    } catch (error) {
-      console.warn("API download failed, using mock response:", error)
-      return mockMarketApi.downloadItem(name, type, downloadToLocal)
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
     }
-  },
 
-  async uploadFile(file: File, resourceType: string, name: string, description: string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
-    try {
-      console.log(`Uploading ${resourceType} file: ${file.name}`)
+    // For the actual download API, we get a file blob
+    const blob = await response.blob()
+    const contentDisposition = response.headers.get("Content-Disposition")
+    const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.zip`
 
-      const formData = new FormData()
-      formData.append("resource_type", resourceType)
-      formData.append("name", name)
-      formData.append("description", description)
-      formData.append("file", file)
-
-      const response = await fetch(ENDPOINTS.upload, {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer your-api-token"
-        },
-        body: formData
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
-      const data: MarketUploadResponse = await response.json()
-      return {
-        success: true,
-        data
-      }
-    } catch (error) {
-      console.warn("API upload failed:", error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Upload failed"
-      }
-    }
-  },
-
-  async submitMcpConnector(connector: any): Promise<DownloadResponse> {
-    try {
-      console.log(`Submitting MCP connector: ${connector.name}`)
-
-      // Convert connector config to JSON file
-      const jsonContent = JSON.stringify(connector, null, 2)
-      const blob = new Blob([jsonContent], { type: "application/json" })
-      const file = new File([blob], `${connector.name}.json`, { type: "application/json" })
-
-      const result = await this.uploadFile(file, "mcp", connector.name, connector.description || "")
-      return {
-        success: result.success,
-        error: result.error
-      }
-    } catch (error) {
-      console.warn("API submit failed, using mock response:", error)
-      return mockMarketApi.submitMcpConnector(connector)
-    }
-  }
-}
-
-// Mock API functions - updated to match new interface
-const mockMarketApi = {
-  async getSkills(): Promise<MarketApiResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    return {
-      success: true,
-      data: [
-        {
-          name: "Code Reviewer",
-          description: "AI-powered code review assistant that helps identify bugs and suggests improvements",
-          filename: "code-reviewer.zip",
-          created_at: "2024-01-15 10:30:00",
-          id: "skill-1",
-          type: "skill" as MarketItemType
-        },
-        {
-          name: "Document Generator",
-          description: "Automatically generates technical documentation from code comments",
-          filename: "doc-generator.zip",
-          created_at: "2024-02-10 14:20:00",
-          id: "skill-2",
-          type: "skill" as MarketItemType
-        }
-      ]
-    }
-  },
-
-  async getMcps(): Promise<MarketApiResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    return {
-      success: true,
-      data: [
-        {
-          name: "GitHub Connector",
-          description: "Connect to GitHub API for repository management and issue tracking",
-          filename: "github-connector.json",
-          created_at: "2024-01-05 09:15:00",
-          id: "mcp-1",
-          type: "mcp" as MarketItemType
-        },
-        {
-          name: "Slack Integration",
-          description: "Send messages and notifications to Slack channels",
-          filename: "slack-integration.json",
-          created_at: "2024-02-20 16:45:00",
-          id: "mcp-2",
-          type: "mcp" as MarketItemType
-        }
-      ]
-    }
-  },
-
-  async getPlugins(): Promise<MarketApiResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    return {
-      success: true,
-      data: [
-        {
-          name: "Theme Manager",
-          description: "Manage and switch between different UI themes",
-          filename: "theme-manager.zip",
-          created_at: "2024-02-01 11:20:00",
-          id: "plugin-1",
-          type: "plugin" as MarketItemType
-        },
-        {
-          name: "Syntax Highlighter",
-          description: "Enhanced syntax highlighting for multiple programming languages",
-          filename: "syntax-highlighter.zip",
-          created_at: "2024-02-15 13:10:00",
-          id: "plugin-2",
-          type: "plugin" as MarketItemType
-        }
-      ]
-    }
-  },
-
-  async deleteItem(name: string, type: MarketItemType): Promise<MarketDeleteResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    return { message: `Successfully deleted ${name}` }
-  },
-
-  async downloadItem(name: string, type: MarketItemType, downloadToLocal = false): Promise<DownloadResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-
+    // If user wants to download to local file system
     if (downloadToLocal) {
-      // Simulate downloading a file to local file system
-      const filename = `${name}.${type === 'mcp' ? 'json' : 'zip'}`
-      const content = type === 'mcp'
-        ? JSON.stringify({ name, type, description: `Mock ${type} content` }, null, 2)
-        : `Mock ${type} file content for ${name}`
+      downloadBlobAsFile(blob, filename)
+      return { success: true }
+    }
 
-      const blob = new Blob([content], {
-        type: type === 'mcp' ? 'application/json' : 'application/zip'
-      })
+    // For skills, we need to handle the downloaded file
+    if (type === "skill") {
+      try {
+        const arrayBuffer = await blob.arrayBuffer()
+        if (typeof window.api?.skills?.upload === "function") {
+          const uploadResult = await window.api.skills.upload(arrayBuffer, filename)
+          return {
+            success: uploadResult.success,
+            error: uploadResult.error
+          }
+        }
+      } catch (uploadError) {
+        console.error("Failed to upload downloaded skill:", uploadError)
+        return {
+          success: false,
+          error: "Failed to save downloaded skill"
+        }
+      }
+    }
 
-      // Trigger download
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+    // For plugins, we need to handle the downloaded file similar to skills
+    if (type === "plugin") {
+      try {
+        const arrayBuffer = await blob.arrayBuffer()
+        if (typeof window.api?.plugins?.install === "function") {
+          const installResult = await window.api.plugins.install(arrayBuffer, filename)
+          return {
+            success: installResult.success,
+            error: installResult.error
+          }
+        }
+      } catch (installError) {
+        console.error("Failed to install downloaded plugin:", installError)
+        return {
+          success: false,
+          error: "Failed to install downloaded plugin"
+        }
+      }
+    }
+
+    // For MCPs, handle JSON file content and add to system
+    if (type === "mcp") {
+      try {
+        const text = await blob.text()
+        const mcpConfig = JSON.parse(text)
+        const config = mcpConfig?.mcpServers?.pubmed ||{}
+
+        if (!config.name || !config.url) {
+          return {
+            success: false,
+            error: "No valid MCP connectors found in configuration"
+          }
+        }
+
+        // Create all connectors
+        if (typeof window.api?.mcp?.create === "function") {
+          const targetConfig = {
+            name: config?.name || name || '',
+            url:config?.url,
+            enabled: false,
+            advanced:{
+              ...(config?.advanced || {}),
+              transport: config?.type || config?.advanced?.transport || ''
+            }
+          }
+          await window.api.mcp.create(targetConfig)
+          return {
+            success: true
+          }
+        }
+      } catch (parseError) {
+        console.error("Failed to parse or install MCP connector:", parseError)
+        return {
+          success: false,
+          error: "Failed to parse MCP configuration or install connector"
+        }
+      }
     }
 
     return { success: true }
   },
 
-  async submitMcpConnector(connector: any): Promise<DownloadResponse> {
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    return { success: true }
+  async uploadFile(file: File, resourceType: string, name: string, description: string, category:string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
+    console.log(`Uploading ${resourceType} file: ${file.name} category:${category}`)
+
+    const formData = new FormData()
+    formData.append("resource_type", resourceType)
+    formData.append("name", name)
+    formData.append("description", description)
+    formData.append("file", file)
+    formData.append("category", category)
+
+    const response = await fetch(ENDPOINTS.upload, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer your-api-token"
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const data: MarketUploadResponse = await response.json()
+    return {
+      success: true,
+      data
+    }
   }
 }
 
@@ -590,7 +413,17 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
       <div className="flex items-start justify-between mb-2">
-        <h3 className="font-medium text-sm line-clamp-1 flex-1">{item.name}</h3>
+        <div className="flex-1">
+          <h3 className="font-medium text-sm line-clamp-1 mb-1">{item.name}</h3>
+          {item.category && (
+            <div className="flex items-center gap-1 mb-1">
+              <Tag className="size-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {item.category}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1 ml-2">
           {isDownloading ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -629,7 +462,7 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground line-clamp-2">{item.description}</p>
+      <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{item.description}</p>
 
       <div className="text-xs text-muted-foreground">
         {item.filename} • Created {new Date(item.created_at).toLocaleDateString()}
@@ -645,6 +478,7 @@ export function MarketPanel(): React.JSX.Element {
   const [mcpsData, setMcpsData] = useState<MarketItem[]>([])
   const [pluginsData, setPluginsData] = useState<MarketItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [downloadingItems, setDownloadingItems] = useState<Set<string>>(new Set())
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; item: MarketItem | null }>({
     open: false,
@@ -664,6 +498,7 @@ export function MarketPanel(): React.JSX.Element {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
+      setError(null)
       try {
         let response: MarketApiResponse
         switch (activeTab) {
@@ -709,6 +544,7 @@ export function MarketPanel(): React.JSX.Element {
         }
       } catch (error) {
         console.error("Failed to load market data:", error)
+        setError(error instanceof Error ? error.message : "加载数据失败")
       } finally {
         setLoading(false)
       }
@@ -774,6 +610,7 @@ export function MarketPanel(): React.JSX.Element {
       }
     } catch (error) {
       console.error("Failed to delete item:", error)
+      setError(error instanceof Error ? error.message : "删除失败")
     } finally {
       setDeleteDialog({ open: false, item: null })
     }
@@ -814,10 +651,11 @@ export function MarketPanel(): React.JSX.Element {
         }
       } else {
         console.error("Download failed:", response.error)
-        // You could show an error dialog here
+        setError(response.error || "下载失败")
       }
     } catch (error) {
       console.error("Failed to download item:", error)
+      setError(error instanceof Error ? error.message : "下��失败")
     } finally {
       // Remove from downloading set
       setDownloadingItems(prev => {
@@ -849,15 +687,24 @@ export function MarketPanel(): React.JSX.Element {
     setUploadDialog(true)
   }
 
-  const handleUniversalUpload = async (file: File, name: string, description: string) => {
-    const result = await marketApi.uploadFile(file, activeTab, name, description)
+  const handleUniversalUpload = async (file: File, name: string, description: string, category:string) => {
+    try {
+      const result = await marketApi.uploadFile(file, activeTab, name, description, category)
 
-    // If upload is successful, record it in localStorage
-    if (result.success) {
-      localStorageHelper.addUploadedItem(name, activeTab)
+      // If upload is successful, record it in localStorage
+      if (result.success) {
+        localStorageHelper.addUploadedItem(name, activeTab)
+      }
+
+      return result
+    } catch (error) {
+      console.error("Failed to upload file:", error)
+      setError(error instanceof Error ? error.message : "上传失败")
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "上传失败"
+      }
     }
-
-    return result
   }
 
   return (
@@ -916,6 +763,31 @@ export function MarketPanel(): React.JSX.Element {
               <div className="p-4 space-y-3">
                 {loading ? (
                   <div className="text-center py-8 text-muted-foreground text-sm">加载中...</div>
+                ) : error ? (
+                  <div className="text-center py-8">
+                    <div className="text-red-500 text-sm mb-2">❌ {error}</div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setError(null)
+                        // Trigger reload by clearing data
+                        switch (activeTab) {
+                          case "skill":
+                            setSkillsData([])
+                            break
+                          case "mcp":
+                            setMcpsData([])
+                            break
+                          case "plugin":
+                            setPluginsData([])
+                            break
+                        }
+                      }}
+                    >
+                      重试
+                    </Button>
+                  </div>
                 ) : filteredData.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground text-sm">
                     {searchQuery ? "未找到匹配的项目" : "暂无可用项目"}

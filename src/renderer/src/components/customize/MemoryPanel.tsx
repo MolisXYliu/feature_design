@@ -186,10 +186,43 @@ export function MemoryPanel(): React.JSX.Element {
           </ScrollArea>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-          <div className="text-center space-y-2">
-            <Brain className="size-8 mx-auto opacity-40" />
-            <p className="text-xs">选择一个记忆文件查看内容</p>
+        <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+          <div className="max-w-md space-y-6">
+            <div className="text-center space-y-3">
+              <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+                <Brain className="size-7 text-muted-foreground/60" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground/80">Memory 记忆</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                记忆系统让 AI 拥有长期记忆能力。每次对话结束后，AI 会自动总结关键信息并保存为记忆文件，在后续对话中自动回忆相关内容，从而提供更连贯、更个性化的服务。
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">记忆如何工作？</p>
+                <p className="text-[13px] text-muted-foreground leading-relaxed">
+                  每次对话结束时，AI 会自动提取对话中的关键信息——比如你的偏好、项目背景、讨论过的方案等——并按日期归档保存。下次对话时，AI 会检索与当前话题相关的记忆，就像一位「记忆力很好的助手」。
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">管理你的记忆</p>
+                <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>从左侧列表中选择日期文件，查看当天的记忆内容</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span><span className="font-medium text-foreground/60">MEMORY.md</span> 是记忆索引文件，AI 会优先参考</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>你可以手动删除不准确或不再需要的记忆条目</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>通过顶部开关可随时启用或禁用记忆功能</li>
+                </ul>
+              </div>
+
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">隐私与控制</p>
+                <p className="text-[13px] text-muted-foreground leading-relaxed">
+                  所有记忆数据完全存储在本地，不会上传到任何服务器。你对记忆拥有完全控制权，可以随时查看、编辑或删除任何记忆内容，也可以一键关闭整个记忆功能。
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}

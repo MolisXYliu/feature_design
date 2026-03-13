@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils"
 import type { HeartbeatConfig } from "@/types"
 
 const INTERVAL_OPTIONS = [
-  { value: 2, label: "2 分钟（测试）" },
   { value: 15, label: "15 分钟" },
   { value: 30, label: "30 分钟" },
   { value: 60, label: "1 小时" },

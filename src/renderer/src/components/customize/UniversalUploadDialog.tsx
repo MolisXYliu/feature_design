@@ -20,7 +20,8 @@ interface UniversalUploadDialogProps {
   onUpload: (
     file: File,
     name: string,
-    description: string
+    description: string,
+    category: string
   ) => Promise<{ success: boolean; error?: string }>
 }
 
@@ -37,6 +38,7 @@ export function UniversalUploadDialog({
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [category, setCategory] = useState<"研发场景" | "通用场景">("研发场景")
 
   const getAcceptedTypes = () => {
     switch (resourceType) {
@@ -116,7 +118,7 @@ export function UniversalUploadDialog({
     setUploading(true)
 
     try {
-      const result = await onUpload(file, name.trim(), description.trim())
+      const result = await onUpload(file, name.trim(), description.trim(), category)
 
       if (result.success) {
         onSuccess()
@@ -292,6 +294,23 @@ export function UniversalUploadDialog({
               rows={3}
               className="w-full p-2 text-sm border rounded-md focus:ring-1 focus:ring-primary focus:outline-none disabled:opacity-50"
             />
+          </div>
+
+          {/* Category Select */}
+          <div className="space-y-2">
+            <label htmlFor="category" className="block text-sm font-medium">
+              选择场景 *
+            </label>
+            <select
+              id="category"
+              value={category}
+              onChange={(e) => setCategory(e.target.value as "研发场景" | "通用场景")}
+              disabled={uploading}
+              className="w-full p-2 text-sm border rounded-md focus:ring-1 focus:ring-primary focus:outline-none disabled:opacity-50"
+            >
+              <option value="研发场景">研发场景</option>
+              <option value="通用场景">通用场景</option>
+            </select>
           </div>
 
           {/* JSON Template for MCP */}
