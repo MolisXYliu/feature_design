@@ -33,6 +33,8 @@ export async function getGitInfo(
   branch?: string,
   remote?: string
 ): Promise<string> {
+
+  console.log(workspacePath, branch, remote, '????????')
   try {
     // Check if we're in a git repository
     if (!existsSync(path.join(workspacePath, ".git"))) {
