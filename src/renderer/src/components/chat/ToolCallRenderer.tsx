@@ -15,19 +15,16 @@ import {
   File,
   Folder,
   Maximize2,
-  X,
-  Eye,
-  Copy,
-  FolderOpen as FolderOpenIcon
+  X
 } from "lucide-react"
 import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import { GitCommandExecutor } from "./GitCommandExecutor"
 import { GitFileOperationPrompt } from "./GitFileOperationPrompt"
 import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
+import { GitFileOperationPromptWithProps } from "@/components/chat/GitFileOperationPromptWithProps"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -46,7 +43,8 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   grep: Search,
   execute: Terminal,
   write_todos: ListTodo,
-  task: GitBranch
+  task: GitBranch,
+  git_push: GitBranch
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -58,7 +56,8 @@ const TOOL_LABELS: Record<string, string> = {
   grep: "Search Content",
   execute: "Execute Command",
   write_todos: "Update Tasks",
-  task: "Subagent Task"
+  task: "Subagent Task",
+  git_workflow: "Git Workflow (Add, Commit, Push)"
 }
 
 // Tools whose results are shown in the UI panels and don't need verbose display
@@ -373,7 +372,7 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     <ReactDiffViewer
       oldValue={oldValue || displayOldContent}
       newValue={newValue || displayNewContent}
-      splitView={true}
+      splitView={isFullscreen}
       hideLineNumbers={false}
       useDarkTheme={false}
       loadingElement={()=><div className={'text-center font-bold text-lg py-2'}>loading...</div>}
@@ -410,7 +409,7 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
               </span>
              <button
                onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-               className="text-[14px] cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
+               className="text-[10px] cursor-pointer px-2 py-1 bg-background hover:bg-muted border border-border rounded transition-colors"
                title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
              >
                {renderMode === "preview" ?  "显示全部代码" : "显示少量代码"}
@@ -530,6 +529,9 @@ export function ToolCallRenderer({
     if (args.pattern) return args.pattern as string
     if (args.query) return args.query as string
     if (args.glob) return args.glob as string
+    if (args.branch) return args.branch as string
+    if (args.remoteUrl) return args.remoteUrl as string
+    if (args.commitMessage) return (args.commitMessage as string).slice(0, 50)
     return null
   }
 
@@ -808,6 +810,31 @@ export function ToolCallRenderer({
           <div className="text-xs text-status-nominal flex items-center gap-1.5">
             <CheckCircle2 className="size-3" />
             <span>Task completed</span>
+          </div>
+        )
+      }
+
+      case "git_workflow": {
+        // Git workflow operation with GitFileOperationPrompt for display
+        const gitResult = JSON.parse(result)
+        const branch = gitResult.branch as string || ""
+        const remoteUrl = gitResult.remoteUrl as string || ""
+        const commitMessage = gitResult.commitMessage as string || ""
+
+        return (
+          <div className="space-y-2">
+            <div className="text-xs text-status-nominal flex items-center gap-1.5">
+              <CheckCircle2 className="size-3" />
+              <span>Git Workflow: Add → Commit → Push (所有文件)</span>
+            </div>
+            <GitFileOperationPromptWithProps
+              remoteUrl={remoteUrl}
+              branch={branch}
+              commitmessage={commitMessage}
+              operation="git_workflow"
+              operationId={toolCall.id}
+              onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+            />
           </div>
         )
       }

@@ -51,6 +51,7 @@ import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
+import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { getWindowsSandboxMode } from "../storage"
 
 /** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
@@ -633,6 +634,9 @@ The workspace root is: ${workspacePath}`
       threadId: options.threadId
     }))
   }
+
+  // Add git_push tool
+  extraTools.push(createGitWorkflowTool(workspacePath))
 
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
