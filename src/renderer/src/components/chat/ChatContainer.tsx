@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock, Notebook, Megaphone
+  Clock, Notebook, Megaphone, Zap
 } from "lucide-react";
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -92,12 +92,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
   const [showAllCustomSkills, setShowAllCustomSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
+  const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
 
-  const { threads, models, loadThreads, generateTitleForFirstMessage } = useAppStore()
+  const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
 
   // Get persisted thread state and actions from context
   const {
@@ -123,6 +124,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
+
+  useEffect(() => {
+    const fetchYoloMode = (): void => {
+      window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
+    }
+    fetchYoloMode()
+    return window.api.sandbox.onChanged(fetchYoloMode)
+  }, [])
 
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
@@ -1127,6 +1136,20 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 <ModelSwitcher threadId={threadId} />
                 <div className="w-px h-4 bg-border" />
                 <WorkspacePicker threadId={threadId} />
+                {yoloMode && (
+                  <>
+                    <div className="w-px h-4 bg-border" />
+                    <button
+                      type="button"
+                      title="点击打开设置"
+                      onClick={() => setShowCustomizeView(true)}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                    >
+                      <Zap className="size-3" />
+                      YOLO
+                    </button>
+                  </>
+                )}
               </div>
               {tokenUsage && (
                 <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} />
