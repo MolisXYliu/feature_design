@@ -52,7 +52,7 @@ import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
-import { getWindowsSandboxMode } from "../storage"
+import { getWindowsSandboxMode, getYoloMode } from "../storage"
 
 /** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
 async function ensureCodexExe(exePath: string): Promise<void> {
@@ -654,7 +654,7 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    interruptOn: { execute: true },
+    interruptOn: getYoloMode() ? undefined : { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,
