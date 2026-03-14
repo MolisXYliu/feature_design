@@ -22,9 +22,9 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import { GitFileOperationPrompt } from "./GitFileOperationPrompt"
+import { GitFileOperationPrompt } from "./GitPush/GitFileOperationPrompt"
 import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
-import { GitFileOperationPromptWithProps } from "@/components/chat/GitFileOperationPromptWithProps"
+import { GitFileOperationPromptWithProps } from "@/components/chat/GitPush/GitFileOperationPromptWithProps"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -667,26 +667,27 @@ export function ToolCallRenderer({
         const command = args.command as string
 
         // Special handling for git diff commands
-        if (command && command.includes("git diff") && output.trim() && !output.includes('no output') ) {
-          if (isExpanded) {
-            return (
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>Git diff completed</span>
-              </div>
-            )
-          }
-          // Collapsed view - show diff preview
-          return (
-            <div className="space-y-2">
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>Git diff completed</span>
-              </div>
-              <DiffDisplay diff={output} />
-            </div>
-          )
-        }
+        // todo 暂时注释，看后续是否要放开
+        // if (command && command.includes("git diff") && output.trim() && !output.includes('no output') ) {
+        //   if (isExpanded) {
+        //     return (
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>Git diff completed</span>
+        //       </div>
+        //     )
+        //   }
+        //   // Collapsed view - show diff preview
+        //   return (
+        //     <div className="space-y-2">
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>Git diff completed</span>
+        //       </div>
+        //       <DiffDisplay diff={output} />
+        //     </div>
+        //   )
+        // }
 
         if (isExpanded) {
           return (
@@ -751,28 +752,29 @@ export function ToolCallRenderer({
         }
 
         // Check if this operation might need Git commit (any file operation)
-        if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
-          return (
-            <div className="space-y-2">
-              <div className={'overflow-scroll'}>
-                <DiffDisplay
-                  oldValue={args.old_string || ""}
-                  newValue={args.new_string  || ""}
-                />
-              </div>
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
-              </div>
-              <GitFileOperationPrompt
-                filePath={path}
-                operation={toolCall.name}
-                operationId={toolCall.id}
-                onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
-              />
-            </div>
-          )
-        }
+        // todo 暂时注释，看后续是否要放开，编辑文件导致的git提交
+        // if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
+        //   return (
+        //     <div className="space-y-2">
+        //       <div className={'overflow-scroll'}>
+        //         <DiffDisplay
+        //           oldValue={args.old_string || ""}
+        //           newValue={args.new_string  || ""}
+        //         />
+        //       </div>
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
+        //       </div>
+        //       <GitFileOperationPrompt
+        //         filePath={path}
+        //         operation={toolCall.name}
+        //         operationId={toolCall.id}
+        //         onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+        //       />
+        //     </div>
+        //   )
+        // }
 
         // Show confirmation message for file operations
         if (typeof result === "string" && result.trim()) {
@@ -859,10 +861,6 @@ export function ToolCallRenderer({
 
         return (
           <div className="space-y-2">
-            <div className="text-xs text-status-nominal flex items-center gap-1.5">
-              <CheckCircle2 className="size-3" />
-              <span>Git Workflow: Add → Commit → Push (所有文件)</span>
-            </div>
             <GitFileOperationPromptWithProps
               workspacePath={workspacePath}
               remoteUrl={remoteUrl}

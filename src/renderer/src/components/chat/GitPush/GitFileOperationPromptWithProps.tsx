@@ -1,9 +1,19 @@
 import { useState, useEffect, useMemo } from "react"
-import { GitBranch, Play, Check, X, Clock, FileText, ChevronDown, ChevronRight } from "lucide-react"
+import {
+  GitBranch,
+  Play,
+  Check,
+  X,
+  Clock,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
-import { DiffDisplay } from "./ToolCallRenderer"
+import { DiffDisplay } from "../ToolCallRenderer"
 
 interface ChangedFile {
   path: string
@@ -169,9 +179,9 @@ export function GitFileOperationPromptWithProps({
     }
   }
 
-  useEffect(() => {
-    generateCommandPreview()
-  }, [commitMessage, cardNumber, gitRepoPath])
+  // useEffect(() => {
+  //   generateCommandPreview()
+  // }, [commitMessage, cardNumber, gitRepoPath])
 
   const executeGitCommands = async () => {
     setIsExecuting(true)
@@ -378,26 +388,26 @@ export function GitFileOperationPromptWithProps({
             {showChangedFiles && (
               <div className="space-y-4 pl-4 border-l border-border/50">
                 {changedFiles.map((file, index) => (
-                  <div key={index} className="space-y-1 px-3  border border-border/30 rounded-md bg-background/30">
+                  <div key={index} className="space-y-1 px-3 py-2  border border-border/30 rounded-md bg-background/30">
                     {/* 文件头部信息 */}
-                    <div className="flex items-center justify-between text-xs border-b border-border/20">
+                    <div className="flex  justify-between text-xs border-b border-border/20">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono font-medium text-foreground">{index+1}. {file.path}</span>
-                        <Badge
-                          variant={file.status === 'added' ? 'nominal' : file.status === 'deleted' ? 'critical' : 'outline'}
-                          className="text"
-                        >
-                          {file.status}
-                        </Badge>
+                        <span className="font-mono font-medium text-foreground">{file.path}</span>
+                        {/*<Badge*/}
+                        {/*  variant={file.status === 'added' ? 'nominal' : file.status === 'deleted' ? 'critical' : 'outline'}*/}
+                        {/*  className="text"*/}
+                        {/*>*/}
+                        {/*  {file.status}*/}
+                        {/*</Badge>*/}
                       </div>
 
                       {/* 文件变更详情按钮 */}
                       {(file.oldContent !== undefined || file.newContent !== undefined || file.diff) && (
                         <button
                           onClick={() => toggleDiffExpansion(index)}
-                          className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                          className=" ml-4 w-[100px] flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
                         >
-                          文件变更详情
+                          变更详情
 
                           {expandedDiffs.has(index) ? (
                             <ChevronDown className="size-3" />
@@ -481,12 +491,12 @@ export function GitFileOperationPromptWithProps({
       </div>
 
       {/* 提交信息编辑 */}
-      <div className="space-y-2">
-        <div className="text-xs font-medium">* 提交信息:</div>
+      <div className="space-y-2 ">
+        <div className="text-xs font-medium"><span className={'text-red-500'}>*</span> 提交信息:</div>
         <textarea
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
-          disabled={isExecuting}
+          disabled={isExecuting || showCommandPreview}
           placeholder="请输入提交信息..."
           className="w-full p-2 text-xs border border-border rounded resize-none"
           rows={2}
@@ -494,13 +504,13 @@ export function GitFileOperationPromptWithProps({
       </div>
 
       {/* 卡片编号 */}
-      <div className="space-y-2">
-        <div className="text-xs font-medium">* 卡片编号:</div>
+      <div className="space-y-2 ">
+        <div className="text-xs font-medium"><span className={'text-red-500'}>*</span> 卡片编号:</div>
         <input
           type="text"
           value={cardNumber}
           onChange={(e) => setCardNumber(e.target.value)}
-          disabled={isExecuting}
+          disabled={isExecuting || showCommandPreview}
           placeholder="请输入卡片编号， 案例：Z998877-12345"
           className="w-full p-2 text-xs border border-border rounded"
         />
@@ -508,9 +518,9 @@ export function GitFileOperationPromptWithProps({
 
       {/* 命令预览按钮和显示区域 */}
       <div className="space-y-2">
-        {previewCommands.length > 0 && (
+        {showCommandPreview &&  previewCommands.length > 0 && (
           <div className="bg-background/50 border border-border rounded p-3 space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">即将执行的Git命令（请逐条确认）:</div>
+            <div className="text-xs font-medium text-muted-foreground">即将执行的Git命令（请逐条确认无误）:</div>
             <div className="space-y-2">
               {previewCommands.map((cmd, index) => {
                 const isConfirmed = confirmedCommands.has(index)
@@ -667,7 +677,23 @@ export function GitFileOperationPromptWithProps({
 
       {/* 操作按钮 */}
       <div className="flex items-center gap-2">
-        <button
+        {
+          !showCommandPreview &&  <button
+            onClick={generateCommandPreview}
+            disabled={
+              isExecuting ||
+              !commitMessage.trim() ||
+              !cardNumber.trim() ||
+              executionResult?.success === true
+            }
+            className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <CheckCircle className="size-3" />
+            编辑完成
+          </button>
+        }
+
+        {showCommandPreview &&  <button
           onClick={executeGitCommands}
           disabled={
             isExecuting ||
@@ -682,7 +708,7 @@ export function GitFileOperationPromptWithProps({
         >
           <Play className="size-3" />
           {isExecuting ? "提交中..." : executionResult?.success ? "已提交" : "确认提交"}
-        </button>
+        </button>}
 
         <button
           onClick={handleHideGitOptions}
