@@ -21,6 +21,7 @@ interface GitFileOperationPromptWithPropsProps {
   changedFiles?: ChangedFile[] // 修改的文件列表
   onSkip?: () => void
   operationId?: string // 操作ID，用于唯一标识本次操作
+  workspacePath:string
 }
 
 export function GitFileOperationPromptWithProps({
@@ -30,7 +31,8 @@ export function GitFileOperationPromptWithProps({
   commitmessage,
   changedFiles = [],
   onSkip,
-  operationId
+  operationId,
+  workspacePath
 }: GitFileOperationPromptWithPropsProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   const currentOperationId = useMemo(() => {
@@ -62,6 +64,10 @@ export function GitFileOperationPromptWithProps({
   const [cardNumber, setCardNumber] = useState("")
   // 用于控制每个文件的diff展示状态
   const [expandedDiffs, setExpandedDiffs] = useState<Set<number>>(new Set())
+  // 添加命令预览状态
+  const [showCommandPreview, setShowCommandPreview] = useState(false)
+  const [previewCommands, setPreviewCommands] = useState<Array<{command: string, description: string}>>([])
+  const [repoPath, setRepoPath] = useState("")
 
   // 检查当前操作是否已提交
   const [isCurrentOperationCommitted, setIsCurrentOperationCommitted] = useState(false)
@@ -113,34 +119,125 @@ export function GitFileOperationPromptWithProps({
   }
 
   const handleHideGitOptions = () => {
+
     setShowGitOptions(false)
     setExecutionResult(null)
     setCurrentStep(0)
+    setShowCommandPreview(false)
+  }
+
+  // 生成命令预览
+  const generateCommandPreview = async () => {
+    try {
+      // 根据修改的文件获取Git仓库根目录
+      let gitRepoPath = workspacePath
+
+      const commands = [
+        {
+          command: `git -C "${gitRepoPath}" add .`,
+          description: "添加所有修改的文件到暂存区"
+        },
+        {
+          command: `git -C "${gitRepoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
+          description: "提交更改并添加提交信息"
+        }
+      ]
+
+      if (hasRemote) {
+        commands.push({
+          command: `git -C "${gitRepoPath}" push`,
+          description: `推送到远程仓库 (${remoteUrl})`
+        })
+      }
+
+      setPreviewCommands(commands)
+      setShowCommandPreview(true)
+    } catch (error) {
+      console.error("无法生成命令预览:", error)
+      setExecutionResult({ success: false, output: "无法生成命令预览" })
+    }
   }
 
   const executeGitCommands = async () => {
     setIsExecuting(true)
     setExecutionResult(null)
 
-    // 获取当前工作目录的Git仓库根目录
-    let repoPath = ""
-    try {
-      repoPath = (await window.electron.ipcRenderer.invoke(
-        "execute-git-command",
-        "git rev-parse --show-toplevel"
-      )) as string
-      repoPath = repoPath.trim()
-    } catch (error) {
-      console.error("无法确定Git仓库路径:", error)
-      setExecutionResult({ success: false, output: "无法确定Git仓库路径" })
-      setIsExecuting(false)
-      return
+    // 使用预览时获取的仓库路径，或者重新获取
+    let gitRepoPath = repoPath
+    if (!gitRepoPath) {
+      try {
+        // 首先尝试使用当前工作目录获取Git仓库路径
+        gitRepoPath = (await window.electron.ipcRenderer.invoke(
+          "execute-git-command",
+          "git rev-parse --show-toplevel"
+        )) as string
+        gitRepoPath = gitRepoPath.trim()
+        console.log(`使用当前工作目录Git仓库路径: ${gitRepoPath}`)
+        setRepoPath(gitRepoPath)
+      } catch (error) {
+        // 如果当前工作目录不是Git仓库，尝试从文件路径查找
+        console.warn("当前工作目录不是Git仓库，尝试从文件路径查找:", error)
+
+        if (changedFiles && changedFiles.length > 0) {
+          const firstFilePath = changedFiles[0].path
+
+          // 获取文件所在目录（处理相对路径和绝对路径）
+          let fileDir: string
+          if (firstFilePath.startsWith('/')) {
+            // 绝对路径，直接获取目录
+            fileDir = firstFilePath.includes('/')
+              ? firstFilePath.substring(0, firstFilePath.lastIndexOf('/'))
+              : '/'
+          } else {
+            // 相对路径，先获取当前工作目录
+            try {
+              const cwd = (await window.electron.ipcRenderer.invoke(
+                "execute-git-command",
+                "pwd"
+              )) as string
+              const fileAbsolutePath = `${cwd.trim()}/${firstFilePath}`
+              fileDir = fileAbsolutePath.includes('/')
+                ? fileAbsolutePath.substring(0, fileAbsolutePath.lastIndexOf('/'))
+                : cwd.trim()
+            } catch (pwdError) {
+              console.warn("无法获取当前工作目录:", pwdError)
+              // 最后尝试使用相对目录
+              fileDir = firstFilePath.includes('/')
+                ? firstFilePath.substring(0, firstFilePath.lastIndexOf('/'))
+                : '.'
+            }
+          }
+
+          try {
+            gitRepoPath = (await window.electron.ipcRenderer.invoke(
+              "execute-git-command",
+              `git -C "${fileDir}" rev-parse --show-toplevel`
+            )) as string
+            gitRepoPath = gitRepoPath.trim()
+            console.log(`Git仓库路径: ${gitRepoPath} (基于文件: ${firstFilePath}, 文件目录: ${fileDir})`)
+            setRepoPath(gitRepoPath)
+          } catch (dirError) {
+            console.error(`文件目录 ${fileDir} 不是Git仓库:`, dirError)
+            const errorMsg = `文件 ${firstFilePath} 所在目录不是Git仓库。\n\n请确保:\n1. 当前工作目录是Git仓库\n2. 文件路径 "${firstFilePath}" 在Git仓库中\n3. 已执行 'git init' 初始化仓库`
+            setExecutionResult({ success: false, output: errorMsg })
+            setIsExecuting(false)
+            return
+          }
+        } else {
+          // 既没有当前工作目录的Git仓库，也没有文件信息
+          const errorMsg = "无法确定Git仓库路径。\n\n请确保:\n1. 当前工作目录是Git仓库\n2. 已执行 'git init' 初始化仓库"
+          console.error(errorMsg)
+          setExecutionResult({ success: false, output: errorMsg })
+          setIsExecuting(false)
+          return
+        }
+      }
     }
 
     const commands = [
-      `git -C "${repoPath}" add .`,
-      `git -C "${repoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
-      hasRemote ? `git -C "${repoPath}" push` : null
+      `git -C "${gitRepoPath}" add .`,
+      `git -C "${gitRepoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
+      hasRemote ? `git -C "${gitRepoPath}" push` : null
     ].filter(Boolean) as string[]
 
     try {
@@ -160,7 +257,7 @@ export function GitFileOperationPromptWithProps({
             try {
               const hashResult = await window.electron.ipcRenderer.invoke(
                 "execute-git-command",
-                `git -C "${repoPath}" rev-parse HEAD`
+                `git -C "${gitRepoPath}" rev-parse HEAD`
               )
               if (hashResult && typeof hashResult === "string") {
                 commitHash = hashResult.trim().substring(0, 7) // 取前7位
@@ -192,11 +289,27 @@ export function GitFileOperationPromptWithProps({
       // 更新状态
       setIsCurrentOperationCommitted(true)
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
       console.error("执行Git命令时发生错误:", error)
       setExecutionResult({
         success: false,
-        output: error instanceof Error ? error.message : String(error)
+        output: errorMessage
       })
+
+      // 通知Git工具操作失败（如果有operationId）
+      if (operationId && operationId.startsWith('git_workflow_')) {
+        try {
+          await window.electron.ipcRenderer.invoke(
+            "complete-git-workflow",
+            operationId,
+            false,
+            `执行Git命令时发生错误: ${errorMessage}`
+          )
+          console.log('通知Git工具操作失败:', operationId, errorMessage)
+        } catch (notifyError) {
+          console.warn('通知Git工具失败:', notifyError)
+        }
+      }
     } finally {
       setIsExecuting(false)
       setCurrentStep(0)
@@ -261,6 +374,20 @@ export function GitFileOperationPromptWithProps({
             </button>
             <button
               onClick={() => {
+                // 通知Git工具用户跳过了操作
+                if (operationId && operationId.startsWith('git_workflow_')) {
+                  window.electron.ipcRenderer.invoke(
+                    "complete-git-workflow",
+                    operationId,
+                    false,
+                    "用户跳过了Git操作"
+                  ).then(() => {
+                    console.log('通知Git工具用户跳过操作:', operationId)
+                  }).catch((error) => {
+                    console.warn('通知Git工具失败:', error)
+                  })
+                }
+
                 if (onSkip) {
                   onSkip()
                 }
@@ -429,6 +556,51 @@ export function GitFileOperationPromptWithProps({
         />
       </div>
 
+      {/* 命令预览按钮和显示区域 */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={generateCommandPreview}
+            disabled={isExecuting || !commitMessage.trim() || !cardNumber.trim()}
+            className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <FileText className="size-3" />
+            预览Git命令
+          </button>
+          {showCommandPreview && (
+            <button
+              onClick={() => setShowCommandPreview(false)}
+              className="px-2 py-1 text-xs border border-border rounded hover:bg-background-interactive transition-colors"
+            >
+              隐藏预览
+            </button>
+          )}
+        </div>
+
+        {showCommandPreview && previewCommands.length > 0 && (
+          <div className="bg-background/50 border border-border rounded p-3 space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">即将执行的Git命令:</div>
+            <div className="space-y-2">
+              {previewCommands.map((cmd, index) => (
+                <div key={index} className="space-y-1">
+                  <div className="text-xs font-medium text-foreground">
+                    {index + 1}. {cmd.description}
+                  </div>
+                  <div className="bg-muted p-2 rounded">
+                    <code className="text-xs font-mono text-foreground break-all">
+                      {cmd.command}
+                    </code>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-muted-foreground mt-2">
+              💡 请确认上述命令无误后，点击"确认提交"执行
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 执行步骤显示 */}
       {(isExecuting || executionResult) && (
         <div className="space-y-2">
@@ -535,6 +707,8 @@ export function GitFileOperationPromptWithProps({
             isExecuting ||
             !commitMessage.trim() ||
             !cardNumber.trim() ||
+            !showCommandPreview ||
+            previewCommands.length === 0 ||
             executionResult?.success === true
           }
           className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -553,6 +727,10 @@ export function GitFileOperationPromptWithProps({
 
         {!hasRemote && (
           <span className="text-xs text-amber-600">⚠️ 仅本地提交 (无远程仓库)</span>
+        )}
+
+        {!showCommandPreview && (
+          <span className="text-xs text-blue-600">💡 请先预览Git命令</span>
         )}
       </div>
     </div>

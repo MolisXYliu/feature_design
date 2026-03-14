@@ -843,6 +843,8 @@ export function ToolCallRenderer({
         const remoteUrl = gitResult.remoteUrl as string || ""
         const commitMessage = gitResult.commitMessage as string || ""
         const changedFiles = gitResult.changedFiles || []
+        const workspacePath = gitResult.workspacePath || ""
+        console.log(gitResult, '????====')
 
         // console.log('Git workflow - changedFiles:', changedFiles.length, 'files')
 
@@ -853,6 +855,7 @@ export function ToolCallRenderer({
               <span>Git Workflow: Add → Commit → Push (所有文件)</span>
             </div>
             <GitFileOperationPromptWithProps
+              workspacePath={workspacePath}
               remoteUrl={remoteUrl}
               branch={branch}
               commitmessage={commitMessage}

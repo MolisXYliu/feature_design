@@ -244,7 +244,8 @@ export async function getGitInfo(
       branch: targetBranch,
       commitMessage: commitMessage,
       hasChanges: hasChanges,
-      changedFiles: changedFiles
+      changedFiles: changedFiles,
+      workspacePath
     }
 
 
