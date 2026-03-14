@@ -49,8 +49,8 @@ export function GitFileOperationPromptWithProps({
     return `${operation}_${Math.abs(hash).toString(36)}_all_files`
   }, [operationId, operation])
 
-  const [showGitOptions, setShowGitOptions] = useState(false)
-  const [showChangedFiles, setShowChangedFiles] = useState(false)
+  const [showGitOptions, setShowGitOptions] = useState(true)
+  const [showChangedFiles, setShowChangedFiles] = useState(false) // 默认展开文件列表
   // 使用props传入的commitmessage作为默认值
   const [commitMessage, setCommitMessage] = useState(commitmessage || "")
   const [isExecuting, setIsExecuting] = useState(false)
@@ -60,6 +60,8 @@ export function GitFileOperationPromptWithProps({
   } | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
   const [cardNumber, setCardNumber] = useState("")
+  // 用于控制每个文件的diff展示状态
+  const [expandedDiffs, setExpandedDiffs] = useState<Set<number>>(new Set())
 
   // 检查当前操作是否已提交
   const [isCurrentOperationCommitted, setIsCurrentOperationCommitted] = useState(false)
@@ -68,6 +70,19 @@ export function GitFileOperationPromptWithProps({
 
   // 判断是否有远程仓库
   const hasRemote = Boolean(remoteUrl && remoteUrl.trim())
+
+  // 切换特定文件diff的展开状态
+  const toggleDiffExpansion = (index: number) => {
+    setExpandedDiffs(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(index)) {
+        newSet.delete(index)
+      } else {
+        newSet.add(index)
+      }
+      return newSet
+    })
+  }
 
   // 当props中的commitmessage变化时，更新本地状态
   useEffect(() => {
@@ -272,6 +287,95 @@ export function GitFileOperationPromptWithProps({
           </Badge>
         </div>
 
+        {/* 修改文件列表 */}
+        {changedFiles && changedFiles.length > 0 && (
+          <div className="space-y-2">
+            <button
+              onClick={() => setShowChangedFiles(!showChangedFiles)}
+              className="flex my-4 items-center text-sm gap-2 text font-medium text-status-info hover:text-status-info/80 transition-colors"
+            >
+              {showChangedFiles ? (
+                <ChevronDown className="size-4" />
+              ) : (
+                <ChevronRight className="size-4" />
+              )}
+              <FileText className="size-4" />
+              修改的文件 ({changedFiles.length})
+            </button>
+
+            {showChangedFiles && (
+              <div className="space-y-4 pl-4 border-l border-border/50">
+                {changedFiles.map((file, index) => (
+                  <div key={index} className="space-y-1 px-3  border border-border/30 rounded-md bg-background/30">
+                    {/* 文件头部信息 */}
+                    <div className="flex items-center justify-between text-xs border-b border-border/20">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-medium text-foreground">{index+1}. {file.path}</span>
+                        <Badge
+                          variant={file.status === 'added' ? 'nominal' : file.status === 'deleted' ? 'critical' : 'outline'}
+                          className="text"
+                        >
+                          {file.status}
+                        </Badge>
+                      </div>
+
+                      {/* 文件变更详情按钮 */}
+                      {(file.oldContent !== undefined || file.newContent !== undefined || file.diff) && (
+                        <button
+                          onClick={() => toggleDiffExpansion(index)}
+                          className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          文件变更详情
+
+                          {expandedDiffs.has(index) ? (
+                            <ChevronDown className="size-3" />
+                          ) : (
+                            <ChevronRight className="size-3" />
+                          )}
+
+                        </button>
+                      )}
+                    </div>
+
+                    {/* 文件内容差异显示 */}
+                    {(file.oldContent !== undefined || file.newContent !== undefined || file.diff) ? (
+                      <div className="space-y-2">
+                        {expandedDiffs.has(index) && (
+                          <div className="rounded border border-border/30 overflow-hidden">
+                            <DiffDisplay
+                              diff={file.diff}
+                              oldValue={file.oldContent}
+                              newValue={file.newContent}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground italic py-2">
+                          文件变更检测中 - 差异信息暂时不可用
+                        </div>
+                        <div className="text-xs text-muted-foreground bg-background/50 p-2 rounded border border-border/20">
+                          💡 这通常发生在：
+                          <ul className="mt-1 ml-4 list-disc space-y-1">
+                            <li>新创建的文件</li>
+                            <li>二进制文件</li>
+                            <li>文件路径包含特殊字符</li>
+                            <li>Git状态解析问题</li>
+                          </ul>
+                          <div className="mt-2 text-xs">
+                            文件路径: <code className="bg-muted px-1 rounded text-foreground">{file.path}</code>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Git仓库状态信息 - 使用props传入的信息 */}
         <div className="grid grid-cols-1 gap-2 text-xs bg-background/50 p-2 rounded border">
           <div className="flex items-center gap-2">
@@ -296,52 +400,7 @@ export function GitFileOperationPromptWithProps({
           )}
         </div>
 
-        {/* 修改文件列表 */}
-        {changedFiles && changedFiles.length > 0 && (
-          <div className="space-y-2">
-            <button
-              onClick={() => setShowChangedFiles(!showChangedFiles)}
-              className="flex items-center gap-2 text-xs font-medium text-status-info hover:text-status-info/80 transition-colors"
-            >
-              {showChangedFiles ? (
-                <ChevronDown className="size-3" />
-              ) : (
-                <ChevronRight className="size-3" />
-              )}
-              <FileText className="size-3" />
-              修改的文件 ({changedFiles.length})
-            </button>
 
-            {showChangedFiles && (
-              <div className="space-y-3 pl-4 border-l border-border/50">
-                {changedFiles.map((file, index) => (
-                  <div key={index} className="space-y-2">
-                    <div className="flex items-center gap-2 text-xs">
-                      <FileText className="size-3 text-muted-foreground" />
-                      <span className="font-mono font-medium">{file.path}</span>
-                      <Badge
-                        variant={file.status === 'added' ? 'nominal' : file.status === 'deleted' ? 'critical' : 'outline'}
-                        className="text-xs"
-                      >
-                        {file.status}
-                      </Badge>
-                    </div>
-
-                    {(file.oldContent !== undefined || file.newContent !== undefined || file.diff) && (
-                      <div className="ml-4">
-                        <DiffDisplay
-                          diff={file.diff}
-                          oldValue={file.oldContent}
-                          newValue={file.newContent}
-                        />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* 提交信息编辑 */}

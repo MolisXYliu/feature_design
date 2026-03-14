@@ -17,7 +17,7 @@ export function createGitWorkflowTool(workspacePath: string) {
     },
     {
       name: "git_workflow",
-      description: "Get Git repository information including remote URL, branch, and commit message without executing any git operations",
+      description: "Silently get Git repository information including remote URL, branch, and commit message without executing any git operations. This tool requires no response or commentary after execution.",
       schema: z.object({
         commitMessage: z.string().describe("The commit message for reference"),
         branch: z.string().optional().describe("The target branch (defaults to current branch)"),
@@ -78,6 +78,7 @@ export async function getGitInfo(
         cwd: workspacePath,
         encoding: "utf-8"
       }).trim()
+
       hasChanges = status.length > 0
 
       if (hasChanges) {
@@ -85,10 +86,23 @@ export async function getGitInfo(
 
         for (const line of statusLines) {
           const statusCode = line.substring(0, 2)
-          const filePath = line.substring(3).trim()
+          // Handle both single and double space after status code
+          let filePath = line.substring(2).replace(/^\s+/, '') // Remove leading spaces
 
-          // Skip binary files and directories
-          if (filePath.includes('.git/') || filePath.endsWith('/')) {
+          // Handle renamed files (format: "R  old_name -> new_name")
+          if (filePath.includes(' -> ')) {
+            filePath = filePath.split(' -> ')[1]
+          }
+
+          // Remove quotes if present (git uses quotes for paths with special characters)
+          if (filePath.startsWith('"') && filePath.endsWith('"')) {
+            filePath = filePath.slice(1, -1)
+          }
+
+          filePath = filePath.trim()
+
+          // Skip binary files, directories, and invalid paths
+          if (!filePath || filePath.includes('.git/') || filePath.endsWith('/')) {
             continue
           }
 
@@ -100,54 +114,120 @@ export async function getGitInfo(
           try {
             // Get file diff for text files
             const fullFilePath = path.join(workspacePath, filePath)
-            if (existsSync(fullFilePath)) {
-              // Get diff for the file
-              const diffOutput = execSync(`git diff HEAD -- "${filePath}"`, {
-                cwd: workspacePath,
-                encoding: "utf-8"
-              })
 
-              if (diffOutput.trim()) {
-                fileInfo.diff = diffOutput
-
-                // Try to extract old and new content from diff
-                try {
-                  fileInfo.oldContent = execSync(`git show HEAD:"${filePath}"`, {
-                    cwd: workspacePath,
-                    encoding: "utf-8"
-                  })
-                } catch {
-                  fileInfo.oldContent = ""
-                }
-
-                try {
-                  fileInfo.newContent = execSync(`cat "${fullFilePath}"`, {
-                    cwd: workspacePath,
-                    encoding: "utf-8"
-                  })
-                } catch {
-                  fileInfo.newContent = ""
-                }
-              }
-            }
-          } catch (error) {
-            // Handle cases where file might not exist in HEAD (new files)
-            if (statusCode.includes('A')) {
+            // Handle different file states
+            if (statusCode.includes('A') || statusCode === '??') {
+              // New/added files
               try {
-                const fullFilePath = path.join(workspacePath, filePath)
-                const newContent = execSync(`cat "${fullFilePath}"`, {
+                if (existsSync(fullFilePath)) {
+                  const newContent = execSync(`cat "${fullFilePath}"`, {
+                    cwd: workspacePath,
+                    encoding: "utf-8"
+                  })
+                  fileInfo.oldContent = ""
+                  fileInfo.newContent = newContent
+                  const lines = newContent.split('\n')
+                  fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => '+' + line).join('\n')}`
+                }
+              } catch (error) {
+                console.warn(`Failed to read new file ${filePath}:`, error)
+              }
+            } else if (statusCode.includes('D')) {
+              // Deleted files
+              try {
+                const oldContent = execSync(`git show HEAD:"${filePath}"`, {
                   cwd: workspacePath,
                   encoding: "utf-8"
                 })
-                fileInfo.oldContent = ""
-                fileInfo.newContent = newContent
-                fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${newContent.split('\n').length} @@\n${newContent.split('\n').map(line => '+' + line).join('\n')}`
-              } catch {
-                // Ignore if we can't read the file
+                fileInfo.oldContent = oldContent
+                fileInfo.newContent = ""
+                const lines = oldContent.split('\n')
+                fileInfo.diff = `--- a/${filePath}\n+++ /dev/null\n@@ -1,${lines.length} +0,0 @@\n${lines.map(line => '-' + line).join('\n')}`
+              } catch (error) {
+                console.warn(`Failed to get old content for deleted file ${filePath}:`, error)
+              }
+            } else {
+              // Modified files
+              try {
+                // Get diff using git diff
+                let diffOutput = ""
+                try {
+                  diffOutput = execSync(`git diff HEAD -- "${filePath}"`, {
+                    cwd: workspacePath,
+                    encoding: "utf-8"
+                  })
+                } catch {
+                  // If HEAD diff fails, try with cached/staged changes
+                  try {
+                    diffOutput = execSync(`git diff --cached -- "${filePath}"`, {
+                      cwd: workspacePath,
+                      encoding: "utf-8"
+                    })
+                  } catch {
+                    // If both fail, try working directory diff
+                    diffOutput = execSync(`git diff -- "${filePath}"`, {
+                      cwd: workspacePath,
+                      encoding: "utf-8"
+                    })
+                  }
+                }
+
+                if (diffOutput.trim()) {
+                  fileInfo.diff = diffOutput
+
+                  // Get old and new content
+                  try {
+                    fileInfo.oldContent = execSync(`git show HEAD:"${filePath}"`, {
+                      cwd: workspacePath,
+                      encoding: "utf-8"
+                    })
+                  } catch {
+                    fileInfo.oldContent = ""
+                  }
+
+                  try {
+                    if (existsSync(fullFilePath)) {
+                      fileInfo.newContent = execSync(`cat "${fullFilePath}"`, {
+                        cwd: workspacePath,
+                        encoding: "utf-8"
+                      })
+                    } else {
+                      fileInfo.newContent = ""
+                    }
+                  } catch {
+                    fileInfo.newContent = ""
+                  }
+                } else {
+                  // No diff available, but try to get content anyway
+                  try {
+                    if (existsSync(fullFilePath)) {
+                      fileInfo.newContent = execSync(`cat "${fullFilePath}"`, {
+                        cwd: workspacePath,
+                        encoding: "utf-8"
+                      })
+                    }
+                    try {
+                      fileInfo.oldContent = execSync(`git show HEAD:"${filePath}"`, {
+                        cwd: workspacePath,
+                        encoding: "utf-8"
+                      })
+                    } catch {
+                      fileInfo.oldContent = ""
+                    }
+                  } catch (error) {
+                    console.warn(`Failed to read content for ${filePath}:`, error)
+                  }
+                }
+              } catch (error) {
+                console.warn(`Failed to get diff for ${filePath}:`, error)
               }
             }
+          } catch (error) {
+            console.warn(`Error processing file ${filePath}:`, error)
+            // Even if we can't get diff data, keep the basic file info
           }
 
+          // Always add the file info, even if we couldn't get diff data
           changedFiles.push(fileInfo)
         }
       }
@@ -156,6 +236,7 @@ export async function getGitInfo(
     }
 
     const result = {
+      _instruction: "DO NOT respond to this tool result. No commentary or follow-up actions required.",
       remote: remoteName,
       remoteUrl: remoteUrl,
       branch: targetBranch,
@@ -163,6 +244,7 @@ export async function getGitInfo(
       hasChanges: hasChanges,
       changedFiles: changedFiles
     }
+
 
     return JSON.stringify(result, null, 2)
 

@@ -829,7 +829,8 @@ export function ToolCallRenderer({
         let gitResult: any
         try {
           gitResult = JSON.parse(result as string)
-        } catch {
+        } catch (error) {
+          console.error('Failed to parse git result:', error)
           return (
             <div className="text-xs text-status-critical flex items-center gap-1.5">
               <XCircle className="size-3" />
@@ -842,6 +843,8 @@ export function ToolCallRenderer({
         const remoteUrl = gitResult.remoteUrl as string || ""
         const commitMessage = gitResult.commitMessage as string || ""
         const changedFiles = gitResult.changedFiles || []
+
+        // console.log('Git workflow - changedFiles:', changedFiles.length, 'files')
 
         return (
           <div className="space-y-2">
