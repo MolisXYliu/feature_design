@@ -44,7 +44,8 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   execute: Terminal,
   write_todos: ListTodo,
   task: GitBranch,
-  git_push: GitBranch
+  git_push: GitBranch,
+  git_workflow: GitBranch
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -816,10 +817,31 @@ export function ToolCallRenderer({
 
       case "git_workflow": {
         // Git workflow operation with GitFileOperationPrompt for display
-        const gitResult = JSON.parse(result)
+        if (!result || typeof result !== 'string') {
+          return (
+            <div className="text-xs text-status-critical flex items-center gap-1.5">
+              <XCircle className="size-3" />
+              <span>Git workflow error: Invalid result</span>
+            </div>
+          )
+        }
+
+        let gitResult: any
+        try {
+          gitResult = JSON.parse(result as string)
+        } catch {
+          return (
+            <div className="text-xs text-status-critical flex items-center gap-1.5">
+              <XCircle className="size-3" />
+              <span>Git workflow error: Invalid JSON result</span>
+            </div>
+          )
+        }
+
         const branch = gitResult.branch as string || ""
         const remoteUrl = gitResult.remoteUrl as string || ""
         const commitMessage = gitResult.commitMessage as string || ""
+        const changedFiles = gitResult.changedFiles || []
 
         return (
           <div className="space-y-2">
@@ -831,6 +853,7 @@ export function ToolCallRenderer({
               remoteUrl={remoteUrl}
               branch={branch}
               commitmessage={commitMessage}
+              changedFiles={changedFiles}
               operation="git_workflow"
               operationId={toolCall.id}
               onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}

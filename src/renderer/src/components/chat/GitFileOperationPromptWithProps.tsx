@@ -1,14 +1,24 @@
 import { useState, useEffect, useMemo } from "react"
-import { GitBranch, Play, Check, X, Clock } from "lucide-react"
+import { GitBranch, Play, Check, X, Clock, FileText, ChevronDown, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
+import { DiffDisplay } from "./ToolCallRenderer"
+
+interface ChangedFile {
+  path: string
+  status: string
+  oldContent?: string
+  newContent?: string
+  diff?: string
+}
 
 interface GitFileOperationPromptWithPropsProps {
   operation: string // 'write_file' or 'edit_file'
   remoteUrl: string // Git远程仓库URL，从props传入
   branch: string // Git分支，从props传入
   commitmessage: string // 默认提交信息，从props传入，支持编辑
+  changedFiles?: ChangedFile[] // 修改的文件列表
   onSkip?: () => void
   operationId?: string // 操作ID，用于唯一标识本次操作
 }
@@ -18,6 +28,7 @@ export function GitFileOperationPromptWithProps({
   remoteUrl,
   branch,
   commitmessage,
+  changedFiles = [],
   onSkip,
   operationId
 }: GitFileOperationPromptWithPropsProps) {
@@ -39,6 +50,7 @@ export function GitFileOperationPromptWithProps({
   }, [operationId, operation])
 
   const [showGitOptions, setShowGitOptions] = useState(false)
+  const [showChangedFiles, setShowChangedFiles] = useState(false)
   // 使用props传入的commitmessage作为默认值
   const [commitMessage, setCommitMessage] = useState(commitmessage || "")
   const [isExecuting, setIsExecuting] = useState(false)
@@ -283,6 +295,53 @@ export function GitFileOperationPromptWithProps({
             </div>
           )}
         </div>
+
+        {/* 修改文件列表 */}
+        {changedFiles && changedFiles.length > 0 && (
+          <div className="space-y-2">
+            <button
+              onClick={() => setShowChangedFiles(!showChangedFiles)}
+              className="flex items-center gap-2 text-xs font-medium text-status-info hover:text-status-info/80 transition-colors"
+            >
+              {showChangedFiles ? (
+                <ChevronDown className="size-3" />
+              ) : (
+                <ChevronRight className="size-3" />
+              )}
+              <FileText className="size-3" />
+              修改的文件 ({changedFiles.length})
+            </button>
+
+            {showChangedFiles && (
+              <div className="space-y-3 pl-4 border-l border-border/50">
+                {changedFiles.map((file, index) => (
+                  <div key={index} className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <FileText className="size-3 text-muted-foreground" />
+                      <span className="font-mono font-medium">{file.path}</span>
+                      <Badge
+                        variant={file.status === 'added' ? 'nominal' : file.status === 'deleted' ? 'critical' : 'outline'}
+                        className="text-xs"
+                      >
+                        {file.status}
+                      </Badge>
+                    </div>
+
+                    {(file.oldContent !== undefined || file.newContent !== undefined || file.diff) && (
+                      <div className="ml-4">
+                        <DiffDisplay
+                          diff={file.diff}
+                          oldValue={file.oldContent}
+                          newValue={file.newContent}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 提交信息编辑 */}
