@@ -163,77 +163,7 @@ export function GitFileOperationPromptWithProps({
     setExecutionResult(null)
 
     // 使用预览时获取的仓库路径，或者重新获取
-    let gitRepoPath = repoPath
-    if (!gitRepoPath) {
-      try {
-        // 首先尝试使用当前工作目录获取Git仓库路径
-        gitRepoPath = (await window.electron.ipcRenderer.invoke(
-          "execute-git-command",
-          "git rev-parse --show-toplevel"
-        )) as string
-        gitRepoPath = gitRepoPath.trim()
-        console.log(`使用当前工作目录Git仓库路径: ${gitRepoPath}`)
-        setRepoPath(gitRepoPath)
-      } catch (error) {
-        // 如果当前工作目录不是Git仓库，尝试从文件路径查找
-        console.warn("当前工作目录不是Git仓库，尝试从文件路径查找:", error)
-
-        if (changedFiles && changedFiles.length > 0) {
-          const firstFilePath = changedFiles[0].path
-
-          // 获取文件所在目录（处理相对路径和绝对路径）
-          let fileDir: string
-          if (firstFilePath.startsWith('/')) {
-            // 绝对路径，直接获取目录
-            fileDir = firstFilePath.includes('/')
-              ? firstFilePath.substring(0, firstFilePath.lastIndexOf('/'))
-              : '/'
-          } else {
-            // 相对路径，先获取当前工作目录
-            try {
-              const cwd = (await window.electron.ipcRenderer.invoke(
-                "execute-git-command",
-                "pwd"
-              )) as string
-              const fileAbsolutePath = `${cwd.trim()}/${firstFilePath}`
-              fileDir = fileAbsolutePath.includes('/')
-                ? fileAbsolutePath.substring(0, fileAbsolutePath.lastIndexOf('/'))
-                : cwd.trim()
-            } catch (pwdError) {
-              console.warn("无法获取当前工作目录:", pwdError)
-              // 最后尝试使用相对目录
-              fileDir = firstFilePath.includes('/')
-                ? firstFilePath.substring(0, firstFilePath.lastIndexOf('/'))
-                : '.'
-            }
-          }
-
-          try {
-            gitRepoPath = (await window.electron.ipcRenderer.invoke(
-              "execute-git-command",
-              `git -C "${fileDir}" rev-parse --show-toplevel`
-            )) as string
-            gitRepoPath = gitRepoPath.trim()
-            console.log(`Git仓库路径: ${gitRepoPath} (基于文件: ${firstFilePath}, 文件目录: ${fileDir})`)
-            setRepoPath(gitRepoPath)
-          } catch (dirError) {
-            console.error(`文件目录 ${fileDir} 不是Git仓库:`, dirError)
-            const errorMsg = `文件 ${firstFilePath} 所在目录不是Git仓库。\n\n请确保:\n1. 当前工作目录是Git仓库\n2. 文件路径 "${firstFilePath}" 在Git仓库中\n3. 已执行 'git init' 初始化仓库`
-            setExecutionResult({ success: false, output: errorMsg })
-            setIsExecuting(false)
-            return
-          }
-        } else {
-          // 既没有当前工作目录的Git仓库，也没有文件信息
-          const errorMsg = "无法确定Git仓库路径。\n\n请确保:\n1. 当前工作目录是Git仓库\n2. 已执行 'git init' 初始化仓库"
-          console.error(errorMsg)
-          setExecutionResult({ success: false, output: errorMsg })
-          setIsExecuting(false)
-          return
-        }
-      }
-    }
-
+    let gitRepoPath = workspacePath
     const commands = [
       `git -C "${gitRepoPath}" add .`,
       `git -C "${gitRepoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
