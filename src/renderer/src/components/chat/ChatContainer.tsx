@@ -1142,7 +1142,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     <button
                       type="button"
                       title="点击打开设置"
-                      onClick={() => setShowCustomizeView(true)}
+                      onClick={() => setShowCustomizeView(true, "sandbox")}
                       className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
                     >
                       <Zap className="size-3" />

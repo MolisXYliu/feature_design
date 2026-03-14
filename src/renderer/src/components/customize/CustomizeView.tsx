@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
@@ -15,8 +15,16 @@ import { SandboxPanel } from "./SandboxPanel"
 type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
 
 export function CustomizeView(): React.JSX.Element {
-  const { setShowCustomizeView } = useAppStore()
-  const [activeTab, setActiveTab] = useState<CustomizeTab>("skills")
+  const { setShowCustomizeView, customizeInitialTab } = useAppStore()
+  const [activeTab, setActiveTab] = useState<CustomizeTab>(
+    (customizeInitialTab as CustomizeTab) || "skills"
+  )
+
+  useEffect(() => {
+    if (customizeInitialTab) {
+      setActiveTab(customizeInitialTab as CustomizeTab)
+    }
+  }, [customizeInitialTab])
 
   return (
     <div className="flex h-full overflow-hidden bg-background">

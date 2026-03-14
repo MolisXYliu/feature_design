@@ -26,6 +26,7 @@ interface AppState {
 
   // Customize view state
   showCustomizeView: boolean
+  customizeInitialTab: string | null
 
   // Thread actions
   loadThreads: () => Promise<void>
@@ -56,7 +57,7 @@ interface AppState {
   setShowSubagentsInKanban: (show: boolean) => void
 
   // Customize actions
-  setShowCustomizeView: (show: boolean) => void
+  setShowCustomizeView: (show: boolean, tab?: string) => void
 
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
@@ -76,6 +77,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showKanbanView: false,
   showSubagentsInKanban: true,
   showCustomizeView: false,
+  customizeInitialTab: null,
   pluginVersion: 0,
 
   // Thread actions
@@ -193,11 +195,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ showSubagentsInKanban: show })
   },
 
-  setShowCustomizeView: (show: boolean) => {
+  setShowCustomizeView: (show: boolean, tab?: string) => {
     if (show) {
-      set({ showCustomizeView: true, showKanbanView: false })
+      set({ showCustomizeView: true, showKanbanView: false, customizeInitialTab: tab ?? null })
     } else {
-      set({ showCustomizeView: false })
+      set({ showCustomizeView: false, customizeInitialTab: null })
     }
   },
 
