@@ -38,7 +38,11 @@ export async function getGitInfo(
   try {
     // Check if we're in a git repository
     if (!existsSync(path.join(workspacePath, ".git"))) {
-      return "Not a git repository"
+      return JSON.stringify({
+        message:"Not a git repository",
+        workspacePath,
+        error:true
+      })
     }
 
     // Get current branch if not specified
@@ -109,7 +113,7 @@ export async function getGitInfo(
           }
 
           const fileInfo: any = {
-            path: filePath,
+            path: path.join(workspacePath, filePath),
             status: getStatusDescription(statusCode)
           }
 
@@ -128,8 +132,8 @@ export async function getGitInfo(
                   })
                   fileInfo.oldContent = ""
                   fileInfo.newContent = newContent
-                  const lines = newContent.split('\n')
-                  fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => '+' + line).join('\n')}`
+                  // const lines = newContent.split('\n')
+                  // fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => '+' + line).join('\n')}`
                 }
               } catch (error) {
                 console.warn(`Failed to read new file ${filePath}:`, error)
@@ -143,8 +147,8 @@ export async function getGitInfo(
                 })
                 fileInfo.oldContent = oldContent
                 fileInfo.newContent = ""
-                const lines = oldContent.split('\n')
-                fileInfo.diff = `--- a/${filePath}\n+++ /dev/null\n@@ -1,${lines.length} +0,0 @@\n${lines.map(line => '-' + line).join('\n')}`
+                // const lines = oldContent.split('\n')
+                // fileInfo.diff = `--- a/${filePath}\n+++ /dev/null\n@@ -1,${lines.length} +0,0 @@\n${lines.map(line => '-' + line).join('\n')}`
               } catch (error) {
                 console.warn(`Failed to get old content for deleted file ${filePath}:`, error)
               }
@@ -175,7 +179,7 @@ export async function getGitInfo(
                 }
 
                 if (diffOutput.trim()) {
-                  fileInfo.diff = diffOutput
+                  // fileInfo.diff = diffOutput
 
                   // Get old and new content
                   try {
@@ -277,4 +281,3 @@ function getStatusDescription(statusCode: string): string {
 
   return statusMap[statusCode] || 'unknown'
 }
-

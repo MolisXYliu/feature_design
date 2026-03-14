@@ -67,12 +67,22 @@ export function GitFileOperationPromptWithProps({
   // 添加命令预览状态
   const [showCommandPreview, setShowCommandPreview] = useState(false)
   const [previewCommands, setPreviewCommands] = useState<Array<{command: string, description: string}>>([])
-  const [repoPath, setRepoPath] = useState("")
+  // 每条命令的用户确认状态
+  const [confirmedCommands, setConfirmedCommands] = useState<Set<number>>(new Set())
 
   // 检查当前操作是否已提交
   const [isCurrentOperationCommitted, setIsCurrentOperationCommitted] = useState(false)
   const [hasFileCommitHistory, setHasFileCommitHistory] = useState(false)
   const [latestCommitRecord, setLatestCommitRecord] = useState<CommitRecord | null>(null)
+
+
+  const gitRepoPath = useMemo(()=>{
+    // 根据文件路径确定正确的Git仓库根目录
+    const filePath = changedFiles?.length ? changedFiles[0]?.path : ''
+    const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || ''
+    console.log(workspacePath, 'workspacePath....')
+    return fileDir || workspacePath
+  },[changedFiles, workspacePath])
 
   // 判断是否有远程仓库
   const hasRemote = Boolean(remoteUrl && remoteUrl.trim())
@@ -130,7 +140,7 @@ export function GitFileOperationPromptWithProps({
   const generateCommandPreview = async () => {
     try {
       // 根据修改的文件获取Git仓库根目录
-      let gitRepoPath = workspacePath
+      // let gitRepoPath = workspacePath
 
       const commands = [
         {
@@ -152,18 +162,23 @@ export function GitFileOperationPromptWithProps({
 
       setPreviewCommands(commands)
       setShowCommandPreview(true)
+      setConfirmedCommands(new Set()) // 重置确认状态
     } catch (error) {
       console.error("无法生成命令预览:", error)
       setExecutionResult({ success: false, output: "无法生成命令预览" })
     }
   }
 
+  useEffect(() => {
+    generateCommandPreview()
+  }, [commitMessage, cardNumber, gitRepoPath])
+
   const executeGitCommands = async () => {
     setIsExecuting(true)
     setExecutionResult(null)
 
     // 使用预览时获取的仓库路径，或者重新获取
-    let gitRepoPath = workspacePath
+    // let gitRepoPath = workspacePath
     const commands = [
       `git -C "${gitRepoPath}" add .`,
       `git -C "${gitRepoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
@@ -247,7 +262,7 @@ export function GitFileOperationPromptWithProps({
   }
 
   // 如果当前操作已提交，显示已提交状态
-  if (isCurrentOperationCommitted && !showGitOptions) {
+  if (isCurrentOperationCommitted) {
     // 获取当前操作的提交记录
     const currentRecord = GitCommitTracker.getOperationCommitRecord(currentOperationId)
 
@@ -455,6 +470,11 @@ export function GitFileOperationPromptWithProps({
               </Badge>
             </div>
           )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">仓库:</span>
+            <span className="font-mono text-xs truncate">{gitRepoPath}</span>
+          </div>
         </div>
 
 
@@ -462,7 +482,7 @@ export function GitFileOperationPromptWithProps({
 
       {/* 提交信息编辑 */}
       <div className="space-y-2">
-        <div className="text-xs font-medium">提交信息:</div>
+        <div className="text-xs font-medium">* 提交信息:</div>
         <textarea
           value={commitMessage}
           onChange={(e) => setCommitMessage(e.target.value)}
@@ -475,7 +495,7 @@ export function GitFileOperationPromptWithProps({
 
       {/* 卡片编号 */}
       <div className="space-y-2">
-        <div className="text-xs font-medium">卡片编号:</div>
+        <div className="text-xs font-medium">* 卡片编号:</div>
         <input
           type="text"
           value={cardNumber}
@@ -488,44 +508,60 @@ export function GitFileOperationPromptWithProps({
 
       {/* 命令预览按钮和显示区域 */}
       <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={generateCommandPreview}
-            disabled={isExecuting || !commitMessage.trim() || !cardNumber.trim()}
-            className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <FileText className="size-3" />
-            预览Git命令
-          </button>
-          {showCommandPreview && (
-            <button
-              onClick={() => setShowCommandPreview(false)}
-              className="px-2 py-1 text-xs border border-border rounded hover:bg-background-interactive transition-colors"
-            >
-              隐藏预览
-            </button>
-          )}
-        </div>
-
-        {showCommandPreview && previewCommands.length > 0 && (
+        {previewCommands.length > 0 && (
           <div className="bg-background/50 border border-border rounded p-3 space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">即将执行的Git命令:</div>
+            <div className="text-xs font-medium text-muted-foreground">即将执行的Git命令（请逐条确认）:</div>
             <div className="space-y-2">
-              {previewCommands.map((cmd, index) => (
-                <div key={index} className="space-y-1">
-                  <div className="text-xs font-medium text-foreground">
-                    {index + 1}. {cmd.description}
+              {previewCommands.map((cmd, index) => {
+                const isConfirmed = confirmedCommands.has(index)
+                return (
+                  <div key={index} className={cn(
+                    "space-y-1 border rounded p-2 transition-colors",
+                    isConfirmed
+                      ? "border-status-nominal/40 bg-status-nominal/5"
+                      : "border-border"
+                  )}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-medium text-foreground">
+                        {index + 1}. {cmd.description}
+                      </div>
+                      <button
+                        onClick={() => {
+                          setConfirmedCommands(prev => {
+                            const next = new Set(prev)
+                            if (next.has(index)) {
+                              next.delete(index)
+                            } else {
+                              next.add(index)
+                            }
+                            return next
+                          })
+                        }}
+                        disabled={isExecuting}
+                        className={cn(
+                          "flex items-center gap-1 px-2 py-0.5 text-xs rounded border transition-colors shrink-0",
+                          isConfirmed
+                            ? "bg-status-nominal text-background border-status-nominal hover:bg-status-nominal/80"
+                            : "border-border hover:bg-background-interactive"
+                        )}
+                      >
+                        {isConfirmed ? <Check className="size-3" /> : <div className="size-3 rounded border border-current" />}
+                        {isConfirmed ? "已确认" : "确认"}
+                      </button>
+                    </div>
+                    <div className="bg-muted p-2 rounded">
+                      <code className="text-xs font-mono text-foreground break-all">
+                        {cmd.command}
+                      </code>
+                    </div>
                   </div>
-                  <div className="bg-muted p-2 rounded">
-                    <code className="text-xs font-mono text-foreground break-all">
-                      {cmd.command}
-                    </code>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
             <div className="text-xs text-muted-foreground mt-2">
-              💡 请确认上述命令无误后，点击"确认提交"执行
+              {confirmedCommands.size < previewCommands.length
+                ? `💡 还需确认 ${previewCommands.length - confirmedCommands.size} 条命令后才能提交`
+                : "✅ 所有命令已确认，可以点击【确认提交】执行"}
             </div>
           </div>
         )}
@@ -639,6 +675,7 @@ export function GitFileOperationPromptWithProps({
             !cardNumber.trim() ||
             !showCommandPreview ||
             previewCommands.length === 0 ||
+            confirmedCommands.size < previewCommands.length ||
             executionResult?.success === true
           }
           className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -659,8 +696,8 @@ export function GitFileOperationPromptWithProps({
           <span className="text-xs text-amber-600">⚠️ 仅本地提交 (无远程仓库)</span>
         )}
 
-        {!showCommandPreview && (
-          <span className="text-xs text-blue-600">💡 请先预览Git命令</span>
+        {showCommandPreview && confirmedCommands.size < previewCommands.length && (
+          <span className="text-xs text-blue-600">💡 请逐条确认所有Git命令后再提交</span>
         )}
       </div>
     </div>

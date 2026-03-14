@@ -15,7 +15,8 @@ function getToolCallSummary(toolCall: { name: string; args?: Record<string, unkn
     glob: "查找文件",
     grep: "搜索内容",
     write_todos: "更新任务",
-    task: "子任务执行"
+    task: "子任务执行",
+    git_workflow:"git代码批量提交（点击展开）"
   }
 
   const label = toolLabels[toolCall.name] || toolCall.name
