@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
+import { cn } from "@/lib/utils"
 import { useCurrentThread, useThreadStream } from "@/lib/thread-context"
 import { ModelSwitcher } from "./ModelSwitcher"
 import { WorkspacePicker } from "./WorkspacePicker"
@@ -94,6 +95,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
+  const [glowVisible, setGlowVisible] = useState(false)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
@@ -159,6 +161,17 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       loadingMessageCountRef.current = currentMessageCount
     }
   }, [isLoading, streamData.messages.length])
+
+  // Apple Intelligence glow: loading 时显示，淡出由 CSS transition + onTransitionEnd 控制
+  useEffect(() => {
+    if (isLoading) {
+      setGlowVisible(true)
+      return
+    }
+    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
+    const timer = setTimeout(() => setGlowVisible(false), 3000)
+    return () => clearTimeout(timer)
+  }, [isLoading])
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "reject" | "edit"): Promise<void> => {
@@ -1093,27 +1106,49 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onCompositionStart={() => {
-                  isComposingRef.current = true
-                }}
-                onCompositionEnd={() => {
-                  isComposingRef.current = false
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="输入消息..."
-                disabled={isLoading}
-                className="flex-1 min-w-0 resize-none rounded-xl border border-border bg-white px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 shadow-sm"
-                rows={1}
-                style={{ minHeight: "48px", maxHeight: "200px" }}
-              />
+              <div className="relative flex-1 min-w-0 flex">
+                {glowVisible && (
+                  <div
+                    className={cn('siri-bg-glow rounded-xl', !isLoading && 'siri-bg-glow-out')}
+                    // 只响应 siri-fade-out 结束，过滤掉 siri-fade-in 和 ::before 的 siri-spin（infinite 不触发）
+                    onAnimationEnd={(e) => { if (e.animationName === 'siri-fade-out' && e.target === e.currentTarget && !isLoading) setGlowVisible(false) }}
+                  />
+                )}
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onCompositionStart={() => {
+                    isComposingRef.current = true
+                  }}
+                  onCompositionEnd={() => {
+                    isComposingRef.current = false
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="输入消息..."
+                  disabled={isLoading}
+                  className={cn(
+                    "relative z-[1] flex-1 resize-none rounded-xl border border-border",
+                    "px-4 py-3 text-sm placeholder:text-muted-foreground",
+                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 shadow-sm",
+                    "transition-colors duration-300",
+                    glowVisible ? "bg-white/80" : "bg-white"
+                  )}
+                  rows={1}
+                  style={{ minHeight: "48px", maxHeight: "200px" }}
+                />
+              </div>
               <div className="flex items-center justify-center shrink-0 h-12">
                 {isLoading ? (
-                  <Button type="button" variant="ghost" size="icon" onClick={handleCancel}>
-                    <Square className="size-4" />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="icon"
+                    onClick={handleCancel}
+                    aria-label="停止生成"
+                    className="rounded-md shadow-sm"
+                  >
+                    <Square className="size-3.5 fill-current" />
                   </Button>
                 ) : (
                   <Button

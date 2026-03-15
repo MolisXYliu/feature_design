@@ -592,3 +592,81 @@
     background-position: 50% 0;
   }
 }
+
+/* Apple Intelligence 风格背景光晕 */
+@property --siri-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes siri-spin {
+  to { --siri-angle: 360deg; }
+}
+
+@keyframes siri-fade-in {
+  from { opacity: 0; }
+  to { opacity: 0.25; }
+}
+
+@keyframes siri-breathe {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.45; }
+}
+
+@keyframes siri-fade-out {
+  from { opacity: 0.35; }
+  to { opacity: 0; }
+}
+
+.siri-bg-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+  opacity: 0;
+  contain: layout paint;
+}
+
+.siri-bg-glow:not(.siri-bg-glow-out) {
+  animation: siri-fade-in 0.6s ease-out forwards, siri-breathe 3s ease-in-out 0.6s infinite;
+}
+
+.siri-bg-glow::before {
+  content: "";
+  position: absolute;
+  inset: -80%;
+  background: conic-gradient(
+    from var(--siri-angle) at 50% 50%,
+    #BC82F3,
+    #5f2bf6,
+    #0855ff,
+    #06b6d4,
+    #f59e0b,
+    #f652bb,
+    #FF6778,
+    #C686FF,
+    #BC82F3
+  );
+  filter: blur(40px);
+  animation: siri-spin 4s linear infinite;
+}
+
+.siri-bg-glow-out {
+  animation: siri-fade-out 2s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .siri-bg-glow::before {
+    animation: none;
+  }
+  .siri-bg-glow:not(.siri-bg-glow-out) {
+    animation: none;
+    opacity: 0.3;
+  }
+  .siri-bg-glow-out {
+    animation: none;
+    opacity: 0;
+  }
+}
