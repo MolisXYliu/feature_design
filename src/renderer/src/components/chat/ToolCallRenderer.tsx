@@ -31,6 +31,7 @@ interface ToolCallRendererProps {
   result?: string | unknown
   isError?: boolean
   needsApproval?: boolean
+  showApprovalButtons?: boolean
   onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
 }
 
@@ -494,6 +495,7 @@ export function ToolCallRenderer({
   result,
   isError,
   needsApproval,
+  showApprovalButtons = true,
   onApprovalDecision
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -936,7 +938,7 @@ export function ToolCallRenderer({
 
         {needsApproval && (
           <Badge variant="warning" className="ml-auto shrink-0">
-            APPROVAL
+            待审批
           </Badge>
         )}
 
@@ -967,27 +969,29 @@ export function ToolCallRenderer({
 
           {/* Arguments */}
           <div>
-            <div className="text-section-header text-[10px] mb-1">ARGUMENTS</div>
+            <div className="text-section-header text-[10px] mb-1">参数</div>
             <pre className="text-xs font-mono bg-background p-2 rounded-sm overflow-auto max-h-24">
               {JSON.stringify(args, null, 2)}
             </pre>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2">
-            <button
-              className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
-              onClick={handleReject}
-            >
-              Reject
-            </button>
-            <button
-              className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-              onClick={handleApprove}
-            >
-              Approve & Run
-            </button>
-          </div>
+          {/* Action buttons - hidden when batch approval bar is used */}
+          {showApprovalButtons && (
+            <div className="flex items-center justify-end gap-2">
+              <button
+                className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                onClick={handleReject}
+              >
+                拒绝
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                onClick={handleApprove}
+              >
+                批准并执行
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
 

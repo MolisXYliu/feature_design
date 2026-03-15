@@ -168,7 +168,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
       try {
         await stream.submit(null, {
-          command: { resume: { decision } },
+          command: { resume: { decision, pendingCount: pendingApproval.pendingCount } },
           config: { configurable: { thread_id: threadId, model_id: currentModel } }
         })
       } catch (err) {
@@ -1051,9 +1051,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 />
               );
             })}
-            {/* todo 测试样式*/}
-            {/*<MarkdownPreview content={mockMd} />*/}
-            {/*<DisplayDiffTest/>*/}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">

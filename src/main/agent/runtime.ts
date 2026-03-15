@@ -106,7 +106,6 @@ When NOT to use the task tool:
  * Custom version of deepagents' createDeepAgent.
  *
  * Aligned with official 1.8.1 except:
- *   - `defaultInterruptOn` is always null — subagents run autonomously without HITL.
  *   - Accepts `summarizationTrigger` / `summarizationKeep` for explicit overrides
  *     (useful for custom models without a profile).
  */
@@ -222,7 +221,7 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
         defaultTools: tools,
         defaultMiddleware: subagentMiddleware,
         generalPurposeMiddleware: [...subagentMiddleware, ...skillsMiddlewareArray],
-        defaultInterruptOn: null, // FIX: subagents run without HITL
+        defaultInterruptOn: null,
         subagents: processedSubagents,
         generalPurposeAgent: true,
         systemPrompt: SEQUENTIAL_TASK_PROMPT

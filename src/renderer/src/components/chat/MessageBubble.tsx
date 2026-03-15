@@ -188,13 +188,18 @@ export function MessageBubble({
             {message.tool_calls!.map((toolCall, index) => {
               const toolId = toolCall.id || `${message.id}-${index}`;
               const result = toolResults?.get(toolCall.id);
-              const pendingId = pendingApproval?.tool_call?.id;
-              const needsApproval = Boolean(pendingId && pendingId === toolCall.id);
+              const pendingIds = pendingApproval?.pendingToolCallIds;
+              const needsApproval = Boolean(
+                pendingIds?.length
+                  ? pendingIds.includes(toolCall.id)
+                  : pendingApproval?.tool_call?.id && pendingApproval.tool_call.id === toolCall.id
+              );
               const isExpanded = expandedTools.has(toolId);
               const summary = getToolCallSummary(toolCall);
 
-              // 如果工具需要审批，使用原来的ToolCallRenderer
+              // 如果工具需要审批，使用原来的ToolCallRenderer（批量时隐藏按钮）
               if (needsApproval) {
+                const isBatch = (pendingApproval?.pendingCount ?? 1) > 1;
                 return (
                   <ToolCallRenderer
                     key={`${toolCall.id || `tc-${index}`}-${needsApproval ? "pending" : "done"}`}
@@ -202,7 +207,8 @@ export function MessageBubble({
                     result={result?.content}
                     isError={result?.is_error}
                     needsApproval={needsApproval}
-                    onApprovalDecision={needsApproval ? onApprovalDecision : undefined}
+                    showApprovalButtons={!isBatch}
+                    onApprovalDecision={onApprovalDecision}
                   />
                 );
               }
@@ -258,6 +264,30 @@ export function MessageBubble({
                 </div>
               )
             })}
+
+            {/* 批量审批栏 - 只在当前消息包含待审批工具调用时显示 */}
+            {pendingApproval && (pendingApproval.pendingCount ?? 1) > 1 && onApprovalDecision &&
+              message.tool_calls!.some(tc => pendingApproval.pendingToolCallIds?.includes(tc.id) || pendingApproval.tool_call?.id === tc.id) && (
+              <div className="rounded-sm border border-amber-500/50 bg-amber-500/5 px-3 py-2.5 flex items-center justify-between">
+                <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                  共 {pendingApproval.pendingCount} 个命令待审批
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onApprovalDecision("reject") }}
+                  >
+                    全部拒绝
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onApprovalDecision("approve") }}
+                  >
+                    全部批准并执行
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

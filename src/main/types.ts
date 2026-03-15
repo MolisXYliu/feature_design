@@ -14,7 +14,7 @@ export interface AgentInvokeParams {
 
 export interface AgentResumeParams {
   threadId: string
-  command: { resume?: { decision?: string } }
+  command: { resume?: { decision?: string; pendingCount?: number } }
   modelId?: string
 }
 
@@ -149,6 +149,8 @@ export interface HITLRequest {
   id: string
   tool_call: ToolCall
   allowed_decisions: HITLDecision["type"][]
+  pendingCount?: number
+  pendingToolCallIds?: string[]
 }
 
 export interface HITLDecision {
