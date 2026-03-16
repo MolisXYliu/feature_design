@@ -79,6 +79,8 @@ export function GitFileOperationPromptWithProps({
   const [previewCommands, setPreviewCommands] = useState<Array<{command: string, description: string}>>([])
   // 每条命令的用户确认状态
   const [confirmedCommands, setConfirmedCommands] = useState<Set<number>>(new Set())
+  // 分支确认状态
+  const [isBranchConfirmed, setIsBranchConfirmed] = useState(false)
 
   // 检查当前操作是否已提交
   const [isCurrentOperationCommitted, setIsCurrentOperationCommitted] = useState(false)
@@ -283,6 +285,14 @@ export function GitFileOperationPromptWithProps({
           <div className="flex-1 text-xs">
             <div className="font-medium text-green-800 dark:text-green-200">本次操作已提交到Git</div>
             <div className="text-green-700 dark:text-green-300 mt-1 space-y-1">
+              <div className="flex items-center gap-2">
+                <GitBranch className="size-3" />
+                <span>分支: <span className="font-mono font-medium">{branch || "unknown"}</span></span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileText className="size-3" />
+                <span>修改文件: <span className="font-medium">{changedFiles.length} 个</span></span>
+              </div>
               <div>提交信息: {currentRecord.commitMessage}</div>
               {currentRecord.cardNumber && (
                 <div>卡片编号: {currentRecord.cardNumber}</div>
@@ -465,6 +475,25 @@ export function GitFileOperationPromptWithProps({
             <Badge variant="secondary" className="text-xs font-mono">
               {branch || "unknown"}
             </Badge>
+            {isBranchConfirmed ? (
+              <button
+                onClick={() => setIsBranchConfirmed(false)}
+                disabled={isExecuting}
+                className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border bg-status-nominal text-background border-status-nominal hover:bg-status-nominal/80 transition-colors"
+              >
+                <Check className="size-3" />
+                分支已确认
+              </button>
+            ) : (
+              <button
+                onClick={() => setIsBranchConfirmed(true)}
+                disabled={isExecuting}
+                className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-amber-400 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors"
+              >
+                <div className="size-3 rounded border border-current" />
+                确认分支
+              </button>
+            )}
           </div>
 
           {hasRemote ? (
@@ -684,6 +713,7 @@ export function GitFileOperationPromptWithProps({
               isExecuting ||
               !commitMessage.trim() ||
               !cardNumber.trim() ||
+              !isBranchConfirmed ||
               executionResult?.success === true
             }
             className="flex items-center gap-1 px-3 py-1.5 text-xs bg-status-nominal text-background rounded hover:bg-status-nominal/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -720,6 +750,10 @@ export function GitFileOperationPromptWithProps({
 
         {!hasRemote && (
           <span className="text-xs text-amber-600">⚠️ 仅本地提交 (无远程仓库)</span>
+        )}
+
+        {!isBranchConfirmed && (
+          <span className="text-xs text-amber-600">⚠️ 请先核对分支</span>
         )}
 
         {showCommandPreview && confirmedCommands.size < previewCommands.length && (

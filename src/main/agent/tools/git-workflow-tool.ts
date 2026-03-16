@@ -28,100 +28,6 @@ export function createGitWorkflowTool(workspacePath: string) {
   )
 }
 
-const fetchGitInfo = async  (fileDir)=>{
-  try {
-    // 根据文件路径确定正确的Git仓库根目录
-    // const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || "."
-    const repoPath = (await window.electron.ipcRenderer.invoke(
-      "execute-git-command",
-      `git -C "${fileDir}" rev-parse --show-toplevel`
-    )) as string
-
-    // 获取当前分支（在正确的仓库中）
-    const branch = (await window.electron.ipcRenderer.invoke(
-      "execute-git-command",
-      `git -C "${repoPath.trim()}" rev-parse --abbrev-ref HEAD`
-    )) as string
-
-    // 获取远程信息（在正确的仓库中）
-    let remote = ""
-    let hasRemote = false
-    let remoteName = ""
-    try {
-      // 使用 git remote -v 获取远程仓库信息，这样更可靠
-      const remotesVerbose = (await window.electron.ipcRenderer.invoke(
-        "execute-git-command",
-        `git -C "${repoPath.trim()}" remote -v`
-      )) as string
-      console.log("Git remotes -v:", remotesVerbose)
-
-      if (remotesVerbose && remotesVerbose.trim()) {
-        // 解析输出，格式通常是: name url (fetch) 或 name url (push)
-        const lines = remotesVerbose.trim().split("\n")
-        const remoteMap = new Map<string, string>()
-
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/)
-          if (parts.length >= 2) {
-            const name = parts[0]
-            const url = parts[1]
-            remoteMap.set(name, url)
-          }
-        }
-
-        console.log("Parsed remotes:", Array.from(remoteMap.entries()))
-
-        if (remoteMap.size > 0) {
-          // 使用第一个远程仓库
-          const firstRemote = Array.from(remoteMap.entries())[0]
-          remoteName = firstRemote[0]
-          remote = firstRemote[1]
-          hasRemote = true
-          console.log("Selected remote:", remoteName, remote)
-        }
-      }
-    } catch (error) {
-      console.error("Failed to get remotes:", error)
-      // 没有远程仓库
-    }
-
-    // 获取仓库状态（在正确的仓库中）
-    const status = (await window.electron.ipcRenderer.invoke(
-      "execute-git-command",
-      `git -C "${repoPath.trim()}" status --porcelain`
-    )) as string
-
-    // 获取ahead/behind信息（在正确的仓库中）
-    let ahead = 0
-    let behind = 0
-    if (hasRemote && remoteName) {
-      try {
-        const aheadBehind = (await window.electron.ipcRenderer.invoke(
-          "execute-git-command",
-          `git -C "${repoPath.trim()}" rev-list --left-right --count HEAD...${remoteName}/${branch.trim()}`
-        )) as string
-        const [aheadStr, behindStr] = aheadBehind.trim().split("\t")
-        ahead = parseInt(aheadStr) || 0
-        behind = parseInt(behindStr) || 0
-      } catch {
-        // 无法获取ahead/behind信息
-      }
-    }
-
-    const gitInfo = {
-      branch: branch.trim(),
-      remote: remote.trim(),
-      hasRemote,
-      status: status.trim(),
-      ahead,
-      behind
-    }
-  } catch (error) {
-    console.error("获取Git信息失败:", error)
-  }
-}
-
-
 export async function getGitInfo(
   workspacePath: string,
   commitMessage: string,
@@ -160,7 +66,7 @@ export async function getGitInfo(
       }
     }
 
-    const remoteName = remote || "origin"
+    const remoteName = remote || ""
 
     // Get remote URL
     let remoteUrl: string
