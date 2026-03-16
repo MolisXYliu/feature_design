@@ -107,6 +107,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
 
+    // Redirect deepagents' virtual eviction paths (e.g. /large_tool_results/)
+    // to workspace-local dirs, since virtualMode=false treats "/" as absolute
+    // and writing to system root fails on macOS (SIP) and Windows (permissions).
+    // MUST run before caching _resolvePath below, so the cache captures the patched version.
+    this.patchResolvePath()
+
     // Cache parent's private fields once to avoid scattered (this as any) casts
     this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
     this._virtualMode = ((this as any).virtualMode as boolean) ?? false
@@ -118,11 +124,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if ((this as any).cwd === undefined) {
       console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
     }
-
-    // Redirect deepagents' virtual eviction paths (e.g. /large_tool_results/)
-    // to workspace-local dirs, since virtualMode=false treats "/" as absolute
-    // and writing to system root fails on macOS (SIP) and Windows (permissions).
-    this.patchResolvePath()
 
   }
 
