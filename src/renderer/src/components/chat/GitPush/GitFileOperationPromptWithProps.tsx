@@ -90,10 +90,10 @@ export function GitFileOperationPromptWithProps({
 
   const gitRepoPath = useMemo(()=>{
     // 根据文件路径确定正确的Git仓库根目录
-    const filePath = changedFiles?.length ? changedFiles[0]?.path : ''
-    const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || ''
-    console.log(workspacePath, 'workspacePath....')
-    return fileDir || workspacePath
+    // const filePath = changedFiles?.length ? changedFiles[0]?.path : ''
+    // const fileDir = filePath.replace(/[/\\][^/\\]*$/, "") || ''
+    // return fileDir || workspacePath
+    return workspacePath
   },[changedFiles, workspacePath])
 
   // 判断是否有远程仓库
