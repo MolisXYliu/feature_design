@@ -130,7 +130,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const queryLatestVersion = async ()=>{
    try {
-     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/version',{
+     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/cmbdevclaw/versions/list',{
        method: "GET",
        headers: {
          "Content-Type": "application/json"
