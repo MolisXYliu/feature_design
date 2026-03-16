@@ -989,15 +989,18 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       }
 
       // Resume from checkpoint by streaming with Command containing the decision
-      // The HITL middleware expects { decisions: [{ type: 'approve' | 'reject' | 'edit' }] }
+      // The HITL middleware expects one decision per pending tool call
       const decisionType = command?.resume?.decision || "approve"
-      const resumeValue = { decisions: [{ type: decisionType }] }
+      const pendingCount = command?.resume?.pendingCount ?? 1
+      const decisions = Array.from({ length: pendingCount }, () => ({ type: decisionType }))
+      const resumeValue = { decisions }
       const stream = await agent.stream(new Command({ resume: resumeValue }), config)
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
 
         const [mode, data] = chunk as unknown as [string, unknown]
+
         window.webContents.send(channel, {
           type: "stream",
           mode,

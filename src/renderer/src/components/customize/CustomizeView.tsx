@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
@@ -14,11 +14,17 @@ import { SandboxPanel } from "./SandboxPanel"
 
 type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
 
-const isWindows = navigator.userAgent.toLowerCase().includes("windows")
-
 export function CustomizeView(): React.JSX.Element {
-  const { setShowCustomizeView } = useAppStore()
-  const [activeTab, setActiveTab] = useState<CustomizeTab>("skills")
+  const { setShowCustomizeView, customizeInitialTab } = useAppStore()
+  const [activeTab, setActiveTab] = useState<CustomizeTab>(
+    (customizeInitialTab as CustomizeTab) || "skills"
+  )
+
+  useEffect(() => {
+    if (customizeInitialTab) {
+      setActiveTab(customizeInitialTab as CustomizeTab)
+    }
+  }, [customizeInitialTab])
 
   return (
     <div className="flex h-full overflow-hidden bg-background">
@@ -45,7 +51,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("skills")}
           >
             <Sparkles className="size-4 shrink-0" />
-            Skills
+            技能
           </button>
           <button
             className={cn(
@@ -57,7 +63,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("connectors")}
           >
             <Plug className="size-4 shrink-0" />
-            MCPs
+            MCP 连接器
           </button>
           <button
             className={cn(
@@ -69,7 +75,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("plugins")}
           >
             <Puzzle className="size-4 shrink-0" />
-            Plugins
+            插件
           </button>
           <button
             className={cn(
@@ -81,7 +87,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("scheduled")}
           >
             <Clock className="size-4 shrink-0" />
-            Scheduled
+            定时任务
           </button>
           <button
             className={cn(
@@ -93,7 +99,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("heartbeat")}
           >
             <HeartPulse className="size-4 shrink-0" />
-            Heartbeat
+            心跳监控
           </button>
           <button
             className={cn(
@@ -105,7 +111,7 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("memory")}
           >
             <Brain className="size-4 shrink-0" />
-            Memory
+            记忆管理
           </button>
           <button
             className={cn(
@@ -117,23 +123,21 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("market")}
           >
             <ShoppingBag className="size-4 shrink-0" />
-            Market
+            应用市场
           </button>
-          {isWindows && (
-            <button
-              className={cn(
-                "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
-                activeTab === "sandbox"
-                  ? "bg-muted font-medium"
-                  : "text-muted-foreground hover:bg-muted/50"
-              )}
-              onClick={() => setActiveTab("sandbox")}
-            >
-              <Shield className="size-4 shrink-0" />
-              Sandbox
-              <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
-            </button>
-          )}
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "sandbox"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("sandbox")}
+          >
+            <Shield className="size-4 shrink-0" />
+            沙盒环境
+            <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+          </button>
         </nav>
       </div>
 

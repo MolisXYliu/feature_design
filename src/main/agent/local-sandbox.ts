@@ -784,6 +784,43 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     LocalSandbox.activeProcesses.clear()
   }
 
+  // Use SID *S-1-1-0 instead of "Everyone" to avoid locale issues on non-English Windows.
+  private static readonly EVERYONE_SID = "*S-1-1-0"
+
+  /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done. */
+  private static grantSandboxWriteAcl(dir: string): Promise<void> {
+    // (OI)(CI) = inherit to files & subdirs so the restricted token can
+    // read/write/delete at any depth. Uses async spawn to avoid blocking
+    // the event loop on large repos (NTFS propagates inherited ACEs to
+    // all existing descendants, which can take tens of seconds).
+    return new Promise<void>((resolve) => {
+      const proc = spawn("icacls", [dir, "/grant", `${LocalSandbox.EVERYONE_SID}:(OI)(CI)(M)`], { stdio: "ignore" })
+      proc.on("exit", (code) => {
+        if (code !== 0) console.warn(`[LocalSandbox] icacls grant exited ${code} on ${dir}`)
+        resolve()
+      })
+      proc.on("error", (err) => {
+        console.warn(`[LocalSandbox] icacls grant error on ${dir}:`, err.message)
+        resolve()
+      })
+    })
+  }
+
+  /** Remove the Everyone ACE added by grantSandboxWriteAcl. Returns when done. */
+  private static revokeSandboxWriteAcl(dir: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const proc = spawn("icacls", [dir, "/remove:g", LocalSandbox.EVERYONE_SID], { stdio: "ignore" })
+      proc.on("exit", (code) => {
+        if (code !== 0) console.warn(`[LocalSandbox] icacls revoke exited ${code} on ${dir}`)
+        resolve()
+      })
+      proc.on("error", (err) => {
+        console.warn(`[LocalSandbox] icacls revoke error on ${dir}:`, err.message)
+        resolve()
+      })
+    })
+  }
+
   private static readonly SIGKILL_TIMEOUT_MS = 200
 
   /**
@@ -883,21 +920,25 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Uses restricted token + NTFS ACL for isolation (no admin required).
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
-    // Force UTF-8 output encoding for both cmd.exe and PowerShell.
-    // In sandbox (Constrained Language Mode), [Console]::OutputEncoding is
-    // blocked — use chcp 65001 which works in both cmd and PowerShell.
-    // Note: chcp only affects external-program stdout decoding; PowerShell
-    // cmdlet output still relies on $OutputEncoding, but CLM blocks most
-    // cmdlets anyway, so this is acceptable.
+    // Force UTF-8 for all output streams (stdout + stderr).
+    // - chcp 65001: sets console code page so external programs output UTF-8
+    // - [Console]::OutputEncoding: controls .NET stdout encoding (affects cmdlet output)
+    // - [Console]::InputEncoding: ensures stderr error messages use UTF-8 for paths
+    // - $OutputEncoding: controls how PS encodes strings sent to native commands
     const shellBase = path.basename(shell).replace(/\.exe$/i, "").toLowerCase()
+    const psUtf8Preamble = [
+      "chcp 65001 >$null",
+      "[Console]::OutputEncoding=[Console]::InputEncoding=[System.Text.Encoding]::UTF8",
+      "$OutputEncoding=[System.Text.Encoding]::UTF8"
+    ].join("; ")
     const effectiveCommand = shellBase === "cmd"
       ? `chcp 65001 >nul & ${command}`
       : shellBase === "pwsh" || shellBase === "powershell"
-        ? `chcp 65001 >$null; ${command}`
+        ? `${psUtf8Preamble}; ${command}`
         : command
 
     const sandboxArgs = [
@@ -907,7 +948,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       shell, ...shellFlags, effectiveCommand
     ]
 
-    return new Promise<ExecuteResponse>((resolve) => {
+    // Grant Everyone Modify ACL on writable roots so the restricted-token
+    // sandbox process can actually write to cwd and TMPDIR.
+    const aclDirs = [this.workingDir]
+    const tmpDir = process.env.TEMP || process.env.TMP
+    if (tmpDir && tmpDir !== this.workingDir) {
+      aclDirs.push(tmpDir)
+    }
+    await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
+
+    try {
+    return await new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
       let totalBytes = 0
@@ -1027,6 +1078,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         })
       })
     })
+    } finally {
+      await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
+    }
   }
 
   private executeOnce(

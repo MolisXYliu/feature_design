@@ -19,11 +19,15 @@ import {
   Database,
   Layers,
   Clock,
+  Notebook,
+  Megaphone,
+  Zap,
   Sparkles
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
+import { cn } from "@/lib/utils"
 import { useShallow } from "zustand/react/shallow"
 import { useCurrentThread, useThreadStream } from "@/lib/thread-context"
 import { ModelSwitcher } from "./ModelSwitcher"
@@ -104,6 +108,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [skillsLoading, setSkillsLoading] = useState(true)
   const [showAllGeneralSkills, setShowAllGeneralSkills] = useState(false)
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
+  const [showAllCustomSkills, setShowAllCustomSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
   // Skill creation human-confirmation state
   const [skillConfirmRequest, setSkillConfirmRequest] = useState<SkillConfirmRequest | null>(null)
@@ -114,11 +119,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const { setSkillGenerationPhase, appendSkillGenerationToken } = useAppStore(
     useShallow((s) => ({ setSkillGenerationPhase: s.setSkillGenerationPhase, appendSkillGenerationToken: s.appendSkillGenerationToken }))
   )
+  const [yoloMode, setYoloMode] = useState(false)
+  const [showCopyNotification, setShowCopyNotification] = useState(false)
+  const [glowVisible, setGlowVisible] = useState(false)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
+  const [latestVersion, setLatestVersion] = useState('');
 
-  const { threads, models, loadThreads, generateTitleForFirstMessage } = useAppStore()
+  const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
 
   // Get persisted thread state and actions from context
   const {
@@ -144,6 +153,36 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
+
+  const queryLatestVersion = async ()=>{
+   try {
+     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/version',{
+       method: "GET",
+       headers: {
+         "Content-Type": "application/json"
+         // Remove placeholder auth token for now
+       }
+     })
+     const data = await response.json()
+     setLatestVersion(data?.current?.version)
+   }catch (e){
+     console.log(e)
+   }
+  }
+
+  const needUpdateVersion=useMemo(()=>{
+    return  latestVersion !== __APP_VERSION__
+    // return false
+  },[latestVersion])
+
+  useEffect(() => {
+    queryLatestVersion()
+    const fetchYoloMode = (): void => {
+      window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
+    }
+    fetchYoloMode()
+    return window.api.sandbox.onChanged(fetchYoloMode)
+  }, [])
 
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
@@ -172,6 +211,17 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [isLoading, streamData.messages.length])
 
+  // Apple Intelligence glow: loading 时显示，淡出由 CSS transition + onTransitionEnd 控制
+  useEffect(() => {
+    if (isLoading) {
+      setGlowVisible(true)
+      return
+    }
+    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
+    const timer = setTimeout(() => setGlowVisible(false), 3000)
+    return () => clearTimeout(timer)
+  }, [isLoading])
+
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "reject" | "edit"): Promise<void> => {
       if (!pendingApproval || !stream) return
@@ -180,7 +230,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
       try {
         await stream.submit(null, {
-          command: { resume: { decision } },
+          command: { resume: { decision, pendingCount: pendingApproval.pendingCount } },
           config: { configurable: { thread_id: threadId, model_id: currentModel } }
         })
       } catch (err) {
@@ -447,8 +497,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         ])
         if (!mounted) return
         const disabledSet = new Set(disabledList)
-        const builtinOnly = loadedSkills.filter((s) => s.source === "project" && !disabledSet.has(s.name))
-        setSkills([...builtinOnly].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+        // Include both built-in (project) and custom (user) skills
+        const availableSkills = loadedSkills.filter((s) =>
+          (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
+        )
+        setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
       } catch (error) {
         console.error("[ChatContainer] Failed to load skills:", error)
         if (mounted) setSkills([])
@@ -530,6 +583,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const buildSkillPrompt = useCallback(
     (skill: SkillMetadata): string => {
       const skillId = getSkillId(skill)
+
+      // For custom skills, use the skill's description if available
+      if (skill.source === "user") {
+        const skillName = skill.name || skillId
+        return [
+          `请使用 ${skillName} 技能帮我处理相关任务。`,
+          "需求说明：<请补充>",
+          "输出：结果、关键改动、验证方式。"
+        ].join("\n")
+      }
+
+      // Existing prompt mapping for built-in skills
       const promptMap: Record<string, string> = {
         "algorithmic-art": [
           "请帮我生成一套算法艺术方案。",
@@ -687,6 +752,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const getSkillSummary = useCallback(
     (skill: SkillMetadata): string => {
       const skillId = getSkillId(skill)
+
+      // For custom skills, use the skill's name or description
+      if (skill.source === "user") {
+        return skill.name || skillId || "自定义技能"
+      }
+
+      // Built-in skill summaries
       const summaryMap: Record<string, string> = {
         "algorithmic-art": "生成艺术图案",
         "brand-guidelines": "统一品牌风格",
@@ -785,10 +857,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     [getSkillId, programmingSkillIds]
   )
 
-  const { generalSkills, programmingSkills } = useMemo(() => {
-    const general = skills.filter((skill) => !isProgrammingSkill(skill))
-    const programming = skills.filter(isProgrammingSkill)
-    return { generalSkills: general, programmingSkills: programming }
+  const { generalSkills, programmingSkills, customSkills } = useMemo(() => {
+    const builtInSkills = skills.filter((skill) => skill.source === "project")
+    const userSkills = skills.filter((skill) => skill.source === "user")
+
+    const general = builtInSkills.filter((skill) => !isProgrammingSkill(skill))
+    const programming = builtInSkills.filter(isProgrammingSkill)
+
+    return {
+      generalSkills: general,
+      programmingSkills: programming,
+      customSkills: userSkills
+    }
   }, [skills, isProgrammingSkill])
 
   const visibleGeneralSkillCards = useMemo(() => {
@@ -811,6 +891,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }))
   }, [showAllProgrammingSkills, programmingSkills, getSkillSummary, getSkillIcon])
 
+  const customSkillCards = useMemo(() => {
+    const source = showAllCustomSkills ? customSkills : customSkills.slice(0, 8)
+
+    return source.map((skill) => ({
+      skill,
+      label: getSkillSummary(skill),
+      icon: getSkillIcon(skill)
+    }))
+  }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
+
   const handleUseSkillPrompt = useCallback(
     (skill: SkillMetadata): void => {
       const prompt = buildSkillPrompt(skill)
@@ -825,6 +915,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     },
     [buildSkillPrompt, setInput]
   )
+
+  const handleCopyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setShowCopyNotification(true)
+        setTimeout(() => setShowCopyNotification(false), 2000)
+      },
+      (err) => console.error("Failed to copy text: ", err)
+    )
+  }
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -874,7 +974,21 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       )}
 
       {/* Skill generation progress is shown in the right panel's 代理 section */}
-
+      {/* Copy notification */}
+      {showCopyNotification && (
+        <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
+          <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm px-4 py-2 shadow-lg">
+            <div className="flex items-center gap-2 text-sm text-foreground">
+              <div className="size-4 rounded-full bg-green-500 flex items-center justify-center">
+                <svg className="size-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">
@@ -945,7 +1059,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               key={skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
-                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                              className=" group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                             >
                               <div className="flex items-center gap-3">
                                 <div
@@ -978,12 +1092,151 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </button>
                     )}
+                    {customSkillCards.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                          <span>我安装的技能</span>
+                          <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {customSkillCards.map(({ skill, label, icon }) => (
+                            <button
+                              key={skill.path}
+                              type="button"
+                              onClick={() => handleUseSkillPrompt(skill)}
+                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                  {icon}
+                                </div>
+                                <div className="text-xs text-foreground leading-5">{label}</div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {customSkills.length > 8 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllCustomSkills((prev) => !prev)}
+                            className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                          >
+                            {showAllCustomSkills ? (
+                              <>
+                                <ChevronUp className="size-3.5" />
+                                <span>收起</span>
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="size-3.5" />
+                                <span>展开更多（+{customSkills.length - 8}）</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                        帮助
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <button
+                          onClick={async () => {
+                            const instructionUrl = import.meta.env.VITE_INTRUCTION_URL;
+                            handleCopyToClipboard(instructionUrl);
+                          }}
+                          type="button"
+                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              <Notebook size={14} />
+                            </div>
+                            <div className="text-xs text-foreground leading-5">操作说明文档</div>
+                          </div>
+                        </button>
+
+                        {/*版本check*/}
+                        <button
+                          onClick={async () => {
+                            const viteappdownloadurl = import.meta.env.VITE_APP_DOWNLOAD_URL;
+                            handleCopyToClipboard(viteappdownloadurl);
+                          }}
+                          type="button"
+                          className={`group relative w-full rounded-xl ${
+                            needUpdateVersion
+                              ? 'border-red-400/60 bg-gradient-to-br from-red-50/90 to-red-100/70 hover:border-red-500 hover:from-red-100 hover:to-red-150/80 shadow-red-100/50'
+                              : 'group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors '
+                          } px-4 py-3.5 text-left transition-all duration-300 ease-out hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] backdrop-blur-sm`}
+                        >
+                          <div className="flex items-center gap-3.5">
+                            <div
+                              className={`${
+                                needUpdateVersion
+                                  ? 'bg-red-100 text-red-600 border-red-200 group-hover:bg-red-200 group-hover:text-red-700 group-hover:shadow-red-200/50'
+                                  : 'rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors'
+                              } rounded-lg border p-1 transition-all duration-300 shadow-sm group-hover:shadow-md`}>
+                              <Megaphone size={14} className="drop-shadow-sm" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className={`text-sm font-semibold leading-5 ${
+                                needUpdateVersion ? 'text-red-700' : ''
+                              } transition-colors duration-200`}>
+                                {needUpdateVersion? '有新版本！' : '版本更新'}
+                              </div>
+                            </div>
+                            {needUpdateVersion && (
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-sm"></div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 悬浮时的渐变覆盖层 */}
+                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none ${
+                            needUpdateVersion
+                              ? 'bg-gradient-to-br from-red-400/8 via-transparent to-red-500/6'
+                              : 'bg-gradient-to-br from-blue-400/8 via-transparent to-indigo-500/6'
+                          }`}></div>
+
+                          {/* 边框光效 */}
+                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-30 transition-opacity duration-300 pointer-events-none border ${
+                            needUpdateVersion ? 'border-red-300' : 'border-blue-300'
+                          } blur-sm`}></div>
+                        </button>
+
+
+                      </div>
+                      {customSkills.length > 8 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllCustomSkills((prev) => !prev)}
+                          className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                        >
+                          {showAllCustomSkills ? (
+                            <>
+                              <ChevronUp className="size-3.5" />
+                              <span>收起</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="size-3.5" />
+                              <span>展开更多（+{customSkills.length - 8}）</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             )}
             {displayMessages.map((message, index) => {
-              const previousMessage = index > 0 ? displayMessages[index - 1] : null
+              const previousMessage = index > 0 ? displayMessages[index - 1] : null;
 
               return (
                 <MessageBubble
@@ -994,15 +1247,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
                 />
-              )
+              );
             })}
-
-
-            {/* todo 测试样式*/}
-            {/*<MarkdownPreview content={mockMd} />*/}
-            {/*<DisplayDiffTest/>*/}
-
-
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
@@ -1015,7 +1261,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 {todos.length > 0 && <ChatTodos todos={todos} />}
               </div>
             )}
-
             {/* Error state */}
             {threadError && !isLoading && (
               <div className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-4">
@@ -1041,33 +1286,54 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
         </div>
       </ScrollArea>
-
       {/* Input */}
       <div className="p-4">
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onCompositionStart={() => {
-                  isComposingRef.current = true
-                }}
-                onCompositionEnd={() => {
-                  isComposingRef.current = false
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="输入消息..."
-                disabled={isLoading}
-                className="flex-1 min-w-0 resize-none rounded-xl border border-border bg-white px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 shadow-sm"
-                rows={1}
-                style={{ minHeight: "48px", maxHeight: "200px" }}
-              />
+              <div className="relative flex-1 min-w-0 flex">
+                {glowVisible && (
+                  <div
+                    className={cn('siri-bg-glow rounded-xl', !isLoading && 'siri-bg-glow-out')}
+                    // 只响应 siri-fade-out 结束，过滤掉 siri-fade-in 和 ::before 的 siri-spin（infinite 不触发）
+                    onAnimationEnd={(e) => { if (e.animationName === 'siri-fade-out' && e.target === e.currentTarget && !isLoading) setGlowVisible(false) }}
+                  />
+                )}
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onCompositionStart={() => {
+                    isComposingRef.current = true
+                  }}
+                  onCompositionEnd={() => {
+                    isComposingRef.current = false
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="输入消息..."
+                  disabled={isLoading}
+                  className={cn(
+                    "relative z-[1] flex-1 resize-none rounded-xl border border-border",
+                    "px-4 py-3 text-sm placeholder:text-muted-foreground",
+                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 shadow-sm",
+                    "transition-colors duration-300",
+                    glowVisible ? "bg-white/80" : "bg-white"
+                  )}
+                  rows={1}
+                  style={{ minHeight: "48px", maxHeight: "200px" }}
+                />
+              </div>
               <div className="flex items-center justify-center shrink-0 h-12">
                 {isLoading ? (
-                  <Button type="button" variant="ghost" size="icon" onClick={handleCancel}>
-                    <Square className="size-4" />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="icon"
+                    onClick={handleCancel}
+                    aria-label="停止生成"
+                    className="rounded-md shadow-sm"
+                  >
+                    <Square className="size-3.5 fill-current" />
                   </Button>
                 ) : (
                   <Button
@@ -1087,6 +1353,20 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 <ModelSwitcher threadId={threadId} />
                 <div className="w-px h-4 bg-border" />
                 <WorkspacePicker threadId={threadId} />
+                {yoloMode && (
+                  <>
+                    <div className="w-px h-4 bg-border" />
+                    <button
+                      type="button"
+                      title="点击打开设置"
+                      onClick={() => setShowCustomizeView(true, "sandbox")}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                    >
+                      <Zap className="size-3" />
+                      YOLO
+                    </button>
+                  </>
+                )}
               </div>
               {tokenUsage && (
                 <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} />

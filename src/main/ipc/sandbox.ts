@@ -1,5 +1,5 @@
 import { BrowserWindow, IpcMain } from "electron"
-import { getWindowsSandboxMode, setWindowsSandboxMode } from "../storage"
+import { getWindowsSandboxMode, setWindowsSandboxMode, getYoloMode, setYoloMode } from "../storage"
 
 function notifyChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -22,4 +22,14 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
       notifyChanged()
     }
   )
+
+  ipcMain.handle("sandbox:getYoloMode", async (): Promise<boolean> => {
+    return getYoloMode()
+  })
+
+  ipcMain.handle("sandbox:setYoloMode", async (_event, yolo: boolean): Promise<void> => {
+    if (typeof yolo !== "boolean") throw new Error(`Invalid yolo value: ${yolo}`)
+    setYoloMode(yolo)
+    notifyChanged()
+  })
 }

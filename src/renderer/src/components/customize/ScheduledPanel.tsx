@@ -330,11 +330,45 @@ export function ScheduledPanel(): React.JSX.Element {
           </ScrollArea>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-          <div className="text-center space-y-2">
-            <Clock className="size-8 mx-auto opacity-40" />
-            <p className="font-medium">定时任务</p>
-            <p className="text-xs">选择一个任务查看详情，或点击 + 创建新任务</p>
+        <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+          <div className="max-w-md space-y-6">
+            <div className="text-center space-y-3">
+              <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+                <Clock className="size-7 text-muted-foreground/60" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground/80">Scheduled 定时任务</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                定时任务让 AI 在指定时间自动执行操作。你只需写好提示词指令，选择执行频率，AI 就会在后台按时运行，完成后通过系统通知告知你结果。
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">支持的执行频率</p>
+                <p className="text-[13px] text-muted-foreground leading-relaxed">
+                  <span className="font-medium text-foreground/60">手动</span>：不自动执行，仅通过「立即运行」按钮手动触发。<br />
+                  <span className="font-medium text-foreground/60">每小时</span>：每小时自动执行一次。<br />
+                  <span className="font-medium text-foreground/60">每天 / 工作日 / 每周</span>：在指定时间点执行，「每周」还可选择具体是周几。适合日报生成、数据检查、定期提醒等周期性工作。
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">如何创建？</p>
+                <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>点击 <span className="font-medium text-foreground/60">+</span> 按钮，填写任务名称和描述</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>编写 AI 要执行的提示词指令，选择使用的模型和工作目录</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>选择执行频率和时间，保存即可</li>
+                  <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>你也可以在对话中直接让 AI 帮你创建定时任务</li>
+                </ul>
+              </div>
+
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium text-foreground/70">注意事项</p>
+                <p className="text-[13px] text-muted-foreground leading-relaxed">
+                  定时任务仅在电脑唤醒且应用运行时执行。任务运行期间可以随时点击「停止」中断。你可以在左侧列表中查看每个任务的上次执行状态和下次执行时间，也可以随时编辑或删除任务。
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}

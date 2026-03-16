@@ -15,25 +15,23 @@ import {
   File,
   Folder,
   Maximize2,
-  X,
-  Eye,
-  Copy,
-  FolderOpen as FolderOpenIcon
+  X
 } from "lucide-react"
 import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import { GitCommandExecutor } from "./GitCommandExecutor"
-import { GitFileOperationPrompt } from "./GitFileOperationPrompt"
+import { GitFileOperationPrompt } from "./GitPush/GitFileOperationPrompt"
 import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
+import { GitFileOperationPromptWithProps } from "@/components/chat/GitPush/GitFileOperationPromptWithProps"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
   result?: string | unknown
   isError?: boolean
   needsApproval?: boolean
+  showApprovalButtons?: boolean
   onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
 }
 
@@ -46,7 +44,9 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   grep: Search,
   execute: Terminal,
   write_todos: ListTodo,
-  task: GitBranch
+  task: GitBranch,
+  git_push: GitBranch,
+  git_workflow: GitBranch
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -58,7 +58,8 @@ const TOOL_LABELS: Record<string, string> = {
   grep: "Search Content",
   execute: "Execute Command",
   write_todos: "Update Tasks",
-  task: "Subagent Task"
+  task: "Subagent Task",
+  git_workflow: "Git Workflow (Add, Commit, Push)"
 }
 
 // Tools whose results are shown in the UI panels and don't need verbose display
@@ -414,7 +415,7 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     <ReactDiffViewer
       oldValue={oldValue || displayOldContent}
       newValue={newValue || displayNewContent}
-      splitView={true}
+      splitView={isFullscreen}
       hideLineNumbers={false}
       useDarkTheme={false}
       loadingElement={()=><div className={'text-center font-bold text-lg py-2'}>loading...</div>}
@@ -451,7 +452,7 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
               </span>
              <button
                onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-               className="text-[14px] cursor-pointer px-2 py-1 text-[10px] bg-background hover:bg-muted border border-border rounded transition-colors"
+               className="text-[10px] cursor-pointer px-2 py-1 bg-background hover:bg-muted border border-border rounded transition-colors"
                title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
              >
                {renderMode === "preview" ?  "显示全部代码" : "显示少量代码"}
@@ -535,6 +536,7 @@ export function ToolCallRenderer({
   result,
   isError,
   needsApproval,
+  showApprovalButtons = true,
   onApprovalDecision
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -571,6 +573,9 @@ export function ToolCallRenderer({
     if (args.pattern) return args.pattern as string
     if (args.query) return args.query as string
     if (args.glob) return args.glob as string
+    if (args.branch) return args.branch as string
+    if (args.remoteUrl) return args.remoteUrl as string
+    if (args.commitMessage) return (args.commitMessage as string).slice(0, 50)
     return null
   }
 
@@ -705,26 +710,27 @@ export function ToolCallRenderer({
         const command = args.command as string
 
         // Special handling for git diff commands
-        if (command && command.includes("git diff") && output.trim() && !output.includes('no output') ) {
-          if (isExpanded) {
-            return (
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>Git diff completed</span>
-              </div>
-            )
-          }
-          // Collapsed view - show diff preview
-          return (
-            <div className="space-y-2">
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>Git diff completed</span>
-              </div>
-              <DiffDisplay diff={output} />
-            </div>
-          )
-        }
+        // todo 暂时注释，看后续是否要放开
+        // if (command && command.includes("git diff") && output.trim() && !output.includes('no output') ) {
+        //   if (isExpanded) {
+        //     return (
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>Git diff completed</span>
+        //       </div>
+        //     )
+        //   }
+        //   // Collapsed view - show diff preview
+        //   return (
+        //     <div className="space-y-2">
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>Git diff completed</span>
+        //       </div>
+        //       <DiffDisplay diff={output} />
+        //     </div>
+        //   )
+        // }
 
         if (isExpanded) {
           return (
@@ -789,28 +795,29 @@ export function ToolCallRenderer({
         }
 
         // Check if this operation might need Git commit (any file operation)
-        if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
-          return (
-            <div className="space-y-2">
-              <div className={'overflow-scroll'}>
-                <DiffDisplay
-                  oldValue={args.old_string || ""}
-                  newValue={args.new_string  || ""}
-                />
-              </div>
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
-              </div>
-              <GitFileOperationPrompt
-                filePath={path}
-                operation={toolCall.name}
-                operationId={toolCall.id}
-                onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
-              />
-            </div>
-          )
-        }
+        // todo 暂时注释，看后续是否要放开，编辑文件导致的git提交
+        // if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
+        //   return (
+        //     <div className="space-y-2">
+        //       <div className={'overflow-scroll'}>
+        //         <DiffDisplay
+        //           oldValue={args.old_string || ""}
+        //           newValue={args.new_string  || ""}
+        //         />
+        //       </div>
+        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
+        //         <CheckCircle2 className="size-3" />
+        //         <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
+        //       </div>
+        //       <GitFileOperationPrompt
+        //         filePath={path}
+        //         operation={toolCall.name}
+        //         operationId={toolCall.id}
+        //         onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+        //       />
+        //     </div>
+        //   )
+        // }
 
         // Show confirmation message for file operations
         if (typeof result === "string" && result.trim()) {
@@ -849,6 +856,64 @@ export function ToolCallRenderer({
           <div className="text-xs text-status-nominal flex items-center gap-1.5">
             <CheckCircle2 className="size-3" />
             <span>Task completed</span>
+          </div>
+        )
+      }
+
+      case "git_workflow": {
+        // Git workflow operation with GitFileOperationPrompt for display
+        if (!result || typeof result !== 'string') {
+          return (
+            <div className="text-xs text-status-critical flex items-center gap-1.5">
+              <XCircle className="size-3" />
+              <span>Git workflow error: Invalid result</span>
+            </div>
+          )
+        }
+
+        let gitResult: any
+        try {
+          gitResult = JSON.parse(result as string)
+        } catch (error) {
+          console.error('Failed to parse git result:', error)
+          return (
+            <div className="text-xs text-status-critical flex items-center gap-1.5">
+              <XCircle className="size-3" />
+              <span>Git workflow error: Invalid JSON result</span>
+            </div>
+          )
+        }
+
+        const branch = gitResult.branch as string || ""
+        const remoteUrl = gitResult.remoteUrl as string || ""
+        const commitMessage = gitResult.commitMessage as string || ""
+        const changedFiles = gitResult.changedFiles || []
+        const workspacePath = gitResult.workspacePath || ""
+
+        const error = gitResult.error || ""
+        const message = gitResult.message || ""
+
+        if (error && message?.includes('Not a git repository')){
+          return <div className="text-sm text-status-critical space-y-3 my-4">
+            <div>当前工作台地址为：{workspacePath}</div>
+            <div>你需要：选择要git提交的仓库文件夹作为工作台地址</div>
+          </div>
+        }
+
+        // console.log('Git workflow - changedFiles:', changedFiles.length, 'files')
+
+        return (
+          <div className="space-y-2">
+            <GitFileOperationPromptWithProps
+              workspacePath={workspacePath}
+              remoteUrl={remoteUrl}
+              branch={branch}
+              commitmessage={commitMessage}
+              changedFiles={changedFiles}
+              operation="git_workflow"
+              operationId={toolCall.id}
+              onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+            />
           </div>
         )
       }
@@ -914,7 +979,7 @@ export function ToolCallRenderer({
 
         {needsApproval && (
           <Badge variant="warning" className="ml-auto shrink-0">
-            APPROVAL
+            待审批
           </Badge>
         )}
 
@@ -945,27 +1010,29 @@ export function ToolCallRenderer({
 
           {/* Arguments */}
           <div>
-            <div className="text-section-header text-[10px] mb-1">ARGUMENTS</div>
+            <div className="text-section-header text-[10px] mb-1">参数</div>
             <pre className="text-xs font-mono bg-background p-2 rounded-sm overflow-auto max-h-24">
               {safeStringify(args)}
             </pre>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2">
-            <button
-              className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
-              onClick={handleReject}
-            >
-              Reject
-            </button>
-            <button
-              className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-              onClick={handleApprove}
-            >
-              Approve & Run
-            </button>
-          </div>
+          {/* Action buttons - hidden when batch approval bar is used */}
+          {showApprovalButtons && (
+            <div className="flex items-center justify-end gap-2">
+              <button
+                className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                onClick={handleReject}
+              >
+                拒绝
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                onClick={handleApprove}
+              >
+                批准并执行
+              </button>
+            </div>
+          )}
         </div>
       ) : null}
 

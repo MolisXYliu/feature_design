@@ -535,6 +535,10 @@ const api = {
       ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated">,
     setMode: (mode: "none" | "unelevated"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
+    getYoloMode: (): Promise<boolean> =>
+      ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,
+    setYoloMode: (yolo: boolean): Promise<void> =>
+      ipcRenderer.invoke("sandbox:setYoloMode", yolo) as Promise<void>,
     onChanged: (callback: () => void): (() => void) => {
       const handler = (): void => { callback() }
       ipcRenderer.on("sandbox:changed", handler)

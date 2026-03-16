@@ -679,26 +679,30 @@ export class ElectronIPCTransport implements UseStreamTransport {
       // Emit interrupt - langchain HITL returns __interrupt__ as array of { value: HITLRequest }
       if (state.__interrupt__?.length) {
         const interruptValue = state.__interrupt__[0]?.value
-        const actionRequests = interruptValue?.actionRequests
-        const reviewConfigs = interruptValue?.reviewConfigs
+        const actionRequests = interruptValue?.actionRequests || []
+        const reviewConfigs = interruptValue?.reviewConfigs || []
 
-        // For each action request (tool call) that needs approval
-        if (actionRequests?.length) {
-          // Get the first action request for now (can be extended for batch approvals)
+        if (actionRequests.length) {
           const firstAction = actionRequests[0]
-          const reviewConfig = reviewConfigs?.find((rc) => rc.actionName === firstAction.name)
+          const reviewConfig = reviewConfigs?.find((rc: { actionName: string }) => rc.actionName === firstAction.name)
 
-          // The actionRequest doesn't include tool_call.id - look up from tracked tool calls
-          let toolCallId: string | undefined
-
-          // Find the tool call ID from our tracked completed tool calls
-          const trackedToolCalls = this.completedToolCallsByName.get(firstAction.name)
-
-          if (trackedToolCalls && trackedToolCalls.length > 0) {
-            // Get the most recent tool call with this name
-            const lastTracked = trackedToolCalls[trackedToolCalls.length - 1]
-            toolCallId = lastTracked.id
+          // Collect pending tool call IDs
+          const nameCount = new Map<string, number>()
+          for (const action of actionRequests) {
+            nameCount.set(action.name, (nameCount.get(action.name) || 0) + 1)
           }
+          const pendingToolCallIds: string[] = []
+          for (const [name, count] of nameCount) {
+            const tracked = this.completedToolCallsByName.get(name)
+            if (tracked && tracked.length > 0) {
+              const relevant = tracked.slice(-count)
+              for (const tc of relevant) {
+                if (tc.id) pendingToolCallIds.push(tc.id)
+              }
+            }
+          }
+
+          const toolCallId = pendingToolCallIds[0]
 
           events.push({
             event: "custom",
@@ -711,7 +715,9 @@ export class ElectronIPCTransport implements UseStreamTransport {
                   name: firstAction.name,
                   args: firstAction.args || {}
                 },
-                allowed_decisions: reviewConfig?.allowedDecisions || ["approve", "reject", "edit"]
+                allowed_decisions: reviewConfig?.allowedDecisions || ["approve", "reject", "edit"],
+                pendingCount: actionRequests.length,
+                pendingToolCallIds
               }
             }
           })

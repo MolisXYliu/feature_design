@@ -1267,22 +1267,42 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
   }
 }
 
-// ── Windows Sandbox Settings ──────────────────────────────────────────────────
+// ── Sandbox Settings ──────────────────────────────────────────────────────────
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-export function getWindowsSandboxMode(): "none" | "unelevated" {
-  if (!existsSync(SANDBOX_SETTINGS_FILE)) return "none"
+function readSandboxSettings(): { mode: "none" | "unelevated"; yolo: boolean } {
+  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "none", yolo: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
-    return parsed.mode === "unelevated" ? "unelevated" : "none"
+    return {
+      mode: parsed.mode === "unelevated" ? "unelevated" : "none",
+      yolo: parsed.yolo === true
+    }
   } catch (err) {
     console.warn("[Storage] Failed to load sandbox settings:", err)
-    return "none"
+    return { mode: "none", yolo: false }
   }
 }
 
-export function setWindowsSandboxMode(mode: "none" | "unelevated"): void {
+function updateSandboxSettings(patch: Partial<{ mode: "none" | "unelevated"; yolo: boolean }>): void {
   getOpenworkDir()
-  writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ mode }, null, 2))
+  const current = readSandboxSettings()
+  writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ ...current, ...patch }, null, 2))
+}
+
+export function getWindowsSandboxMode(): "none" | "unelevated" {
+  return readSandboxSettings().mode
+}
+
+export function setWindowsSandboxMode(mode: "none" | "unelevated"): void {
+  updateSandboxSettings({ mode })
+}
+
+export function getYoloMode(): boolean {
+  return readSandboxSettings().yolo
+}
+
+export function setYoloMode(yolo: boolean): void {
+  updateSandboxSettings({ yolo })
 }

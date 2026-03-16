@@ -116,6 +116,8 @@ export interface HITLRequest {
   id: string
   tool_call: ToolCall
   allowed_decisions: HITLDecision["type"][]
+  pendingCount?: number
+  pendingToolCallIds?: string[]
 }
 
 export interface HITLDecision {

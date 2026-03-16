@@ -53,7 +53,8 @@ import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
-import { getWindowsSandboxMode } from "../storage"
+import { createGitWorkflowTool } from "./tools/git-workflow-tool"
+import { getWindowsSandboxMode, getYoloMode } from "../storage"
 
 /** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
 async function ensureCodexExe(exePath: string): Promise<void> {
@@ -107,7 +108,6 @@ When NOT to use the task tool:
  * Custom version of deepagents' createDeepAgent.
  *
  * Aligned with official 1.8.1 except:
- *   - `defaultInterruptOn` is always null — subagents run autonomously without HITL.
  *   - Accepts `summarizationTrigger` / `summarizationKeep` for explicit overrides
  *     (useful for custom models without a profile).
  */
@@ -223,7 +223,7 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
         defaultTools: tools,
         defaultMiddleware: subagentMiddleware,
         generalPurposeMiddleware: [...subagentMiddleware, ...skillsMiddlewareArray],
-        defaultInterruptOn: null, // FIX: subagents run without HITL
+        defaultInterruptOn: null,
         subagents: processedSubagents,
         generalPurposeAgent: true,
         systemPrompt: SEQUENTIAL_TASK_PROMPT
@@ -555,6 +555,7 @@ ${subagentShellGuidance}
 - edit_file: edit a file in the filesystem
 - glob: find files matching a pattern (e.g., "**/*.py")
 - grep: search for text within files
+- git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
 
 The workspace root is: ${workspacePath}`
 
@@ -687,6 +688,9 @@ The workspace root is: ${workspacePath}`
     extraTools.push(createSkillEvolutionTool())
   }
 
+  // Add git_push tool
+  extraTools.push(createGitWorkflowTool(workspacePath))
+
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
@@ -702,7 +706,7 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    interruptOn: { execute: true },
+    interruptOn: getYoloMode() ? undefined : { execute: true },
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,

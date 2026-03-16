@@ -241,6 +241,8 @@ interface CustomAPI {
   sandbox: {
     getMode: () => Promise<"none" | "unelevated">
     setMode: (mode: "none" | "unelevated") => Promise<void>
+    getYoloMode: () => Promise<boolean>
+    setYoloMode: (yolo: boolean) => Promise<void>
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {

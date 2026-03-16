@@ -484,10 +484,43 @@ function PluginDetailPanel(props: {
 
   if (!plugin) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-        <div className="text-center space-y-2">
-          <Puzzle className="size-8 mx-auto opacity-40" />
-          <p>选择一个插件查看详情</p>
+      <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+        <div className="max-w-md space-y-6">
+          <div className="text-center space-y-3">
+            <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+              <Puzzle className="size-7 text-muted-foreground/60" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/80">Plugins 插件</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              插件是打包好的功能扩展包，一个插件可以同时包含 Skills 技能和 MCP 服务器。相比单独添加技能或 MCP，插件提供了更便捷的「一键安装、整体管理」的体验。
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">插件包含什么？</p>
+              <p className="text-[13px] text-muted-foreground leading-relaxed">
+                一个插件可以包含以下组件的任意组合：<span className="font-medium text-foreground/60">Skills</span>（位于 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">skills/</span> 目录）和 <span className="font-medium text-foreground/60">MCP 服务器</span>（通过 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.mcp.json</span> 配置）。安装后，包含的技能和 MCP 会自动注册，可以在插件详情页查看具体内容。
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">如何安装？</p>
+              <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>点击 <span className="font-medium text-foreground/60">+</span> 按钮，上传 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.zip</span> 压缩包，或选择本地文件夹直接安装</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>也可以前往 <span className="font-medium text-foreground/60">Market</span> 浏览社区发布的插件，一键下载安装</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>安装后可查看插件的版本、作者、许可证、包含的组件等详情</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>通过开关随时启用或禁用，也可以完全卸载不需要的插件</li>
+              </ul>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">插件 vs 单独添加</p>
+              <p className="text-[13px] text-muted-foreground leading-relaxed">
+                如果你只需要一个技能，直接在 Skills 页面上传即可。如果你只需要连接一个远程工具服务，在 MCPs 页面添加即可。但当你需要「一组关联的技能 + MCP 配置」打包分发时，插件是更好的选择——安装一次，全部就位。
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     )
