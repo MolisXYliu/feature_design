@@ -1,4 +1,3 @@
-import { Bot } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { useAllStreamLoadingStates, useAllThreadStates } from "@/lib/thread-context"
@@ -52,7 +51,7 @@ export function KanbanHeader({ className }: { className?: string }): React.JSX.E
         onClick={() => setShowSubagentsInKanban(!showSubagentsInKanban)}
         className="gap-2 h-7 relative"
       >
-        <Bot className="size-3.5" />
+        <span className="text-sm leading-none">🦞</span>
         {showSubagentsInKanban ? "隐藏" : "显示"}子代理
       </Button>
     </div>
