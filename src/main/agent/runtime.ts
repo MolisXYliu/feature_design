@@ -519,7 +519,7 @@ ${subagentShellGuidance}
 - write_file: write to a file in the filesystem
 - edit_file: edit a file in the filesystem
 - glob: find files matching a pattern (e.g., "**/*.py")
-- grep: search for text within files
+- grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
 
 The workspace root is: ${workspacePath}`
