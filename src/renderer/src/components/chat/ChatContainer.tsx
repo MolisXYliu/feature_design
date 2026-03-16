@@ -131,7 +131,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const queryLatestVersion = async ()=>{
    try {
      const res = await fetch(import.meta.env.VITE_API_BASE_URL+'/app/version')
-     setLatestVersion(res.data.version)
+     const data = await res.json()
+     setLatestVersion(data.version)
    }catch (e){
      console.log(e)
    }
@@ -139,6 +140,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const needUpdateVersion=useMemo(()=>{
     return  latestVersion !== __APP_VERSION__
+    // return false
   },[latestVersion])
 
   useEffect(() => {
@@ -1022,23 +1024,54 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                             <div className="text-xs text-foreground leading-5">操作说明文档</div>
                           </div>
                         </button>
+
+                        {/*版本check*/}
                         <button
                           onClick={async () => {
                             const viteappdownloadurl = import.meta.env.VITE_APP_DOWNLOAD_URL;
                             handleCopyToClipboard(viteappdownloadurl);
                           }}
                           type="button"
-                          className={`group w-full rounded-xl border ${needUpdateVersion ? 'border-red-400 ' : 'border-border/70'}  bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors`}
+                          className={`group relative w-full rounded-xl ${
+                            needUpdateVersion
+                              ? 'border-red-400/60 bg-gradient-to-br from-red-50/90 to-red-100/70 hover:border-red-500 hover:from-red-100 hover:to-red-150/80 shadow-red-100/50'
+                              : 'group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors '
+                          } px-4 py-3.5 text-left transition-all duration-300 ease-out hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] backdrop-blur-sm`}
                         >
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3.5">
                             <div
-                              className={`${needUpdateVersion ? 'text-red-400' : ''} rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors`}>
-                              <Megaphone size={14} />
+                              className={`${
+                                needUpdateVersion
+                                  ? 'bg-red-100 text-red-600 border-red-200 group-hover:bg-red-200 group-hover:text-red-700 group-hover:shadow-red-200/50'
+                                  : 'rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors'
+                              } rounded-lg border p-1 transition-all duration-300 shadow-sm group-hover:shadow-md`}>
+                              <Megaphone size={14} className="drop-shadow-sm" />
                             </div>
-                            <div className={`text-xs text-foreground leading-5 ${needUpdateVersion ? 'text-red-400' : ''}`}>{
-                              latestVersion !== __APP_VERSION__ ? '有新版本！' : '版本更新'
-                            }</div>
+                            <div className="flex-1 min-w-0">
+                              <div className={`text-sm font-semibold leading-5 ${
+                                needUpdateVersion ? 'text-red-700' : ''
+                              } transition-colors duration-200`}>
+                                {needUpdateVersion? '有新版本！' : '版本更新'}
+                              </div>
+                            </div>
+                            {needUpdateVersion && (
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-sm"></div>
+                              </div>
+                            )}
                           </div>
+
+                          {/* 悬浮时的渐变覆盖层 */}
+                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none ${
+                            needUpdateVersion
+                              ? 'bg-gradient-to-br from-red-400/8 via-transparent to-red-500/6'
+                              : 'bg-gradient-to-br from-blue-400/8 via-transparent to-indigo-500/6'
+                          }`}></div>
+
+                          {/* 边框光效 */}
+                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-30 transition-opacity duration-300 pointer-events-none border ${
+                            needUpdateVersion ? 'border-red-300' : 'border-blue-300'
+                          } blur-sm`}></div>
                         </button>
 
 
