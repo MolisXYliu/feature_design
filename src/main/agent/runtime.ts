@@ -180,7 +180,7 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
   const summarizationOptions = {
     model,
     backend: filesystemBackend,
-    historyPathPrefix: ".cmbcoworkagent/conversation_history",
+    historyPathPrefix: ".cmbdevclaw/conversation_history",
     ...(trimTokensToSummarize != null && { trimTokensToSummarize }),
     ...(summarizationTrigger != null && { trigger: summarizationTrigger }),
     ...(summarizationKeep != null && { keep: summarizationKeep }),
