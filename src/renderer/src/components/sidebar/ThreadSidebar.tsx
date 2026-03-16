@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -176,7 +176,9 @@ export function ThreadSidebar(): React.JSX.Element {
     deleteThread,
     updateThread,
     showCustomizeView,
-    setShowCustomizeView
+    setShowCustomizeView,
+    showKanbanView,
+    setShowKanbanView
   } = useAppStore()
 
   const { cleanupThread } = useThreadContext()
@@ -272,6 +274,20 @@ export function ThreadSidebar(): React.JSX.Element {
             <Briefcase className="size-3" />
           </div>
           <span className="text-muted-foreground">自定义</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full justify-start gap-2 text-sm font-semibold",
+            showKanbanView && "bg-muted"
+          )}
+          onClick={() => setShowKanbanView(!showKanbanView)}
+        >
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <LayoutDashboard className="size-3" />
+          </div>
+          <span className="text-muted-foreground">看板视图</span>
         </Button>
       </div>
 
