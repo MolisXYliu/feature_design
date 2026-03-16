@@ -10,7 +10,10 @@ import {
   Plus,
   HardDrive,
   Zap,
-  Tag
+  Tag,
+  Star,
+  Shield,
+  User
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -34,6 +37,9 @@ interface MarketItem {
   filename: string
   created_at: string
   category?: string // Add category field
+  featured?: string // eg:官方推荐；精品；热门；个人；
+  version?:string // eg:1.0.1
+  user_id?: string // 110
   // Only keep essential UI fields for compatibility
   id?: string
   type?: MarketItemType
@@ -466,6 +472,28 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
 
       <div className="text-xs text-muted-foreground">
         {item.filename} • Created {new Date(item.created_at).toLocaleDateString()}
+      </div>
+
+      {/* New icons for featured, version, and user_id */}
+      <div className="flex flex-wrap gap-2 mt-2">
+        {item.featured && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Star className="size-4" />
+            <span>{item.featured}</span>
+          </div>
+        )}
+        {item.version && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Shield className="size-4" />
+            <span>{item.version}</span>
+          </div>
+        )}
+        {item.user_id && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <User className="size-4" />
+            <span>{item.user_id}</span>
+          </div>
+        )}
       </div>
     </div>
   )

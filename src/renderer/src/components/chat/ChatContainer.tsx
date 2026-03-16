@@ -130,9 +130,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const queryLatestVersion = async ()=>{
    try {
-     const res = await fetch(import.meta.env.VITE_API_BASE_URL+'/app/version')
-     const data = await res.json()
-     setLatestVersion(data.version)
+     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/version',{
+       method: "GET",
+       headers: {
+         "Content-Type": "application/json"
+         // Remove placeholder auth token for now
+       }
+     })
+     const data = await response.json()
+     setLatestVersion(data?.current?.version)
    }catch (e){
      console.log(e)
    }
