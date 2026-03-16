@@ -56,7 +56,11 @@ function createWindow(): void {
     console.log('url render')
     // mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
     const renderUrl = import.meta.env.VITE_RENDER_URL
-    mainWindow.loadURL(renderUrl)
+    if (!renderUrl) {
+      mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+    }else{
+      mainWindow.loadURL(renderUrl)
+    }
   }
 
   mainWindow.on("closed", () => {
