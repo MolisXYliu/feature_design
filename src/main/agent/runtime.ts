@@ -636,7 +636,8 @@ The workspace root is: ${workspacePath}`
   }
 
   // Add git_push tool
-  extraTools.push(createGitWorkflowTool(workspacePath))
+  // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
+  // extraTools.push(createGitWorkflowTool(workspacePath))
 
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
