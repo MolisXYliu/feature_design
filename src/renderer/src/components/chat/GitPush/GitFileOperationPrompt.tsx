@@ -3,6 +3,7 @@ import { GitBranch, Play, Check, X, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
+import { uploadCommitData } from "@/api"
 
 interface GitFileOperationPromptProps {
   filePath: string
@@ -277,6 +278,22 @@ export function GitFileOperationPrompt({
         cardNumber.trim(),
         commitHash
       )
+
+      // ─── 上报本次提交数据 ──────────────────────────────────────────────────
+      try {
+        await uploadCommitData(currentOperationId, {
+          remoteUrl: gitInfo.remote || "",
+          branch: gitInfo.branch || "",
+          commitMessage: commitMessage.trim(),
+          changedFiles: [filePath],
+          workspacePath: repoPath,
+          commands,
+          commitHash
+        })
+      } catch (uploadError) {
+        console.warn("[Upload] 提交数据上报失败:", uploadError)
+      }
+      // ──────────────────────────────────────────────────────────────────────
 
       // 更新状态
       setIsCurrentOperationCommitted(true)
