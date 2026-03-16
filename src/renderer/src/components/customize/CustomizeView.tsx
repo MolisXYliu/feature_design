@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
+import { ArrowLeft, Brain, Clock, GitBranch, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -11,11 +11,21 @@ import { HeartbeatPanel } from "./HeartbeatPanel"
 import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
+import { EvolutionPanel } from "./EvolutionPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
+type CustomizeTab =
+  | "skills"
+  | "connectors"
+  | "plugins"
+  | "scheduled"
+  | "heartbeat"
+  | "memory"
+  | "market"
+  | "sandbox"
+  | "evolution"
 
 export function CustomizeView(): React.JSX.Element {
-  const { setShowCustomizeView, customizeInitialTab } = useAppStore()
+  const { setShowCustomizeView, customizeInitialTab, pendingEvolution, setPendingEvolution } = useAppStore()
   const [activeTab, setActiveTab] = useState<CustomizeTab>(
     (customizeInitialTab as CustomizeTab) || "skills"
   )
@@ -25,6 +35,12 @@ export function CustomizeView(): React.JSX.Element {
       setActiveTab(customizeInitialTab as CustomizeTab)
     }
   }, [customizeInitialTab])
+
+  useEffect(() => {
+    if (activeTab === "evolution" && pendingEvolution) {
+      setPendingEvolution(false)
+    }
+  }, [activeTab, pendingEvolution, setPendingEvolution])
 
   return (
     <div className="flex h-full overflow-hidden bg-background">
@@ -128,6 +144,22 @@ export function CustomizeView(): React.JSX.Element {
           <button
             className={cn(
               "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "evolution"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("evolution")}
+          >
+            <GitBranch className="size-4 shrink-0" />
+            自优化
+            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+              {pendingEvolution && <span className="size-2 rounded-full bg-orange-500 shrink-0" />}
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+            </div>
+          </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
               activeTab === "sandbox"
                 ? "bg-muted font-medium"
                 : "text-muted-foreground hover:bg-muted/50"
@@ -155,6 +187,8 @@ export function CustomizeView(): React.JSX.Element {
         <MemoryPanel />
       ) : activeTab === "market" ? (
         <MarketPanel />
+      ) : activeTab === "evolution" ? (
+        <EvolutionPanel />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
       ) : null}

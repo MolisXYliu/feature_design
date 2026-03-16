@@ -5,7 +5,6 @@ import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
 import { CustomizeView } from "@/components/customize/CustomizeView"
-import { EvolutionPanel } from "@/components/customize/EvolutionPanel"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -293,10 +292,6 @@ function App(): React.JSX.Element {
             {mainView === "kanban" ? (
               <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
                 <KanbanView />
-              </main>
-            ) : mainView === "evolution" ? (
-              <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
-                <EvolutionPanel />
               </main>
             ) : (
               <>

@@ -264,9 +264,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (view === "evolution") {
       set({
-        mainView: "evolution",
-        showCustomizeView: false,
-        showKanbanView: false
+        mainView: "customize",
+        showCustomizeView: true,
+        showKanbanView: false,
+        customizeInitialTab: "evolution"
       })
       return
     }
