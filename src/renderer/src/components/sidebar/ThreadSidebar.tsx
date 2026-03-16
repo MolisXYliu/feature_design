@@ -348,8 +348,8 @@ export function ThreadSidebar(): React.JSX.Element {
           <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
         </svg>
         <div className="flex items-baseline">
-          <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Rajdhani', sans-serif" }}>CMBDev</span>
-          <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Claw</span>
+          <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>CMBDev</span>
+          <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>Claw</span>
           <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">{__APP_VERSION__}</span>
         </div>
       </div>
