@@ -1190,12 +1190,12 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-function readSandboxSettings(): { mode: "none" | "unelevated"; yolo: boolean } {
+function readSandboxSettings(): { mode: "none" | "unelevated" | "readonly"; yolo: boolean } {
   if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "none", yolo: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
     return {
-      mode: parsed.mode === "unelevated" ? "unelevated" : "none",
+      mode: parsed.mode === "unelevated" ? "unelevated" : parsed.mode === "readonly" ? "readonly" : "none",
       yolo: parsed.yolo === true
     }
   } catch (err) {
@@ -1204,17 +1204,17 @@ function readSandboxSettings(): { mode: "none" | "unelevated"; yolo: boolean } {
   }
 }
 
-function updateSandboxSettings(patch: Partial<{ mode: "none" | "unelevated"; yolo: boolean }>): void {
+function updateSandboxSettings(patch: Partial<{ mode: "none" | "unelevated" | "readonly"; yolo: boolean }>): void {
   getOpenworkDir()
   const current = readSandboxSettings()
   writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ ...current, ...patch }, null, 2))
 }
 
-export function getWindowsSandboxMode(): "none" | "unelevated" {
+export function getWindowsSandboxMode(): "none" | "unelevated" | "readonly" {
   return readSandboxSettings().mode
 }
 
-export function setWindowsSandboxMode(mode: "none" | "unelevated"): void {
+export function setWindowsSandboxMode(mode: "none" | "unelevated" | "readonly"): void {
   updateSandboxSettings({ mode })
 }
 

@@ -251,9 +251,9 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(windowsSandbox?: "none" | "unelevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
-  const isUnelevated = process.platform === "win32" && windowsSandbox === "unelevated"
-  const resolved = isUnelevated
+function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly")
+  const resolved = isSandboxed
     ? LocalSandbox.resolvedWindowsSandboxShell()
     : LocalSandbox.resolvedShell()
   const base = path.basename(resolved).replace(/\.exe$/i, "").toLowerCase()
@@ -283,7 +283,7 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated"): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
@@ -316,8 +316,20 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
+  const readonlySection = windowsSandbox === "readonly"
+    ? `
+### Read-Only Sandbox
+
+**IMPORTANT:** You are running in a read-only sandbox environment.
+- You can read all files on disk freely.
+- Write operations are blocked under normal privileges. When the application is running as administrator, writes to the workspace directory are permitted.
+- This mode is intended for security auditing, code review, and read-only analysis tasks.
+- Avoid write operations unless explicitly requested by the user. Suggest changes instead of writing directly.
+`
+    : ""
+
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + readonlySection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Shield, ShieldOff, Zap, Info } from "lucide-react"
+import { Shield, ShieldOff, ShieldCheck, Zap, Info } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-type SandboxMode = "none" | "unelevated"
+type SandboxMode = "none" | "unelevated" | "readonly"
 
 const isWindows = navigator.userAgent.toLowerCase().includes("windows")
 
@@ -25,6 +25,12 @@ const MODE_OPTIONS: ModeOption[] = [
     label: "Unelevated 沙箱",
     description: "使用 Codex 受限令牌沙箱隔离命令执行：工作目录外文件写保护、主流网络工具软阻断（npm/pip/git/curl）。无需管理员权限，零配置。",
     icon: <Shield className="size-4" />
+  },
+  {
+    value: "readonly",
+    label: "只读沙箱",
+    description: "命令可读取所有文件，普通权限下禁止写入；以管理员身份运行时允许写入工作目录。适合安全审查、代码分析等场景。",
+    icon: <ShieldCheck className="size-4" />
   }
 ]
 
