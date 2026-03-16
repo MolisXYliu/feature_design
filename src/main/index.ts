@@ -50,9 +50,13 @@ function createWindow(): void {
 
   // HMR for renderer based on electron-vite cli
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
+    console.log('local render')
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"])
   } else {
-    mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+    console.log('url render')
+    // mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+    const renderUrl = import.meta.env.VITE_RENDER_URL
+    mainWindow.loadURL(renderUrl)
   }
 
   mainWindow.on("closed", () => {
