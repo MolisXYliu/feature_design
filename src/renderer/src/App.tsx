@@ -8,6 +8,7 @@ import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
+import { VersionChecker } from "@/components/notifications/VersionChecker"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
