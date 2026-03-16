@@ -1,481 +1,564 @@
-/**
- * EvolutionPanel — Skill Optimization & LangSmith-style Trace Viewer
- */
-
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
-  ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock,
-  Loader2, RefreshCw, Sparkles, Activity, Trash2, Wrench,
-  MessageSquare, AlertCircle, User, Bot, Terminal, ArrowLeft,
-  Timer, Hash, Cpu, Zap, Settings2
+  Activity,
+  AlertCircle,
+  ArrowLeft,
+  Bot,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Cpu,
+  GitBranch,
+  Hash,
+  Info,
+  Loader2,
+  MessageSquare,
+  Settings2,
+  Sparkles,
+  Terminal,
+  Timer,
+  Trash2,
+  Wrench,
+  XCircle,
+  Ban
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
 
-// ─────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────
-
 interface SkillCandidate {
-  candidateId: string; action: "create" | "patch"; skillId: string
-  name: string; description: string; proposedContent: string
-  rationale: string; sourceTraceIds: string[]; generatedAt: string
+  candidateId: string
+  action: "create" | "patch"
+  skillId: string
+  name: string
+  description: string
+  proposedContent: string
+  rationale: string
+  sourceTraceIds: string[]
+  generatedAt: string
   status: "pending" | "approved" | "rejected"
 }
 
 interface TraceEntry {
-  traceId: string; threadId: string; startedAt: string; durationMs: number
-  userMessage: string; totalToolCalls: number; outcome: string; activeSkills: string[]
+  traceId: string
+  threadId: string
+  startedAt: string
+  durationMs: number
+  userMessage: string
+  totalToolCalls: number
+  outcome: string
+  activeSkills: string[]
+}
+
+interface TraceThreadGroup {
+  threadId: string
+  threadTitle: string
+  traces: TraceEntry[]
+  latestStartedAt: string
+  totalToolCalls: number
+  successCount: number
+  errorCount: number
 }
 
 interface TraceToolCall {
-  name: string; args: Record<string, unknown>; result?: string; durationMs?: number
+  name: string
+  args: Record<string, unknown>
+  result?: string
+  durationMs?: number
 }
 
 interface TraceStep {
-  index: number; startedAt: string; assistantText: string; toolCalls: TraceToolCall[]
+  index: number
+  startedAt: string
+  assistantText: string
+  toolCalls: TraceToolCall[]
+}
+
+interface TraceNode {
+  id: string
+  type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+  parentId: string | null
+  name?: string
+  status?: "running" | "success" | "error" | "cancelled" | "unknown"
+  startedAt: string
+  endedAt?: string
+  input?: unknown
+  output?: unknown
+  metadata?: Record<string, unknown>
 }
 
 interface TraceDetail extends TraceEntry {
-  endedAt: string; modelId: string; errorMessage?: string; steps: TraceStep[]
+  endedAt: string
+  modelId: string
+  errorMessage?: string
+  steps: TraceStep[]
+  nodes?: TraceNode[]
 }
 
-// ─────────────────────────────────────────────────────────
-// Colour helpers
-// ─────────────────────────────────────────────────────────
-
-const TOOL_COLORS: Record<string, string> = {
-  read_file:       "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
-  write_file:      "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
-  list_directory:  "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
-  bash:            "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
-  search:          "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
-  manage_skill:    "bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/20",
+interface RunProgress {
+  runId: string
+  traceId: string
+  index: number
+  total: number
+  status: "pending" | "running" | "completed" | "failed"
+  message?: string
+  candidateCount?: number
 }
 
-function toolColor(name: string) {
-  return TOOL_COLORS[name] ?? "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20"
+type Tab = "candidates" | "traces"
+
+function buildFallbackNodes(detail: TraceDetail): TraceNode[] {
+  const rootId = `trace:${detail.traceId}`
+  const nodes: TraceNode[] = [
+    {
+      id: rootId,
+      type: "trace",
+      parentId: null,
+      name: "Agent Trace",
+      status: detail.outcome === "error" ? "error" : detail.outcome === "cancelled" ? "cancelled" : "success",
+      startedAt: detail.startedAt,
+      endedAt: detail.endedAt,
+      input: { userMessage: detail.userMessage },
+      output: {
+        outcome: detail.outcome,
+        totalToolCalls: detail.totalToolCalls
+      }
+    },
+    {
+      id: `user:${detail.traceId}`,
+      type: "message",
+      parentId: rootId,
+      name: "User Message",
+      status: "success",
+      startedAt: detail.startedAt,
+      endedAt: detail.startedAt,
+      output: detail.userMessage
+    }
+  ]
+
+  for (let i = 0; i < detail.steps.length; i++) {
+    const step = detail.steps[i]
+    const llmId = `llm:${detail.traceId}:${i}`
+    nodes.push({
+      id: llmId,
+      type: "llm",
+      parentId: rootId,
+      name: `LLM Call #${i + 1}`,
+      status: "success",
+      startedAt: step.startedAt,
+      endedAt: step.startedAt,
+      output: step.assistantText
+    })
+
+    for (let j = 0; j < step.toolCalls.length; j++) {
+      const tool = step.toolCalls[j]
+      const toolId = `tool:${detail.traceId}:${i}:${j}`
+      nodes.push({
+        id: toolId,
+        type: "tool",
+        parentId: llmId,
+        name: tool.name,
+        status: "success",
+        startedAt: step.startedAt,
+        endedAt: step.startedAt,
+        input: tool.args
+      })
+      if (tool.result !== undefined) {
+        nodes.push({
+          id: `tool_result:${detail.traceId}:${i}:${j}`,
+          type: "tool_result",
+          parentId: toolId,
+          name: `${tool.name} result`,
+          status: "success",
+          startedAt: step.startedAt,
+          endedAt: step.startedAt,
+          output: tool.result
+        })
+      }
+    }
+  }
+
+  nodes.push({
+    id: `terminal:${detail.traceId}`,
+    type: detail.outcome === "error" ? "error" : detail.outcome === "cancelled" ? "cancel" : "message",
+    parentId: rootId,
+    name: detail.outcome === "error" ? "Run Error" : detail.outcome === "cancelled" ? "Run Cancelled" : "Run Completed",
+    status: detail.outcome === "error" ? "error" : detail.outcome === "cancelled" ? "cancelled" : "success",
+    startedAt: detail.endedAt,
+    endedAt: detail.endedAt,
+    output: detail.errorMessage ?? (detail.outcome === "success" ? "Completed" : detail.outcome)
+  })
+
+  return nodes
 }
 
-function outcomeColor(outcome: string) {
-  return {
-    success:   "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
-    error:     "bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30",
-    cancelled: "bg-zinc-500/15 text-zinc-500 border-zinc-500/20",
-  }[outcome] ?? "bg-zinc-500/15 text-zinc-500 border-zinc-500/20"
-}
-
-function fmt(ms: number) {
+function fmt(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-// ─────────────────────────────────────────────────────────
-// LangSmith-style Trace detail
-// ─────────────────────────────────────────────────────────
+function outcomeColor(outcome: string): string {
+  return {
+    success: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
+    error: "bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30",
+    cancelled: "bg-zinc-500/15 text-zinc-500 border-zinc-500/20"
+  }[outcome] ?? "bg-zinc-500/15 text-zinc-500 border-zinc-500/20"
+}
 
-/** Collapsible JSON viewer */
-function JsonBlock({ data }: { data: unknown }) {
-  const [open, setOpen] = useState(false)
-  const str = JSON.stringify(data, null, 2)
-  const lines = str.split("\n").length
-  const preview = str.slice(0, 120).replace(/\n/g, " ")
-  if (lines <= 3) {
-    return (
-      <pre className="font-mono text-[11px] text-foreground/70 leading-relaxed whitespace-pre-wrap break-all">
-        {str}
-      </pre>
-    )
+function nodeIcon(node: TraceNode): React.JSX.Element {
+  if (node.type === "trace") return <Activity className="size-3.5" />
+  if (node.type === "llm") return <Bot className="size-3.5" />
+  if (node.type === "tool") return <Wrench className="size-3.5" />
+  if (node.type === "tool_result") return <Terminal className="size-3.5" />
+  if (node.type === "error") return <AlertCircle className="size-3.5" />
+  if (node.type === "cancel") return <Ban className="size-3.5" />
+  return <MessageSquare className="size-3.5" />
+}
+
+function nodeStatusClass(status?: TraceNode["status"]): string {
+  if (status === "success") return "text-emerald-600"
+  if (status === "error") return "text-red-500"
+  if (status === "running") return "text-blue-500"
+  if (status === "cancelled") return "text-zinc-500"
+  return "text-muted-foreground"
+}
+
+function JsonBlock({ value }: { value: unknown }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  const text = JSON.stringify(value, null, 2)
+  if (text.length <= 180) {
+    return <pre className="text-[11px] font-mono whitespace-pre-wrap break-all text-foreground/70">{text}</pre>
   }
   return (
-    <div>
-      {!open && (
-        <button
-          onClick={() => setOpen(true)}
-          className="text-[11px] font-mono text-muted-foreground/70 hover:text-foreground/80 transition-colors text-left"
-        >
-          {preview}… <span className="text-blue-500 hover:underline">展开</span>
-        </button>
-      )}
-      {open && (
-        <div>
-          <pre className="font-mono text-[11px] text-foreground/70 leading-relaxed whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
-            {str}
-          </pre>
-          <button onClick={() => setOpen(false)} className="text-[11px] text-blue-500 hover:underline mt-1">
-            收起
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** One tool call row — LangSmith style with left accent bar */
-function ToolCallRow({ tc, index }: { tc: TraceToolCall; index: number }) {
-  const [open, setOpen] = useState(false)
-  const cls = toolColor(tc.name)
-
-  return (
-    <div className={cn("ml-8 mt-1 rounded-md border overflow-hidden", cls.split(" ").find(c => c.startsWith("border")))}>
-      {/* Header */}
-      <button
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted/30 transition-colors group text-left"
-        onClick={() => setOpen(o => !o)}
-      >
-        <div className={cn("flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono font-semibold border shrink-0", cls)}>
-          <Wrench className="size-3" />
-          {tc.name}
-        </div>
-        <span className="text-[11px] text-muted-foreground/70 font-mono truncate flex-1">
-          {Object.entries(tc.args).slice(0, 2).map(([k, v]) =>
-            `${k}=${JSON.stringify(v).slice(0, 40)}`
-          ).join(", ")}
-        </span>
-        <span className="text-[10px] text-muted-foreground/40 shrink-0 mr-1">#{index + 1}</span>
-        {open
-          ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/40" />
-          : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/40" />
-        }
+    <div className="space-y-1">
+      <pre className="text-[11px] font-mono whitespace-pre-wrap break-all text-foreground/70">
+        {expanded ? text : `${text.slice(0, 180)}...`}
+      </pre>
+      <button className="text-[10px] text-blue-500 hover:underline" onClick={() => setExpanded((v) => !v)}>
+        {expanded ? "收起" : "展开"}
       </button>
-
-      {/* Expanded: args + result */}
-      {open && (
-        <div className="border-t border-border/50 divide-y divide-border/50">
-          {/* Input */}
-          <div className="px-3 py-2 bg-background/50">
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-              Input
-            </p>
-            <JsonBlock data={tc.args} />
-          </div>
-          {/* Output */}
-          {tc.result !== undefined && (
-            <div className="px-3 py-2 bg-background/50">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-                Output
-              </p>
-              <pre className="font-mono text-[11px] text-foreground/70 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
-                {tc.result.slice(0, 2000)}{tc.result.length > 2000 ? "\n…(truncated)" : ""}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
 
-/** One reasoning step — LangSmith "run" row */
-function StepRow({ step, runIndex, totalSteps }: { step: TraceStep; runIndex: number; totalSteps: number }) {
-  const [open, setOpen] = useState(false)
-  const hasText = step.assistantText.trim().length > 0
-  const hasTools = step.toolCalls.length > 0
-  const isLast = runIndex === totalSteps - 1
+function TraceTreeNode({
+  node,
+  childrenByParent,
+  depth
+}: {
+  node: TraceNode
+  childrenByParent: Map<string, TraceNode[]>
+  depth: number
+}): React.JSX.Element {
+  const children = childrenByParent.get(node.id) ?? []
+  const hasDetail = node.input !== undefined || node.output !== undefined || children.length > 0
+  const [open, setOpen] = useState(depth <= 1)
 
   return (
-    <div className="relative">
-      {/* Vertical timeline line */}
-      {!isLast && (
-        <div className="absolute left-[15px] top-9 bottom-0 w-px bg-border/60" />
-      )}
+    <div style={{ marginLeft: `${depth * 14}px` }} className="relative">
+      <div className="rounded-md border border-border bg-card/70 mb-2 overflow-hidden">
+        <button
+          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors"
+          onClick={() => hasDetail && setOpen((v) => !v)}
+          disabled={!hasDetail}
+        >
+          <span className={cn("shrink-0", nodeStatusClass(node.status))}>{nodeIcon(node)}</span>
+          <span className="text-[12px] font-medium text-foreground/85">
+            {node.name || node.type}
+          </span>
+          <span className="text-[10px] text-muted-foreground/60">{new Date(node.startedAt).toLocaleTimeString()}</span>
+          {node.status && (
+            <Badge variant="outline" className="text-[10px] ml-auto">
+              {node.status}
+            </Badge>
+          )}
+          {hasDetail && (open ? <ChevronDown className="size-3.5 text-muted-foreground" /> : <ChevronRight className="size-3.5 text-muted-foreground" />)}
+        </button>
 
-      <div className="flex gap-3">
-        {/* Step dot */}
-        <div className="shrink-0 mt-3 size-[30px] rounded-full border-2 border-border bg-background flex items-center justify-center z-10">
-          <Bot className="size-3.5 text-muted-foreground" />
-        </div>
-
-        <div className="flex-1 min-w-0 pb-4">
-          {/* Step header */}
-          <button
-            className="w-full flex items-center gap-2 py-2 text-left group"
-            onClick={() => setOpen(o => !o)}
-          >
-            <span className="text-[11px] font-semibold text-foreground/80">
-              LLM Call #{runIndex + 1}
-            </span>
-            {hasTools && (
-              <span className="flex items-center gap-1 flex-wrap">
-                {step.toolCalls.slice(0, 4).map((tc, i) => (
-                  <span key={i} className={cn("text-[10px] font-mono px-1.5 py-0 rounded border", toolColor(tc.name))}>
-                    {tc.name}
-                  </span>
-                ))}
-                {step.toolCalls.length > 4 && (
-                  <span className="text-[10px] text-muted-foreground">+{step.toolCalls.length - 4}</span>
-                )}
-              </span>
+        {open && hasDetail && (
+          <div className="border-t border-border/60 px-3 py-2 space-y-2 bg-background/60">
+            {node.input !== undefined && (
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Input</p>
+                <JsonBlock value={node.input} />
+              </div>
             )}
-            <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground/50">
-              {new Date(step.startedAt).toLocaleTimeString()}
-              {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-            </span>
-          </button>
-
-          {/* Collapsed preview */}
-          {!open && hasText && (
-            <p className="text-[11px] text-muted-foreground/60 leading-relaxed line-clamp-2 ml-0.5">
-              {step.assistantText.trim()}
-            </p>
-          )}
-
-          {/* Expanded */}
-          {open && (
-            <div className="space-y-2 mt-1">
-              {/* Thinking / reasoning text */}
-              {hasText && (
-                <div className="rounded-lg border border-border bg-muted/20 overflow-hidden">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/50 bg-muted/30">
-                    <MessageSquare className="size-3 text-muted-foreground" />
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Reasoning</span>
-                  </div>
-                  <div className="px-3 py-2.5 text-[12px] text-foreground/80 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto font-mono">
-                    {step.assistantText.trim()}
-                  </div>
-                </div>
-              )}
-
-              {/* Tool calls */}
-              {hasTools && (
-                <div className="space-y-1">
-                  {step.toolCalls.map((tc, i) => (
-                    <ToolCallRow key={i} tc={tc} index={step.index * 10 + i} />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+            {node.output !== undefined && (
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Output</p>
+                <JsonBlock value={node.output} />
+              </div>
+            )}
+            {node.metadata && Object.keys(node.metadata).length > 0 && (
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Metadata</p>
+                <JsonBlock value={node.metadata} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {open && children.map((child) => (
+        <TraceTreeNode key={child.id} node={child} childrenByParent={childrenByParent} depth={depth + 1} />
+      ))}
     </div>
   )
 }
 
-/** Full LangSmith-style trace detail page */
-function TraceDetailView({ detail, onClose }: { detail: TraceDetail; onClose: () => void }) {
-  const durationMs = detail.durationMs
+function TraceDetailView({ detail, onClose }: { detail: TraceDetail; onClose: () => void }): React.JSX.Element {
+  const nodes = (detail.nodes && detail.nodes.length > 0) ? detail.nodes : buildFallbackNodes(detail)
+  const root = nodes.find((n) => n.parentId === null) ?? nodes[0]
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, TraceNode[]>()
+    for (const node of nodes) {
+      if (!node.parentId) continue
+      const list = map.get(node.parentId) ?? []
+      list.push(node)
+      map.set(node.parentId, list)
+    }
+    return map
+  }, [nodes])
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-background">
-      {/* Top nav bar */}
-      <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b border-border bg-background/95 backdrop-blur">
-        <button
-          onClick={onClose}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
+      <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b border-border">
+        <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={onClose}>
           <ArrowLeft className="size-3.5" />
           Traces
         </button>
-        <span className="text-muted-foreground/30 text-sm">/</span>
+        <span className="text-muted-foreground/40">/</span>
         <span className="text-xs font-mono text-muted-foreground">{detail.traceId.slice(0, 16)}</span>
-        <span className="ml-auto">
-          <Badge className={cn("border text-xs px-2 py-0.5", outcomeColor(detail.outcome))}>
-            {detail.outcome === "success" ? "✓ 成功" : detail.outcome === "error" ? "✗ 错误" : "已取消"}
-          </Badge>
-        </span>
+        <Badge className={cn("ml-auto border text-[10px]", outcomeColor(detail.outcome))}>{detail.outcome}</Badge>
       </div>
 
-      {/* Stats row — like LangSmith's summary bar */}
-      <div className="shrink-0 flex gap-0 border-b border-border divide-x divide-border">
-        {[
-          { icon: <Timer className="size-3.5" />, label: "耗时", value: fmt(durationMs) },
-          { icon: <Hash className="size-3.5" />, label: "工具调用", value: String(detail.totalToolCalls) },
-          { icon: <Cpu className="size-3.5" />, label: "步骤", value: String(detail.steps.length) },
-          { icon: <Bot className="size-3.5" />, label: "模型", value: detail.modelId.split("/").pop() ?? detail.modelId },
-        ].map(({ icon, label, value }) => (
-          <div key={label} className="flex items-center gap-2 px-4 py-2.5 min-w-0">
-            <span className="text-muted-foreground/60 shrink-0">{icon}</span>
-            <div className="min-w-0">
-              <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider leading-none mb-0.5">{label}</p>
-              <p className="text-[12px] font-semibold text-foreground truncate">{value}</p>
-            </div>
-          </div>
-        ))}
+      <div className="shrink-0 border-b border-border grid grid-cols-4">
+        <Stat icon={<Timer className="size-3.5" />} label="耗时" value={fmt(detail.durationMs)} />
+        <Stat icon={<Hash className="size-3.5" />} label="工具调用" value={String(detail.totalToolCalls)} />
+        <Stat icon={<Cpu className="size-3.5" />} label="模型" value={detail.modelId.split("/").pop() ?? detail.modelId} />
+        <Stat icon={<GitBranch className="size-3.5" />} label="节点" value={String(nodes.length)} />
       </div>
 
-      {/* Main: two-column layout like LangSmith */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left: timeline */}
-        <div className="flex-1 overflow-hidden flex flex-col border-r border-border">
-          <div className="shrink-0 px-4 pt-3 pb-2">
-            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">执行时间线</p>
-          </div>
-          <ScrollArea className="flex-1 px-4 pb-4">
-            {/* User message node */}
-            <div className="relative">
-              <div className="absolute left-[15px] top-9 bottom-0 w-px bg-border/60" />
-              <div className="flex gap-3 pb-4">
-                <div className="shrink-0 mt-3 size-[30px] rounded-full border-2 border-blue-500/40 bg-blue-500/10 flex items-center justify-center z-10">
-                  <User className="size-3.5 text-blue-500" />
-                </div>
-                <div className="flex-1 pt-2">
-                  <p className="text-[11px] font-semibold text-foreground/80 mb-1">User Message</p>
-                  <p className="text-[12px] text-foreground/70 leading-relaxed">{detail.userMessage}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Steps */}
-            {detail.steps.length === 0 ? (
-              <div className="flex flex-col items-center py-8 text-center">
-                <Terminal className="size-8 text-muted-foreground/30 mb-2" />
-                <p className="text-sm text-muted-foreground">无步骤记录</p>
-              </div>
-            ) : (
-              detail.steps.map((step, i) => (
-                <StepRow key={step.index} step={step} runIndex={i} totalSteps={detail.steps.length} />
-              ))
-            )}
-
-            {/* End node */}
-            <div className="flex gap-3">
-              <div className={cn(
-                "shrink-0 mt-1 size-[30px] rounded-full border-2 flex items-center justify-center",
-                detail.outcome === "success"
-                  ? "border-emerald-500/40 bg-emerald-500/10"
-                  : "border-red-500/40 bg-red-500/10"
-              )}>
-                {detail.outcome === "success"
-                  ? <CheckCircle2 className="size-3.5 text-emerald-500" />
-                  : <AlertCircle className="size-3.5 text-red-500" />
-                }
-              </div>
-              <div className="pt-1.5">
-                <p className="text-[11px] font-semibold text-foreground/60">
-                  {detail.outcome === "success" ? "完成" : detail.errorMessage ?? "错误"}
-                </p>
-                <p className="text-[10px] text-muted-foreground/40">{new Date(detail.endedAt).toLocaleTimeString()}</p>
-              </div>
-            </div>
-          </ScrollArea>
-        </div>
-
-        {/* Right: metadata panel */}
-        <div className="w-56 shrink-0 flex flex-col overflow-hidden">
-          <div className="shrink-0 px-4 pt-3 pb-2">
-            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">元数据</p>
-          </div>
-          <ScrollArea className="flex-1 px-4 pb-4">
-            <div className="space-y-4 text-[11px]">
-              <Section label="Trace ID">
-                <span className="font-mono text-[10px] break-all">{detail.traceId}</span>
-              </Section>
-              <Section label="Thread ID">
-                <span className="font-mono text-[10px] break-all">{detail.threadId}</span>
-              </Section>
-              <Section label="开始时间">
-                {new Date(detail.startedAt).toLocaleString()}
-              </Section>
-              <Section label="结束时间">
-                {new Date(detail.endedAt).toLocaleString()}
-              </Section>
-              {detail.activeSkills.length > 0 && (
-                <Section label="Active Skills">
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {detail.activeSkills.map(s => (
-                      <span key={s} className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20 text-[10px] font-mono">
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                </Section>
-              )}
-              {detail.errorMessage && (
-                <Section label="Error">
-                  <span className="text-red-500 break-all">{detail.errorMessage}</span>
-                </Section>
-              )}
-            </div>
-          </ScrollArea>
-        </div>
+      <div className="flex-1 overflow-hidden">
+        <ScrollArea className="h-full px-4 py-3">
+          {root ? (
+            <TraceTreeNode node={root} childrenByParent={childrenByParent} depth={0} />
+          ) : (
+            <div className="py-10 text-center text-sm text-muted-foreground">该 trace 暂无树结构数据</div>
+          )}
+        </ScrollArea>
       </div>
     </div>
   )
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+function Stat({ icon, label, value }: { icon: React.JSX.Element; label: string; value: string }): React.JSX.Element {
   return (
-    <div>
-      <p className="text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-wider mb-1">{label}</p>
-      <div className="text-foreground/70">{children}</div>
+    <div className="flex items-center gap-2 px-4 py-2.5 border-r border-border last:border-r-0">
+      <span className="text-muted-foreground/60 shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider">{label}</p>
+        <p className="text-[12px] font-semibold truncate">{value}</p>
+      </div>
     </div>
   )
 }
 
-// ─────────────────────────────────────────────────────────
-// Trace list card
-// ─────────────────────────────────────────────────────────
-
-function TraceCard({ trace, onExpand }: { trace: TraceEntry; onExpand: (id: string) => void }) {
+function TraceCard({
+  trace,
+  checked,
+  onToggle,
+  onOpen,
+  onDelete
+}: {
+  trace: TraceEntry
+  checked: boolean
+  onToggle: (traceId: string, checked: boolean) => void
+  onOpen: (traceId: string) => void
+  onDelete: (traceId: string) => void
+}): React.JSX.Element {
   return (
-    <button
+    <div
       className="w-full text-left rounded-lg border border-border bg-card hover:bg-muted/30 transition-colors group overflow-hidden"
-      onClick={() => onExpand(trace.traceId)}
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(trace.traceId)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onOpen(trace.traceId)
+        }
+      }}
     >
-      {/* Accent bar */}
       <div className={cn("h-0.5 w-full",
         trace.outcome === "success" ? "bg-emerald-500/60" :
-        trace.outcome === "error"   ? "bg-red-500/60" : "bg-zinc-500/30"
+          trace.outcome === "error" ? "bg-red-500/60" : "bg-zinc-500/30"
       )} />
       <div className="p-3 space-y-1.5">
         <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(e) => onToggle(trace.traceId, e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
+            className="size-3.5"
+          />
           <Badge className={cn("border text-[10px] px-1.5 py-0 shrink-0", outcomeColor(trace.outcome))}>
             {trace.outcome === "success" ? "成功" : trace.outcome === "error" ? "错误" : "取消"}
           </Badge>
           <span className="text-[10px] font-mono text-muted-foreground/60">{trace.traceId.slice(0, 8)}</span>
-          <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground/60 shrink-0">
-            <span className="flex items-center gap-0.5"><Timer className="size-3" />{fmt(trace.durationMs)}</span>
-            {trace.totalToolCalls > 0 && (
-              <span className="flex items-center gap-0.5"><Wrench className="size-3" />{trace.totalToolCalls}</span>
-            )}
-            <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-60 transition-opacity" />
-          </span>
+          <button
+            className="ml-auto text-muted-foreground/50 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(trace.traceId)
+            }}
+            title="删除 trace"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
         </div>
-        <p className="text-[12px] text-foreground/80 line-clamp-2 leading-snug">
-          {trace.userMessage}
-        </p>
-        <p className="text-[10px] text-muted-foreground/50">
-          {new Date(trace.startedAt).toLocaleString()}
-          {trace.activeSkills.length > 0 && (
-            <span className="ml-2 text-violet-500/70">{trace.activeSkills.join(", ")}</span>
-          )}
+        <p className="text-[12px] text-foreground/80 line-clamp-2 leading-snug">{trace.userMessage}</p>
+        <p className="text-[10px] text-muted-foreground/50 flex items-center gap-2">
+          <span>{new Date(trace.startedAt).toLocaleString()}</span>
+          <span className="inline-flex items-center gap-0.5"><Timer className="size-3" />{fmt(trace.durationMs)}</span>
+          <span className="inline-flex items-center gap-0.5"><Wrench className="size-3" />{trace.totalToolCalls}</span>
         </p>
       </div>
-    </button>
+    </div>
   )
 }
 
-// ─────────────────────────────────────────────────────────
-// Candidate card (unchanged logic, cleaned up)
-// ─────────────────────────────────────────────────────────
+function TraceThreadGroupCard({
+  group,
+  selectedTraceIds,
+  onToggleTrace,
+  onOpenTrace,
+  onDeleteTrace,
+  onToggleThread,
+  onDeleteThread
+}: {
+  group: TraceThreadGroup
+  selectedTraceIds: Set<string>
+  onToggleTrace: (traceId: string, checked: boolean) => void
+  onOpenTrace: (traceId: string) => void
+  onDeleteTrace: (traceId: string) => void
+  onToggleThread: (threadId: string, checked: boolean) => void
+  onDeleteThread: (threadId: string) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(true)
+  const traceIds = group.traces.map((trace) => trace.traceId)
+  const selectedCount = traceIds.filter((traceId) => selectedTraceIds.has(traceId)).length
+  const allChecked = traceIds.length > 0 && selectedCount === traceIds.length
 
-function CandidateCard({ candidate, onApprove, onReject }: {
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="flex items-start gap-3 px-4 py-3 border-b border-border/70 bg-muted/10">
+        <button
+          className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-foreground">{group.threadTitle}</span>
+            <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+              {group.threadId.slice(0, 8)}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              {group.traces.length} 条 traces
+            </Badge>
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>最近运行：{new Date(group.latestStartedAt).toLocaleString()}</span>
+            <span className="inline-flex items-center gap-1"><Wrench className="size-3" />{group.totalToolCalls}</span>
+            <span className="inline-flex items-center gap-1 text-emerald-600"><CheckCircle2 className="size-3" />{group.successCount}</span>
+            {group.errorCount > 0 ? (
+              <span className="inline-flex items-center gap-1 text-red-500"><AlertCircle className="size-3" />{group.errorCount}</span>
+            ) : null}
+            <span>已选 {selectedCount}</span>
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={() => onToggleThread(group.threadId, !allChecked)}
+          >
+            {allChecked ? "取消选中" : "选中本会话"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={() => onDeleteThread(group.threadId)}
+          >
+            <Trash2 className="size-3 mr-1" />删本会话
+          </Button>
+        </div>
+      </div>
+
+      {open ? (
+        <div className="p-3 space-y-2">
+          {group.traces.map((trace) => (
+            <TraceCard
+              key={trace.traceId}
+              trace={trace}
+              checked={selectedTraceIds.has(trace.traceId)}
+              onToggle={onToggleTrace}
+              onOpen={onOpenTrace}
+              onDelete={onDeleteTrace}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function CandidateCard({
+  candidate,
+  onApprove,
+  onReject
+}: {
   candidate: SkillCandidate
-  onApprove: (id: string) => void
-  onReject: (id: string) => void
-}) {
+  onApprove: (id: string) => Promise<void>
+  onReject: (id: string) => Promise<void>
+}): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  const approve = async () => { setLoading(true); await onApprove(candidate.candidateId); setLoading(false) }
-  const reject  = async () => { setLoading(true); await onReject(candidate.candidateId);  setLoading(false) }
+  const approve = async (): Promise<void> => {
+    setLoading(true)
+    await onApprove(candidate.candidateId)
+    setLoading(false)
+  }
+
+  const reject = async (): Promise<void> => {
+    setLoading(true)
+    await onReject(candidate.candidateId)
+    setLoading(false)
+  }
 
   const statusEl = candidate.status === "approved"
     ? <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 gap-1 text-xs"><CheckCircle2 className="size-3" />已采纳</Badge>
     : candidate.status === "rejected"
-    ? <Badge className="bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/20 gap-1 text-xs"><XCircle className="size-3" />已拒绝</Badge>
-    : <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 gap-1 text-xs"><Clock className="size-3" />待审批</Badge>
+      ? <Badge className="bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/20 gap-1 text-xs"><XCircle className="size-3" />已拒绝</Badge>
+      : <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 gap-1 text-xs"><Clock className="size-3" />待审批</Badge>
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       <div className="flex items-start gap-3 p-3">
-        <button className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => setExpanded(e => !e)}>
+        <button className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => setExpanded((v) => !v)}>
           {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
         </button>
         <div className="flex-1 min-w-0">
@@ -486,25 +569,39 @@ function CandidateCard({ candidate, onApprove, onReject }: {
             {statusEl}
           </div>
           <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{candidate.description}</p>
-          <p className="text-[10px] text-muted-foreground/50 mt-1">
-            基于 {candidate.sourceTraceIds.length} 条 trace · {new Date(candidate.generatedAt).toLocaleString()}
-          </p>
+          {candidate.action === "patch" && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              优化目标 skill：
+              <span className="ml-1 font-mono text-foreground/80">{candidate.skillId}</span>
+            </p>
+          )}
+          <p className="text-[10px] text-muted-foreground/50 mt-1">基于 {candidate.sourceTraceIds.length} 条 trace · {new Date(candidate.generatedAt).toLocaleString()}</p>
         </div>
         {candidate.status === "pending" && (
           <div className="flex gap-1.5 shrink-0">
-            <Button size="sm" variant="outline" disabled={loading}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={loading}
               className="h-7 px-2.5 text-xs border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-600"
-              onClick={approve}>
-              {loading ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3 mr-1" />}采纳
+              onClick={approve}
+            >
+              {loading ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3 mr-1" />}
+              采纳
             </Button>
-            <Button size="sm" variant="ghost" disabled={loading}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={loading}
               className="h-7 px-2.5 text-xs text-muted-foreground hover:text-destructive"
-              onClick={reject}>
+              onClick={reject}
+            >
               <XCircle className="size-3 mr-1" />拒绝
             </Button>
           </div>
         )}
       </div>
+
       {expanded && (
         <div className="border-t border-border bg-muted/30 px-4 pb-4 pt-3 space-y-3">
           {candidate.rationale && (
@@ -516,9 +613,11 @@ function CandidateCard({ candidate, onApprove, onReject }: {
           <div>
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">SKILL.md 预览</p>
             <div className="rounded border border-border bg-background p-3 max-h-64 overflow-y-auto">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} className="prose prose-sm dark:prose-invert max-w-none text-xs">
-                {candidate.proposedContent}
-              </ReactMarkdown>
+              <div className="prose prose-sm dark:prose-invert max-w-none text-xs">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {candidate.proposedContent}
+                </ReactMarkdown>
+              </div>
             </div>
           </div>
         </div>
@@ -527,30 +626,114 @@ function CandidateCard({ candidate, onApprove, onReject }: {
   )
 }
 
-// ─────────────────────────────────────────────────────────
-// Main panel
-// ─────────────────────────────────────────────────────────
-
-type Tab = "candidates" | "traces"
+function EmptyState({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }): React.JSX.Element {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      {icon}
+      <p className="text-sm text-muted-foreground">{title}</p>
+      <p className="text-xs text-muted-foreground/60 mt-1 max-w-xs">{desc}</p>
+    </div>
+  )
+}
 
 export function EvolutionPanel(): React.JSX.Element {
-  const [tab, setTab]             = useState<Tab>("candidates")
-  const [running, setRunning]     = useState(false)
-  const [summary, setSummary]     = useState<string | null>(null)
-  const [autoTriggerBanner, setAutoTriggerBanner] = useState(false)
+  const [tab, setTab] = useState<Tab>("candidates")
+  const [running, setRunning] = useState(false)
+  const [runningSummary, setRunningSummary] = useState<string | null>(null)
+  const [summary, setSummary] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
-  const [traces, setTraces]       = useState<TraceEntry[]>([])
+  const [traces, setTraces] = useState<TraceEntry[]>([])
   const [tracesLoading, setTracesLoading] = useState(false)
   const [selectedTrace, setSelectedTrace] = useState<TraceDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [autoPropose, setAutoPropose] = useState<boolean>(true)
+  const [onlineSkillEvolutionEnabled, setOnlineSkillEvolutionEnabled] = useState(false)
+  const [autoPropose, setAutoPropose] = useState(false)
+  const [threshold, setThreshold] = useState(10)
+  const [thresholdInput, setThresholdInput] = useState("10")
+  const [thresholdSaved, setThresholdSaved] = useState(false)
+  const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(new Set())
+  const [runProgress, setRunProgress] = useState<Record<string, RunProgress>>({})
 
-  const { pendingEvolution, setPendingEvolution } = useAppStore()
+  const { threads, loadThreads } = useAppStore()
 
-  // Load auto-propose setting
-  useEffect(() => {
-    window.api.optimizer.getAutoPropose().then(setAutoPropose).catch(console.warn)
+  const pendingCount = candidates.filter((c) => c.status === "pending").length
+
+  const loadTraces = useCallback(async () => {
+    setTracesLoading(true)
+    try {
+      const list = await window.api.optimizer.getTraces({ limit: 80 })
+      setTraces(list)
+      setSelectedTraceIds((prev) => {
+        const keep = new Set<string>()
+        const valid = new Set(list.map((t) => t.traceId))
+        for (const id of prev) if (valid.has(id)) keep.add(id)
+        return keep
+      })
+    } finally {
+      setTracesLoading(false)
+    }
   }, [])
+
+  const runOptimizer = useCallback(async (
+    opts?: {
+      threadId?: string
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+    },
+    pendingMessage = "正在分析选中内容，请稍候..."
+  ) => {
+    setRunning(true)
+    setRunningSummary(pendingMessage)
+    setSummary(null)
+    setRunProgress({})
+    try {
+      const result = await window.api.optimizer.run(opts)
+      setSummary(result.summary)
+      setCandidates(await window.api.optimizer.getCandidates())
+    } catch (e) {
+      setSummary(`运行失败: ${e}`)
+    } finally {
+      setRunning(false)
+      setRunningSummary(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (threads.length === 0) {
+      loadThreads().catch(console.warn)
+    }
+  }, [threads.length, loadThreads])
+
+  useEffect(() => {
+    window.api.optimizer.getOnlineSkillEvolutionEnabled().then(setOnlineSkillEvolutionEnabled).catch(console.warn)
+    window.api.optimizer.getAutoPropose().then(setAutoPropose).catch(console.warn)
+    window.api.optimizer.getCandidates().then(setCandidates).catch(console.warn)
+    window.api.optimizer.getThreshold().then((v) => {
+      setThreshold(v)
+      setThresholdInput(String(v))
+    }).catch(console.warn)
+  }, [])
+
+  useEffect(() => {
+    if (tab === "traces" && !selectedTrace) {
+      loadTraces().catch(console.warn)
+    }
+  }, [tab, selectedTrace, loadTraces])
+
+  useEffect(() => {
+    const onRunProgress = window.api.optimizer.onRunProgress
+    if (typeof onRunProgress !== "function") return
+
+    return onRunProgress((payload) => {
+      setRunProgress((prev) => ({ ...prev, [payload.traceId]: payload }))
+    })
+  }, [])
+
+  const toggleOnlineSkillEvolution = useCallback(async () => {
+    const next = !onlineSkillEvolutionEnabled
+    setOnlineSkillEvolutionEnabled(next)
+    await window.api.optimizer.setOnlineSkillEvolutionEnabled(next).catch(console.warn)
+  }, [onlineSkillEvolutionEnabled])
 
   const toggleAutoPropose = useCallback(async () => {
     const next = !autoPropose
@@ -558,114 +741,321 @@ export function EvolutionPanel(): React.JSX.Element {
     await window.api.optimizer.setAutoPropose(next).catch(console.warn)
   }, [autoPropose])
 
-  const runOptimizer = useCallback(async () => {
-    setRunning(true); setSummary(null)
-    try {
-      const r = await window.api.optimizer.run()
-      setSummary(r.summary)
-      setCandidates(await window.api.optimizer.getCandidates())
-    } catch (e) { setSummary(`运行失败: ${e}`) }
-    setRunning(false)
-  }, [])
-
-  // Auto-run when panel opens and pendingEvolution is true
-  useEffect(() => {
-    if (pendingEvolution) {
-      setPendingEvolution(false)
-      setAutoTriggerBanner(true)
-      setTab("candidates")
-      runOptimizer()
-    }
-  }, [pendingEvolution, setPendingEvolution, runOptimizer])
-
-  useEffect(() => {
-    window.api.optimizer.getCandidates().then(setCandidates).catch(console.warn)
-  }, [])
-
-  useEffect(() => {
-    if (tab !== "traces" || selectedTrace) return
-    setTracesLoading(true)
-    window.api.optimizer.getTraces({ limit: 50 }).then(setTraces).catch(console.warn).finally(() => setTracesLoading(false))
-  }, [tab, selectedTrace])
+  const commitThreshold = useCallback(async () => {
+    const parsed = parseInt(thresholdInput, 10)
+    const clamped = Number.isNaN(parsed) ? 10 : Math.max(1, Math.min(99, parsed))
+    setThreshold(clamped)
+    setThresholdInput(String(clamped))
+    await window.api.optimizer.setThreshold(clamped).catch(console.warn)
+    setThresholdSaved(true)
+    setTimeout(() => setThresholdSaved(false), 1500)
+  }, [thresholdInput])
 
   const handleExpandTrace = useCallback(async (traceId: string) => {
     setDetailLoading(true)
     try {
-      const d = await window.api.optimizer.getTraceDetail(traceId)
-      if (d) setSelectedTrace(d as TraceDetail)
-    } catch (e) { console.warn(e) }
-    setDetailLoading(false)
+      const detail = await window.api.optimizer.getTraceDetail(traceId)
+      if (detail) {
+        setSelectedTrace(detail as TraceDetail)
+      }
+    } finally {
+      setDetailLoading(false)
+    }
   }, [])
 
-  const handleRun = runOptimizer
-
-  const handleApprove = useCallback(async (id: string) => {
-    const r = await window.api.optimizer.approve(id)
-    if (r.success) setCandidates(p => p.map(c => c.candidateId === id ? {...c, status:"approved"} : c))
+  const handleApprove = useCallback(async (candidateId: string) => {
+    const result = await window.api.optimizer.approve(candidateId)
+    if (result.success) {
+      setCandidates((prev) => prev.map((candidate) => (
+        candidate.candidateId === candidateId ? { ...candidate, status: "approved" } : candidate
+      )))
+    }
   }, [])
 
-  const handleReject = useCallback(async (id: string) => {
-    await window.api.optimizer.reject(id)
-    setCandidates(p => p.map(c => c.candidateId === id ? {...c, status:"rejected"} : c))
+  const handleReject = useCallback(async (candidateId: string) => {
+    await window.api.optimizer.reject(candidateId)
+    setCandidates((prev) => prev.map((candidate) => (
+      candidate.candidateId === candidateId ? { ...candidate, status: "rejected" } : candidate
+    )))
   }, [])
 
   const handleClear = useCallback(async () => {
-    await window.api.optimizer.clear(); setCandidates([]); setSummary(null)
+    await window.api.optimizer.clear()
+    setCandidates([])
+    setSummary(null)
   }, [])
 
-  const pendingCount = candidates.filter(c => c.status === "pending").length
+  const toggleTraceChecked = useCallback((traceId: string, checked: boolean) => {
+    setSelectedTraceIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(traceId)
+      else next.delete(traceId)
+      return next
+    })
+  }, [])
 
-  if (detailLoading) return (
-    <div className="flex items-center justify-center h-full">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" />
-    </div>
+  const handleDeleteTraces = useCallback(async (traceIds: string[]) => {
+    if (traceIds.length === 0) return
+    if (typeof window.api.optimizer.deleteTraces !== "function") {
+      console.error("[Evolution] deleteTraces API not available in preload")
+      setSummary("当前应用版本不支持 trace 删除，请重启应用后再试。")
+      window.alert("当前应用版本不支持 trace 删除，请重启应用后再试。")
+      return
+    }
+
+    const confirmed = window.confirm(
+      traceIds.length === 1
+        ? "确认删除这条 trace 吗？该操作不可恢复。"
+        : `确认删除选中的 ${traceIds.length} 条 trace 吗？该操作不可恢复。`
+    )
+    if (!confirmed) return
+
+    const result = await window.api.optimizer.deleteTraces(traceIds)
+    if (result.deletedIds.length > 0) {
+      const deleted = new Set(result.deletedIds)
+      setTraces((prev) => prev.filter((trace) => !deleted.has(trace.traceId)))
+      setSelectedTraceIds((prev) => {
+        const next = new Set(prev)
+        for (const id of deleted) next.delete(id)
+        return next
+      })
+      if (selectedTrace && deleted.has(selectedTrace.traceId)) {
+        setSelectedTrace(null)
+        setSummary("当前打开的 trace 已删除")
+      }
+    }
+
+    await loadTraces()
+
+    if (result.failed.length > 0) {
+      setSummary(`已删除 ${result.deletedIds.length} 条，失败 ${result.failed.length} 条`)
+    } else {
+      setSummary(`已删除 ${result.deletedIds.length} 条 trace`)
+    }
+  }, [selectedTrace, loadTraces])
+
+  const progressItems = Object.values(runProgress).sort((a, b) => a.index - b.index)
+  const allTraceIds = useMemo(() => traces.map((trace) => trace.traceId), [traces])
+  const threadTitleById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const thread of threads) {
+      map.set(thread.thread_id, thread.title?.trim() || `会话 ${thread.thread_id.slice(0, 8)}`)
+    }
+    return map
+  }, [threads])
+  const traceGroups = useMemo<TraceThreadGroup[]>(() => {
+    const grouped = new Map<string, TraceEntry[]>()
+    for (const trace of traces) {
+      const list = grouped.get(trace.threadId) ?? []
+      list.push(trace)
+      grouped.set(trace.threadId, list)
+    }
+
+    return Array.from(grouped.entries())
+      .map(([threadId, threadTraces]) => {
+        const sortedTraces = [...threadTraces].sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        return {
+          threadId,
+          threadTitle: threadTitleById.get(threadId) ?? `会话 ${threadId.slice(0, 8)}`,
+          traces: sortedTraces,
+          latestStartedAt: sortedTraces[0]?.startedAt ?? "",
+          totalToolCalls: sortedTraces.reduce((sum, trace) => sum + trace.totalToolCalls, 0),
+          successCount: sortedTraces.filter((trace) => trace.outcome === "success").length,
+          errorCount: sortedTraces.filter((trace) => trace.outcome === "error").length
+        }
+      })
+      .sort((a, b) => b.latestStartedAt.localeCompare(a.latestStartedAt))
+  }, [traces, threadTitleById])
+  const selectedThreadCount = useMemo(
+    () => traceGroups.filter((group) => group.traces.some((trace) => selectedTraceIds.has(trace.traceId))).length,
+    [traceGroups, selectedTraceIds]
   )
+  const allSelected = allTraceIds.length > 0 && allTraceIds.every((id) => selectedTraceIds.has(id))
 
-  if (selectedTrace) return <TraceDetailView detail={selectedTrace} onClose={() => setSelectedTrace(null)} />
+  const handleRunSelected = useCallback(async () => {
+    const traceIds = [...selectedTraceIds]
+    if (traceIds.length === 0) {
+      setSummary("请先选择会话或 trace")
+      return
+    }
+    const pendingMessage = selectedThreadCount > 0
+      ? `正在分析已选内容（${traceIds.length} 条 trace / ${selectedThreadCount} 个会话），请稍候...`
+      : `正在分析已选内容（${traceIds.length} 条 trace），请稍候...`
+    await runOptimizer({ mode: "selected", traceIds }, pendingMessage)
+    setTab("candidates")
+  }, [runOptimizer, selectedTraceIds, selectedThreadCount])
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedTraceIds((prev) => {
+      if (allTraceIds.length === 0) return prev
+      if (allTraceIds.every((id) => prev.has(id))) return new Set<string>()
+      return new Set(allTraceIds)
+    })
+  }, [allTraceIds])
+
+  const toggleThreadChecked = useCallback((threadId: string, checked: boolean) => {
+    setSelectedTraceIds((prev) => {
+      const next = new Set(prev)
+      const traceIds = traces.filter((trace) => trace.threadId === threadId).map((trace) => trace.traceId)
+      for (const traceId of traceIds) {
+        if (checked) next.add(traceId)
+        else next.delete(traceId)
+      }
+      return next
+    })
+  }, [traces])
+
+  const handleDeleteThread = useCallback(async (threadId: string) => {
+    const traceIds = traces.filter((trace) => trace.threadId === threadId).map((trace) => trace.traceId)
+    if (traceIds.length === 0) return
+    await handleDeleteTraces(traceIds)
+  }, [handleDeleteTraces, traces])
+
+  if (detailLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (selectedTrace) {
+    return <TraceDetailView detail={selectedTrace} onClose={() => setSelectedTrace(null)} />
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Toolbar */}
       <div className="shrink-0 border-b border-border px-4 py-3 flex items-center gap-2">
         <Sparkles className="size-4 text-muted-foreground" />
-        <span className="text-sm font-semibold flex-1">技能优化 (Evolution)</span>
-        <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={handleClear} disabled={running || candidates.length === 0}>
-          <Trash2 className="size-3" />清除候选
-        </Button>
-        <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={handleRun} disabled={running}>
-          {running ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-          {running ? "分析中…" : "分析 Traces"}
-        </Button>
+        <span className="text-sm font-semibold flex-1">自优化</span>
       </div>
 
-      {/* Auto-propose toggle */}
-      <div className="shrink-0 border-b border-border px-4 py-2 flex items-center gap-2 bg-muted/20">
+      {/* 配置区：在线自动沉淀总开关 + 模式/阈值 */}
+      <div className="shrink-0 border-b border-border px-4 py-2 bg-muted/20 flex items-start gap-3">
         <Settings2 className="size-3.5 text-muted-foreground/60 shrink-0" />
-        <span className="text-xs text-muted-foreground flex-1">
-          对话结束后自动弹出技能创建确认框
-        </span>
-        <button
-          onClick={toggleAutoPropose}
-          className={cn(
-            "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none shrink-0",
-            autoPropose ? "bg-violet-500" : "bg-muted-foreground/30"
-          )}
-          title={autoPropose ? "关闭：由模型自行决定是否创建技能" : "开启：满足条件后自动弹出确认框"}
-        >
-          <span className={cn(
-            "inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform",
-            autoPropose ? "translate-x-4" : "translate-x-0.5"
-          )} />
-        </button>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs text-muted-foreground">开启在线自动沉淀 Skill</span>
+            <div className="group relative shrink-0">
+              <Info className="size-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 cursor-default transition-colors" />
+              <div className="pointer-events-none absolute top-full left-0 mt-2 w-80 rounded-md border border-border bg-popover px-3 py-2 text-[11px] leading-5 text-muted-foreground shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                <p><span className="font-medium text-foreground">开启：</span> 会在当前对话过程中自动触发技能沉淀流程。</p>
+                <p className="mt-1"><span className="font-medium text-foreground">关闭：</span> 不会自动沉淀技能，你仍可在下方基于 traces 手动做离线优化。</p>
+              </div>
+            </div>
+            <button
+              onClick={toggleOnlineSkillEvolution}
+              className={cn(
+                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none shrink-0",
+                onlineSkillEvolutionEnabled ? "bg-violet-500" : "bg-muted-foreground/30"
+              )}
+            >
+              <span className={cn(
+                "inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform",
+                onlineSkillEvolutionEnabled ? "translate-x-4" : "translate-x-0.5"
+              )} />
+            </button>
+          </div>
+
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2 transition-opacity",
+              onlineSkillEvolutionEnabled ? "opacity-100" : "opacity-45"
+            )}
+          >
+            <span className="text-xs text-muted-foreground">触发模式</span>
+            <div className="inline-flex rounded-md border border-border bg-background p-0.5">
+              <button
+                disabled={!onlineSkillEvolutionEnabled}
+                onClick={() => {
+                  if (!autoPropose) void toggleAutoPropose()
+                }}
+                className={cn(
+                  "h-6 rounded px-2.5 text-[11px] transition-colors",
+                  autoPropose
+                    ? "bg-violet-500 text-white"
+                    : "text-muted-foreground hover:text-foreground",
+                  !onlineSkillEvolutionEnabled && "cursor-not-allowed hover:text-muted-foreground"
+                )}
+              >
+                直接触发
+              </button>
+              <button
+                disabled={!onlineSkillEvolutionEnabled}
+                onClick={() => {
+                  if (autoPropose) void toggleAutoPropose()
+                }}
+                className={cn(
+                  "h-6 rounded px-2.5 text-[11px] transition-colors",
+                  !autoPropose
+                    ? "bg-violet-500 text-white"
+                    : "text-muted-foreground hover:text-foreground",
+                  !onlineSkillEvolutionEnabled && "cursor-not-allowed hover:text-muted-foreground"
+                )}
+              >
+                模型判断
+              </button>
+            </div>
+            <div className="group relative shrink-0">
+              <Info className="size-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 cursor-default transition-colors" />
+              <div className="pointer-events-none absolute top-full left-0 mt-2 w-80 rounded-md border border-border bg-popover px-3 py-2 text-[11px] leading-5 text-muted-foreground shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                <p><span className="font-medium text-foreground">直接触发：</span> 达到工具调用阈值后，直接进入技能沉淀流程。</p>
+                <p className="mt-1"><span className="font-medium text-foreground">模型判断：</span> 达到工具调用阈值后，先由大模型判断是否值得沉淀，再决定是否进入技能沉淀流程。</p>
+              </div>
+            </div>
+
+            <span className="ml-2 text-xs text-muted-foreground">工具调用阈值</span>
+            <input
+              type="number"
+              min={1}
+              max={99}
+              disabled={!onlineSkillEvolutionEnabled}
+              value={thresholdInput}
+              onChange={(e) => {
+                setThresholdInput(e.target.value)
+                setThresholdSaved(false)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitThreshold()
+              }}
+              className={cn(
+                "w-12 h-6 rounded border bg-background text-center text-xs transition-colors",
+                "focus:outline-none focus:ring-1 focus:ring-violet-500/50",
+                "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                thresholdInput !== String(threshold)
+                  ? "border-violet-400 text-foreground"
+                  : "border-border text-muted-foreground",
+                !onlineSkillEvolutionEnabled && "cursor-not-allowed bg-muted/30"
+              )}
+            />
+            {thresholdSaved ? (
+              <span className="text-[11px] text-emerald-500 flex items-center gap-0.5">
+                <CheckCircle2 className="size-3" />已保存
+              </span>
+            ) : thresholdInput !== String(threshold) ? (
+              <button
+                disabled={!onlineSkillEvolutionEnabled}
+                onClick={commitThreshold}
+                className={cn(
+                  "h-6 px-2 rounded text-[11px] transition-colors",
+                  onlineSkillEvolutionEnabled
+                    ? "bg-violet-500 text-white hover:bg-violet-600"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                )}
+              >
+                保存
+              </button>
+            ) : (
+              <span className="w-10" />
+            )}
+          </div>
+        </div>
       </div>
 
-      {autoTriggerBanner && (
-        <div className="shrink-0 px-4 py-2 bg-orange-500/10 border-b border-orange-500/20 flex items-center gap-2">
-          <Zap className="size-3.5 text-orange-500 shrink-0" />
-          <p className="text-xs text-orange-700 dark:text-orange-400 flex-1">
-            检测到复杂任务（≥3次工具调用），正在自动分析并生成技能优化建议…
-          </p>
-          <button className="text-orange-500 hover:text-orange-700 text-xs" onClick={() => setAutoTriggerBanner(false)}>✕</button>
+      {running && runningSummary && (
+        <div className="shrink-0 px-4 py-2 bg-violet-500/10 border-b border-violet-500/20 flex items-center gap-2">
+          <Loader2 className="size-3.5 text-violet-600 animate-spin shrink-0" />
+          <p className="text-xs text-violet-700 dark:text-violet-300">{runningSummary}</p>
         </div>
       )}
 
@@ -675,46 +1065,155 @@ export function EvolutionPanel(): React.JSX.Element {
         </div>
       )}
 
-      {/* Tabs */}
+      {progressItems.length > 0 && (
+        <div className="shrink-0 border-b border-border px-4 py-2 bg-background/80">
+          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">优化进度（串行子任务）</p>
+          <div className="flex flex-wrap gap-1.5">
+            {progressItems.map((item) => (
+              <Badge key={item.traceId} variant="outline" className="text-[10px] gap-1">
+                <span className={cn(
+                  "size-1.5 rounded-full",
+                  item.status === "completed" ? "bg-emerald-500" :
+                    item.status === "failed" ? "bg-red-500" :
+                      item.status === "running" ? "bg-blue-500" : "bg-zinc-400"
+                )} />
+                {item.index}/{item.total} · {item.traceId.slice(0, 6)} · {item.status}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="shrink-0 flex border-b border-border px-4">
-        {(["candidates", "traces"] as Tab[]).map(t => (
-          <button key={t}
+        {(["candidates", "traces"] as Tab[]).map((item) => (
+          <button
+            key={item}
             className={cn(
               "flex items-center gap-1.5 text-xs py-2 px-1 border-b-2 mr-4 transition-colors",
-              tab === t ? "border-foreground text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"
+              tab === item ? "border-foreground text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"
             )}
-            onClick={() => setTab(t)}
+            onClick={() => setTab(item)}
           >
-            {t === "candidates" ? <><Sparkles className="size-3.5" />优化候选{pendingCount > 0 && <span className="ml-1 inline-flex items-center justify-center size-4 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[10px] font-bold">{pendingCount}</span>}</> : <><Activity className="size-3.5" />执行 Traces{tab === "traces" && traces.length > 0 && <span className="ml-1 text-[10px] text-muted-foreground">({traces.length})</span>}</>}
+            {item === "candidates" ? (
+              <>
+                <Sparkles className="size-3.5" />
+                优化候选
+                {pendingCount > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center size-4 rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[10px] font-bold">
+                    {pendingCount}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <Activity className="size-3.5" />
+                执行 Traces
+                {traces.length > 0 && (
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    ({traceGroups.length} 个会话 / {traces.length} 条)
+                  </span>
+                )}
+              </>
+            )}
           </button>
         ))}
       </div>
 
-      {/* Content */}
+      {tab === "candidates" && (
+        <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-2 bg-muted/10">
+          <span className="text-xs text-muted-foreground flex-1">候选 {candidates.length} 条</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 text-xs"
+            onClick={handleClear}
+            disabled={running || candidates.length === 0}
+          >
+            <Trash2 className="size-3" />清除候选
+          </Button>
+        </div>
+      )}
+
+      {tab === "traces" && (
+        <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-2 bg-muted/10">
+          <span className="text-xs text-muted-foreground flex-1">
+            已选 {selectedTraceIds.size} 条 trace · {selectedThreadCount} 个会话
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={traces.length === 0}
+            onClick={toggleSelectAll}
+          >
+            {allSelected ? "取消全选" : "全选"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={running || selectedTraceIds.size === 0}
+            onClick={handleRunSelected}
+          >
+            {running ? (
+              <>
+                <Loader2 className="size-3 mr-1 animate-spin" />
+                分析中...
+              </>
+            ) : (
+              "分析选中内容"
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            disabled={selectedTraceIds.size === 0}
+            onClick={() => handleDeleteTraces([...selectedTraceIds])}
+          >
+            <Trash2 className="size-3 mr-1" />删除
+          </Button>
+        </div>
+      )}
+
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-2">
           {tab === "candidates" ? (
-            candidates.length === 0
-              ? <EmptyState icon={<Sparkles className="size-8 text-muted-foreground/40 mb-3" />} title="暂无优化候选" desc="点击「分析 Traces」，Agent 将分析近期执行记录并提出技能优化建议" />
-              : candidates.map(c => <CandidateCard key={c.candidateId} candidate={c} onApprove={handleApprove} onReject={handleReject} />)
-          ) : tracesLoading
-            ? <div className="flex justify-center py-16"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
-            : traces.length === 0
-            ? <EmptyState icon={<Activity className="size-8 text-muted-foreground/40 mb-3" />} title="暂无执行记录" desc="Traces 在每次 Agent 调用后自动记录到本地" />
-            : traces.map(t => <TraceCard key={t.traceId} trace={t} onExpand={handleExpandTrace} />)
-          }
+            candidates.length === 0 ? (
+              <EmptyState
+                icon={<Sparkles className="size-8 text-muted-foreground/40 mb-3" />}
+                title="暂无优化候选"
+                desc="请先切换到「执行 Traces」，分析会话或选中的 trace"
+              />
+            ) : (
+              candidates.map((candidate) => (
+                <CandidateCard key={candidate.candidateId} candidate={candidate} onApprove={handleApprove} onReject={handleReject} />
+              ))
+            )
+          ) : tracesLoading ? (
+            <div className="flex justify-center py-16"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
+          ) : traces.length === 0 ? (
+            <EmptyState
+              icon={<Activity className="size-8 text-muted-foreground/40 mb-3" />}
+              title="暂无执行记录"
+              desc="Traces 会按会话分组展示，每次 Agent 调用结束后自动记录到本地"
+            />
+          ) : (
+            traceGroups.map((group) => (
+              <TraceThreadGroupCard
+                key={group.threadId}
+                group={group}
+                selectedTraceIds={selectedTraceIds}
+                onToggleTrace={toggleTraceChecked}
+                onOpenTrace={handleExpandTrace}
+                onDeleteTrace={(traceId) => handleDeleteTraces([traceId]).catch(console.warn)}
+                onToggleThread={toggleThreadChecked}
+                onDeleteThread={(threadId) => handleDeleteThread(threadId).catch(console.warn)}
+              />
+            ))
+          )}
         </div>
       </ScrollArea>
-    </div>
-  )
-}
-
-function EmptyState({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      {icon}
-      <p className="text-sm text-muted-foreground">{title}</p>
-      <p className="text-xs text-muted-foreground/60 mt-1 max-w-xs">{desc}</p>
     </div>
   )
 }

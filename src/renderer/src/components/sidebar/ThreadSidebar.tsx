@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, GitBranch } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -175,8 +175,10 @@ export function ThreadSidebar(): React.JSX.Element {
     selectThread,
     deleteThread,
     updateThread,
-    showCustomizeView,
-    setShowCustomizeView
+    mainView,
+    setMainView,
+    pendingEvolution,
+    setPendingEvolution
   } = useAppStore()
 
   const { cleanupThread } = useThreadContext()
@@ -198,11 +200,11 @@ export function ThreadSidebar(): React.JSX.Element {
 
   const currentThreadIdRef = useRef(currentThreadId)
   currentThreadIdRef.current = currentThreadId
-  const showCustomizeViewRef = useRef(showCustomizeView)
-  showCustomizeViewRef.current = showCustomizeView
+  const mainViewRef = useRef(mainView)
+  mainViewRef.current = mainView
 
   const handleRunFinished = useCallback((threadId: string) => {
-    if (threadId === currentThreadIdRef.current && !showCustomizeViewRef.current) return
+    if (threadId === currentThreadIdRef.current && mainViewRef.current === "thread") return
     setUnreadIds((prev) => {
       if (prev.has(threadId)) return prev
       const next = new Set(prev)
@@ -264,14 +266,32 @@ export function ThreadSidebar(): React.JSX.Element {
           size="sm"
           className={cn(
             "w-full justify-start gap-2 text-sm font-semibold",
-            showCustomizeView && "bg-muted"
+            mainView === "customize" && "bg-muted"
           )}
-          onClick={() => setShowCustomizeView(!showCustomizeView)}
+          onClick={() => setMainView("customize")}
         >
           <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
             <Briefcase className="size-3" />
           </div>
           <span className="text-muted-foreground">自定义</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full justify-start gap-2 text-sm font-semibold",
+            mainView === "evolution" && "bg-muted"
+          )}
+          onClick={() => {
+            setMainView("evolution")
+            setPendingEvolution(false)
+          }}
+        >
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <GitBranch className="size-3" />
+          </div>
+          <span className="flex-1 text-left text-muted-foreground">自优化</span>
+          {pendingEvolution && <span className="size-2 rounded-full bg-orange-500 shrink-0" />}
         </Button>
       </div>
 

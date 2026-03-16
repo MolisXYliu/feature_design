@@ -28,6 +28,63 @@ export interface TraceToolCall {
   durationMs?: number
 }
 
+/** A normalized chat message used by model-call traces. */
+export interface TraceChatMessage {
+  role: "system" | "user" | "assistant" | "tool" | "unknown"
+  content: string
+  name?: string
+  toolCallId?: string
+}
+
+/** Token usage attached to a model call (if provider reports it). */
+export interface TraceTokenUsage {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+}
+
+/** One LLM run (inputs -> output), similar to LangSmith run records. */
+export interface TraceModelCall {
+  /** Stable AI message id when available */
+  messageId?: string
+  /** ISO timestamp when this call was recorded */
+  startedAt: string
+  /** Request-side context sent to the model (trimmed to recent messages). */
+  inputMessages: TraceChatMessage[]
+  /** Final model output message */
+  outputMessage: TraceChatMessage
+  /** Tool calls emitted by this model output */
+  toolCalls: TraceToolCall[]
+  /** Provider token usage metadata */
+  tokenUsage?: TraceTokenUsage
+}
+
+export type TraceNodeType =
+  | "trace"
+  | "llm"
+  | "tool"
+  | "tool_result"
+  | "message"
+  | "error"
+  | "cancel"
+
+export type TraceNodeStatus = "running" | "success" | "error" | "cancelled" | "unknown"
+
+export interface TraceNode {
+  id: string
+  type: TraceNodeType
+  parentId: string | null
+  name?: string
+  status?: TraceNodeStatus
+  startedAt: string
+  endedAt?: string
+  input?: unknown
+  output?: unknown
+  metadata?: Record<string, unknown>
+}
+
 /** One reasoning step (one model message + its tool calls). */
 export interface TraceStep {
   /** Step index within the trace (0-based) */
@@ -74,6 +131,10 @@ export interface AgentTrace {
   modelId: string
   /** Ordered list of reasoning steps */
   steps: TraceStep[]
+  /** Ordered model-call runs (request + response) */
+  modelCalls?: TraceModelCall[]
+  /** Unified LangSmith-style run tree nodes */
+  nodes?: TraceNode[]
   /** Total number of tool calls across all steps */
   totalToolCalls: number
   /** How the run ended */

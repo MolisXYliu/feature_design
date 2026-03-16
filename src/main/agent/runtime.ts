@@ -14,6 +14,7 @@ import {
   getEnabledMcpConnectors,
   getCustomModelConfigs,
   isMemoryEnabled,
+  getSkillEvolutionThreshold as getStoredSkillEvolutionThreshold,
   DEFAULT_MAX_TOKENS,
   getEnabledPluginSkillsSources,
   getEnabledPluginMcpConfigs
@@ -329,7 +330,11 @@ const checkpointers = new Map<string, SqlJsSaver>()
 // in each thread during the current session. Used to trigger
 // the skill-evolution nudge after SKILL_EVOLUTION_THRESHOLD calls.
 // ─────────────────────────────────────────────────────────
-export const SKILL_EVOLUTION_THRESHOLD = 3
+
+/** Returns the current skill-evolution threshold from persistent storage. */
+export function getSkillEvolutionThreshold(): number {
+  return getStoredSkillEvolutionThreshold()
+}
 
 /** Per-thread tool-call counters (in-memory, reset on app restart) */
 const _threadToolCallCounts = new Map<string, number>()

@@ -2,6 +2,9 @@ import { create } from "zustand"
 import type { Thread, ModelConfig, Provider } from "@/types"
 
 interface AppState {
+  // Main content view routing
+  mainView: "thread" | "customize" | "evolution" | "kanban"
+
   // Threads
   threads: Thread[]
   currentThreadId: string | null
@@ -57,6 +60,7 @@ interface AppState {
 
   // Customize actions
   setShowCustomizeView: (show: boolean) => void
+  setMainView: (view: "thread" | "customize" | "evolution" | "kanban") => void
 
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
@@ -86,6 +90,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   sidebarCollapsed: false,
   rightPanelCollapsed: false,
+  mainView: "thread",
   showKanbanView: false,
   showSubagentsInKanban: true,
   showCustomizeView: false,
@@ -107,13 +112,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       threads: [thread, ...state.threads],
       currentThreadId: thread.thread_id,
-      showKanbanView: false
+      showKanbanView: false,
+      showCustomizeView: false,
+      mainView: "thread"
     }))
     return thread
   },
 
   selectThread: async (threadId: string) => {
-    set({ currentThreadId: threadId, showKanbanView: false, showCustomizeView: false })
+    set({
+      currentThreadId: threadId,
+      showKanbanView: false,
+      showCustomizeView: false,
+      mainView: "thread"
+    })
   },
 
   deleteThread: async (threadId: string) => {
@@ -196,9 +208,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Kanban actions
   setShowKanbanView: (show: boolean) => {
     if (show) {
-      set({ showKanbanView: true, showCustomizeView: false, currentThreadId: null })
+      set({
+        showKanbanView: true,
+        showCustomizeView: false,
+        mainView: "kanban",
+        currentThreadId: null
+      })
     } else {
-      set({ showKanbanView: false })
+      set({ showKanbanView: false, mainView: "thread" })
     }
   },
 
@@ -208,10 +225,50 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setShowCustomizeView: (show: boolean) => {
     if (show) {
-      set({ showCustomizeView: true, showKanbanView: false })
+      set({
+        showCustomizeView: true,
+        showKanbanView: false,
+        mainView: "customize"
+      })
     } else {
-      set({ showCustomizeView: false })
+      set({ showCustomizeView: false, mainView: "thread" })
     }
+  },
+
+  setMainView: (view) => {
+    if (view === "kanban") {
+      set({
+        mainView: "kanban",
+        showKanbanView: true,
+        showCustomizeView: false,
+        currentThreadId: null
+      })
+      return
+    }
+
+    if (view === "customize") {
+      set({
+        mainView: "customize",
+        showCustomizeView: true,
+        showKanbanView: false
+      })
+      return
+    }
+
+    if (view === "evolution") {
+      set({
+        mainView: "evolution",
+        showCustomizeView: false,
+        showKanbanView: false
+      })
+      return
+    }
+
+    set({
+      mainView: "thread",
+      showCustomizeView: false,
+      showKanbanView: false
+    })
   },
 
   bumpPluginVersion: () => {

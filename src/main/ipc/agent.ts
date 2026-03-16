@@ -3,16 +3,20 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
 import {
   createAgentRuntime,
-  incrementToolCallCount,
-  getToolCallCount,
-  resetToolCallCount,
-  SKILL_EVOLUTION_THRESHOLD
+  getSkillEvolutionThreshold
 } from "../agent/runtime"
 import { getThread } from "../db"
 import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
-import { getCustomModelConfigs, isMemoryEnabled, getCustomSkillsDir, invalidateEnabledSkillsCache, isSkillAutoProposeEnabled } from "../storage"
+import {
+  getCustomModelConfigs,
+  isMemoryEnabled,
+  getCustomSkillsDir,
+  invalidateEnabledSkillsCache,
+  isOnlineSkillEvolutionEnabled,
+  isSkillAutoProposeEnabled
+} from "../storage"
 import { notifyIfBackground } from "../services/notify"
 import { TraceCollector } from "../agent/trace/collector"
 import {
@@ -23,11 +27,29 @@ import {
 import { mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import { v4 as uuid } from "uuid"
-import {
-  SkillUsageDetector,
-  getAutoProposeToolCallCount
-} from "../agent/skill-evolution/usage-detector"
+import { SkillUsageDetector } from "../agent/skill-evolution/usage-detector"
 import { ToolCallCounter } from "../agent/skill-evolution/tool-call-counter"
+import {
+  resetSkillEvolutionSession,
+  shouldResetSkillEvolutionSessionAfterIntent
+} from "../agent/skill-evolution/session-state"
+import {
+  appendSkillProposalWindowTurn,
+  buildSkillProposalWindowContext,
+  snapshotSkillProposalWindow,
+  type SkillProposalWindowContext
+} from "../agent/skill-evolution/proposal-window"
+import {
+  buildWorthinessPrompt,
+  getSkillProposalMode,
+  parseWorthinessResponse,
+  parseSkillProposal,
+  shouldEvaluateSkillProposalWindow,
+  shouldJudgeSkillWorthiness,
+  shouldProposeSkill,
+  type SkillProposal,
+  type WorthinessResult
+} from "../agent/skill-evolution/skill-proposal-logic"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -43,6 +65,7 @@ const activeRuns = new Map<string, AbortController>()
 // ─────────────────────────────────────────────────────────
 // Auto skill proposal: generate a skill from conversation context
 // ─────────────────────────────────────────────────────────
+
 
 const SKILL_PROPOSAL_SYSTEM_PROMPT = `You are an expert at capturing reusable agent skills from conversation history.
 
@@ -96,16 +119,78 @@ function emitSkillGenerating(
 }
 
 /**
+ * Ask the LLM whether this conversation is worth saving as a skill.
+ * Called unconditionally for every threshold-passing conversation.
+ * Returns true if worthy, false if not (or if no model / parse error).
+ */
+async function judgeSkillWorthiness(
+  threadId: string,
+  context: SkillProposalWindowContext
+): Promise<WorthinessResult | null> {
+  const configs = getCustomModelConfigs()
+  const config = configs[0]
+  if (!config?.apiKey) {
+    console.log(`[SkillEvolution][${threadId}] Worthiness LLM skipped: missing model config or API key`)
+    return null
+  }
+
+  const model = new ChatOpenAI({
+    model: config.model,
+    apiKey: config.apiKey,
+    configuration: { baseURL: config.baseUrl },
+    maxTokens: 1024,
+    temperature: 0
+  })
+
+  const userPrompt = `## Conversation window since last skill-evolution reset (${context.turnCount} turns)
+${context.transcript.slice(0, 3200)}
+
+## Tools used (${context.toolCallCount} total)
+${context.toolCallSummary}
+
+Is this conversation worth saving as a reusable skill?`
+
+  try {
+    console.log(`[SkillEvolution][${threadId}] Worthiness LLM invoke start ${JSON.stringify({
+      toolCallCount: context.toolCallCount,
+      threshold: getSkillEvolutionThreshold(),
+      turnCount: context.turnCount,
+      errorCount: context.errorCount,
+      toolCallSummary: context.toolCallSummary
+    })}`)
+    const response = await model.invoke([
+      new SystemMessage(buildWorthinessPrompt(context.toolCallCount, getSkillEvolutionThreshold())),
+      new HumanMessage(userPrompt)
+    ])
+    const raw = typeof response.content === "string" ? response.content : ""
+    console.log(`[SkillEvolution][${threadId}] Worthiness LLM raw ${JSON.stringify({
+      preview: raw.slice(0, 400)
+    })}`)
+    const result = parseWorthinessResponse(raw)
+    if (!result) {
+      console.warn(`[SkillEvolution][${threadId}] Failed to parse worthiness response:`, raw.slice(0, 200))
+      return null
+    }
+    console.log(`[SkillEvolution][${threadId}] Worthiness LLM invoke done ${JSON.stringify({
+      worthy: result.worthy,
+      reason: result.reason
+    })}`)
+    return result
+  } catch (e) {
+    console.warn(`[SkillEvolution][${threadId}] Failed to judge worthiness:`, e)
+    return null
+  }
+}
+
+/**
  * Use the default configured LLM to generate a skill proposal from the
  * given conversation context.  Streams tokens to the renderer via
  * `skill:generating` events so the user can see progress in real time.
  * Returns null if no model is configured or the LLM response cannot be parsed.
  */
 async function generateSkillProposal(
-  userMessage: string,
-  assistantText: string,
-  toolCallSummary: string
-): Promise<{ name: string; skillId: string; description: string; content: string } | null> {
+  context: SkillProposalWindowContext
+): Promise<SkillProposal | null> {
   const configs = getCustomModelConfigs()
   const config = configs[0]
   if (!config?.apiKey) return null
@@ -119,16 +204,13 @@ async function generateSkillProposal(
     streaming: true
   })
 
-  const userPrompt = `# Conversation to analyze
+  const userPrompt = `# Conversation window to analyze
 
-## User request
-${userMessage.slice(0, 500)}
+## Transcript (${context.turnCount} turns)
+${context.transcript.slice(0, 4000)}
 
-## Agent response (summary)
-${assistantText.slice(0, 800)}
-
-## Tools used
-${toolCallSummary}
+## Tools used (${context.toolCallCount} total)
+${context.toolCallSummary}
 
 Based on this conversation, generate a reusable skill. Output JSON only.`
 
@@ -153,18 +235,13 @@ Based on this conversation, generate a reusable skill. Output JSON only.`
 
     emitSkillGenerating("done", fullText)
 
-    // Strip <think>...</think> reasoning blocks (deepseek-r1 and similar models)
-    // then strip markdown fences if present
-    const cleaned = fullText
-      .replace(/<think>[\s\S]*?<\/think>/gi, "")
-      .replace(/^```json\s*/im, "")
-      .replace(/^```\s*/im, "")
-      .replace(/```\s*$/im, "")
-      .trim()
-
-    const parsed = JSON.parse(cleaned) as { name?: string; skillId?: string; description?: string; content?: string }
-    if (!parsed.name || !parsed.skillId || !parsed.description || !parsed.content) return null
-    return parsed as { name: string; skillId: string; description: string; content: string }
+    // Strip <think>...</think> reasoning blocks and markdown fences, then parse JSON
+    const proposal = parseSkillProposal(fullText)
+    if (!proposal) {
+      console.warn("[Agent] Failed to parse skill proposal JSON")
+      return null
+    }
+    return proposal
   } catch (e) {
     console.warn("[Agent] Failed to generate skill proposal:", e)
     emitSkillGenerating("error", e instanceof Error ? e.message : String(e))
@@ -187,104 +264,125 @@ async function writeSkillToDisk(skillId: string, content: string, name: string):
 }
 
 /**
- * After a conversation meets the threshold, this function runs as a
- * fire-and-forget async task.
+ * Shared tail of the skill proposal flow (used by both modes):
+ *   1. Ask user intent via banner
+ *   2. On yes → LLM generates skill (streaming)
+ *   3. Show detail confirm dialog
+ *   4. On adopt → write to disk
+ */
+async function runSkillProposalFlow(
+  threadId: string,
+  context: SkillProposalWindowContext,
+  intentMode: "mode_a_rule" | "mode_b_llm",
+  recommendationReason?: string
+): Promise<void> {
+  const latestUserMessage = context.turns[context.turns.length - 1]?.userMessage ?? context.transcript
+
+  // Step 1 — Intent banner: ask user whether they want to save as a skill
+  const intentId = uuid()
+  const wantsSkill = await requestSkillIntent({
+    requestId: intentId,
+    summary: latestUserMessage.slice(0, 120),
+    toolCallCount: context.toolCallCount,
+    mode: intentMode,
+    recommendationReason
+  })
+
+  if (shouldResetSkillEvolutionSessionAfterIntent(wantsSkill ? "accept" : "skip")) {
+    resetSkillEvolutionSession(threadId)
+  }
+
+  if (!wantsSkill) {
+    console.log(`[Agent][${threadId}] User declined skill intent`)
+    return
+  }
+
+  // Step 2 — LLM generates skill draft (streaming, visible in right panel)
+  console.log(`[Agent][${threadId}] User confirmed intent, generating skill proposal…`)
+  const proposal = await generateSkillProposal(context)
+  if (!proposal) {
+    console.log(`[Agent][${threadId}] Could not generate skill proposal (no model or parse error)`)
+    return
+  }
+
+  const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
+  if (!skillId) return
+
+  // Step 3 — Detail confirm dialog
+  const confirmId = uuid()
+  const adopted = await requestSkillConfirmation({
+    requestId: confirmId,
+    skillId,
+    name: proposal.name,
+    description: proposal.description,
+    content: proposal.content
+  })
+
+  if (!adopted) {
+    console.log(`[Agent][${threadId}] User rejected skill detail for "${proposal.name}"`)
+    return
+  }
+
+  // Step 4 — Write to disk
+  await writeSkillToDisk(skillId, proposal.content, proposal.name)
+}
+
+/**
+ * After a conversation meets the tool-call threshold, decide whether to
+ * propose a skill and, if so, run the shared proposal flow.
  *
- * MODE A — auto-propose ON (default):
- *   1. Send `skill:intentRequest` → lightweight banner asks "Want to save as skill?"
- *   2. User clicks YES → call LLM to generate skill proposal
- *   3. Send `skill:confirmRequest` → full detail dialog (name/desc/content)
- *   4. User "Adopt" → write to disk
+ * Mode A (toggle ON):
+ *   threshold reached -> enter proposal flow directly
  *
- * MODE B — auto-propose OFF:
- *   1. Call LLM directly to judge whether this conversation warrants a skill
- *   2. If LLM says yes → send `skill:confirmRequest` → full detail dialog
- *   3. User "Adopt" → write to disk
+ * Mode B (toggle OFF):
+ *   threshold reached -> ask worthiness LLM -> only continue when worthy=true
+ *
+ * Both modes then share the same user-facing flow:
+ *   Intent Banner → LLM generates draft → Detail confirm → Write to disk
  */
 async function autoProposeSKill(
   threadId: string,
-  userMessage: string,
-  assistantText: string,
-  toolCallNames: string[],
-  toolCallCount: number
+  context: SkillProposalWindowContext
 ): Promise<void> {
-  const toolCallSummary = toolCallNames.length > 0
-    ? toolCallNames.join(", ")
-    : "(none)"
+  const autoProposeEnabled = isSkillAutoProposeEnabled()
+  const mode = getSkillProposalMode(autoProposeEnabled)
 
-  if (isSkillAutoProposeEnabled()) {
-    // ── Mode A: ask human first, then generate ───────────────────
-    console.log(`[Agent][ModeA] Thread ${threadId}: asking user intent (${toolCallCount} tool calls)`)
+  console.log(`[SkillEvolution][${threadId}] Decision start ${JSON.stringify({
+    mode,
+    toolCallCount: context.toolCallCount,
+    turnCount: context.turnCount,
+    errorCount: context.errorCount,
+    toolCallSummary: context.toolCallSummary
+  })}`)
 
-    const intentId = uuid()
-    const wantsSkill = await requestSkillIntent({
-      requestId: intentId,
-      summary: userMessage.slice(0, 120),
-      toolCallCount
-    })
-
-    if (!wantsSkill) {
-      console.log("[Agent][ModeA] User declined skill intent")
-      return
-    }
-
-    // User said yes — now generate the skill content with LLM
-    console.log("[Agent][ModeA] User confirmed intent, generating skill proposal…")
-    const proposal = await generateSkillProposal(userMessage, assistantText, toolCallSummary)
-    if (!proposal) {
-      console.log("[Agent][ModeA] Could not generate skill proposal (no model or parse error)")
-      return
-    }
-
-    const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
-    if (!skillId) return
-
-    const confirmId = uuid()
-    const adopted = await requestSkillConfirmation({
-      requestId: confirmId,
-      skillId,
-      name: proposal.name,
-      description: proposal.description,
-      content: proposal.content
-    })
-
-    if (!adopted) {
-      console.log(`[Agent][ModeA] User rejected skill detail for "${proposal.name}"`)
-      return
-    }
-
-    await writeSkillToDisk(skillId, proposal.content, proposal.name)
-
+  let llmWorthy = false
+  let worthinessReason: string | undefined
+  if (shouldJudgeSkillWorthiness(mode)) {
+    const worthiness = await judgeSkillWorthiness(threadId, context)
+    llmWorthy = worthiness?.worthy ?? false
+    worthinessReason = worthiness?.reason
   } else {
-    // ── Mode B: let LLM decide first, then ask human ─────────────
-    console.log(`[Agent][ModeB] Thread ${threadId}: calling LLM to judge skill worthiness`)
-
-    const proposal = await generateSkillProposal(userMessage, assistantText, toolCallSummary)
-    if (!proposal) {
-      console.log("[Agent][ModeB] LLM declined or failed to generate a skill proposal")
-      return
-    }
-
-    const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
-    if (!skillId) return
-
-    console.log(`[Agent][ModeB] LLM proposed skill "${proposal.name}", asking user to adopt`)
-    const confirmId = uuid()
-    const adopted = await requestSkillConfirmation({
-      requestId: confirmId,
-      skillId,
-      name: proposal.name,
-      description: proposal.description,
-      content: proposal.content
-    })
-
-    if (!adopted) {
-      console.log(`[Agent][ModeB] User rejected skill "${proposal.name}"`)
-      return
-    }
-
-    await writeSkillToDisk(skillId, proposal.content, proposal.name)
+    console.log(`[SkillEvolution][${threadId}] Mode A selected, skipping worthiness LLM`)
   }
+
+  const shouldPropose = shouldProposeSkill(mode, llmWorthy)
+
+  if (!shouldPropose) {
+    console.log(`[SkillEvolution][${threadId}] Decision skip ${JSON.stringify({
+      mode,
+      llmWorthy,
+      reason: "proposal_flow_not_triggered"
+    })}`)
+    return
+  }
+
+  console.log(`[SkillEvolution][${threadId}] Decision enter proposal flow ${JSON.stringify({
+    mode,
+    llmWorthy,
+    toolCallCount: context.toolCallCount,
+    turnCount: context.turnCount
+  })}`)
+  await runSkillProposalFlow(threadId, context, mode, worthinessReason)
 }
 
 
@@ -328,11 +426,49 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
     // Start trace collection for this invocation (modelId resolved later)
     const tracer = new TraceCollector(threadId, message, modelId ?? "unknown")
+    const skillUsageDetector = new SkillUsageDetector()
+    const toolCallCounter = new ToolCallCounter()
+    let assistantText = ""
+
+    const appendTurnToProposalWindow = (
+      status: "success" | "error",
+      errorMessage?: string
+    ): SkillProposalWindowContext => {
+      appendSkillProposalWindowTurn(threadId, {
+        userMessage: message,
+        assistantText,
+        toolCallNames: toolCallCounter.getNames(),
+        toolCallCount: toolCallCounter.getCount(),
+        status,
+        errorMessage,
+        usedLoadedSkill: skillUsageDetector.wasSkillUsed(),
+        activeSkillNames: skillUsageDetector.getActiveSkillNames(),
+        finishedAt: new Date().toISOString()
+      })
+
+      const context = buildSkillProposalWindowContext(snapshotSkillProposalWindow(threadId))
+      console.log(`[SkillEvolution][${threadId}] Window append ${JSON.stringify({
+        status,
+        currentTurnToolCallCount: toolCallCounter.getCount(),
+        windowTurnCount: context.turnCount,
+        windowToolCallCount: context.toolCallCount,
+        windowSkillUsed: context.usedLoadedSkill,
+        activeSkills: context.activeSkillNames
+      })}`)
+      return context
+    }
 
     try {
       // Get workspace path from thread metadata - REQUIRED
       const thread = getThread(threadId)
-      const metadata = thread?.metadata ? JSON.parse(thread.metadata) : {}
+      let metadata: Record<string, unknown> = {}
+      if (thread?.metadata) {
+        try {
+          metadata = JSON.parse(thread.metadata)
+        } catch {
+          console.warn("[Agent] Failed to parse thread metadata, using empty object")
+        }
+      }
       console.log("[Agent] Thread metadata:", metadata)
 
       const workspacePath = metadata.workspacePath as string | undefined
@@ -393,8 +529,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       const _countedAiMsgIds = new Set<string>()
       const _countedModelMsgIds = new Set<string>()
-      const skillUsageDetector = new SkillUsageDetector()
-      const toolCallCounter = new ToolCallCounter()
+      const _countedToolResultMsgIds = new Set<string>()
+      const _llmNodeByMessageId = new Map<string, string>()
+      const _toolNodeByRef = new Map<string, string>()
       const MODEL_INPUT_WINDOW = 12
       const MAX_TRACE_CONTENT = 2000
 
@@ -457,7 +594,6 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         return { inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens }
       }
 
-      let assistantText = ""
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
 
@@ -507,6 +643,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                 const classId = Array.isArray(msg?.id) ? msg.id : []
                 const className = classId[classId.length - 1] || ""
                 const isAI = className.includes("AI") || kwargs.type === "ai"
+                const isToolMessage = className.includes("Tool") || kwargs.type === "tool"
                 const aiMsgId = typeof kwargs.id === "string" ? kwargs.id : ""
                 if (isAI && aiMsgId && !_countedModelMsgIds.has(aiMsgId)) {
                   _countedModelMsgIds.add(aiMsgId)
@@ -533,6 +670,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                     }))
                     : []
 
+                  const llmNodeId = tracer.beginLlmNode({
+                    messageId: aiMsgId,
+                    startedAt: new Date().toISOString(),
+                    input: inputSlice,
+                    metadata: {
+                      toolCallCount: outputToolCalls.length
+                    }
+                  })
+                  _llmNodeByMessageId.set(aiMsgId, llmNodeId)
+
                   tracer.recordModelCall({
                     messageId: aiMsgId,
                     startedAt: new Date().toISOString(),
@@ -544,26 +691,63 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                     toolCalls: outputToolCalls,
                     tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
                   })
+
+                  tracer.endLlmNode({
+                    nodeId: llmNodeId,
+                    output: extractText(kwargs.content),
+                    status: "success",
+                    metadata: {
+                      tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
+                    }
+                  })
                 }
 
-                if (!Array.isArray(tcs)) continue
-                for (let tcIndex = 0; tcIndex < tcs.length; tcIndex++) {
-                  const tc = tcs[tcIndex]
-                  const counted = toolCallCounter.register(tc, aiMsgId, tcIndex)
-                  if (counted) {
-                    const tcName = tc?.name ?? "unknown"
-                    const newCount = incrementToolCallCount(threadId)
-                    console.log(`[Agent] Tool call #${newCount} (${tcName}) in thread ${threadId} [values]`)
-                  }
+                if (Array.isArray(tcs)) {
+                  for (let tcIndex = 0; tcIndex < tcs.length; tcIndex++) {
+                    const tc = tcs[tcIndex]
+                    const tcId = typeof tc?.id === "string" ? tc.id : ""
+                    const toolRef = tcId || `${aiMsgId || "ai_unknown"}:${tcIndex}:${JSON.stringify(tc?.args ?? {})}`
+                    if (!_toolNodeByRef.has(toolRef)) {
+                      const parentId = aiMsgId ? _llmNodeByMessageId.get(aiMsgId) : undefined
+                      const toolNodeId = tracer.addToolNode({
+                        name: tc?.name ?? "unknown",
+                        input: tc?.args ?? {},
+                        parentId,
+                        llmMessageId: aiMsgId || undefined,
+                        toolCallId: tcId || undefined,
+                        metadata: { index: tcIndex }
+                      })
+                      _toolNodeByRef.set(toolRef, toolNodeId)
+                    }
 
-                  if (tc?.name !== "read_file") continue
-                  const readPathRaw =
-                    (typeof tc.args?.path === "string" && tc.args.path) ||
-                    (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
-                    ""
-                  if (readPathRaw) {
-                    skillUsageDetector.onReadFilePath(readPathRaw)
+                    if (tc?.name !== "read_file") continue
+                    const readPathRaw =
+                      (typeof tc.args?.path === "string" && tc.args.path) ||
+                      (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
+                      ""
+                    if (readPathRaw) {
+                      skillUsageDetector.onReadFilePath(readPathRaw)
+                    }
                   }
+                }
+
+                if (isToolMessage) {
+                  const toolMsgId = typeof kwargs.id === "string"
+                    ? kwargs.id
+                    : `${kwargs.tool_call_id ?? "tool"}:${i}:${extractText(kwargs.content)}`
+                  if (_countedToolResultMsgIds.has(toolMsgId)) continue
+                  const toolCallId = typeof kwargs.tool_call_id === "string" ? kwargs.tool_call_id : ""
+                  _countedToolResultMsgIds.add(toolMsgId)
+                  const parentId = toolCallId ? _toolNodeByRef.get(toolCallId) : undefined
+                  tracer.addToolResultNode({
+                    parentId,
+                    toolCallId: toolCallId || undefined,
+                    output: extractText(kwargs.content),
+                    status: "success",
+                    metadata: {
+                      messageId: toolMsgId
+                    }
+                  })
                 }
               }
             }
@@ -601,9 +785,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             const toolCalls = kwargs.tool_calls as Array<{
               id?: string; name?: string; args?: Record<string, unknown>
             }> | undefined
-            if (!toolCalls || toolCalls.length === 0) continue
-
             const msgId = (kwargs.id as string) || ""
+            if (!toolCalls || toolCalls.length === 0) continue
             if (msgId && _countedAiMsgIds.has(msgId)) continue
             if (msgId) _countedAiMsgIds.add(msgId)
 
@@ -637,8 +820,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               }
 
               if (counted) {
-                const newCount = incrementToolCallCount(threadId)
-                console.log(`[Agent] Tool call #${newCount} (${tcName}) in thread ${threadId}`)
+                const turnCount = toolCallCounter.getCount()
+                console.log(`[Agent] Turn tool call #${turnCount} (${tcName}) in thread ${threadId}`)
               }
             }
             tracer.endStep(stepText)
@@ -662,29 +845,39 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         tracer.setActiveSkills(skillUsageDetector.getActiveSkillNames())
         await tracer.finish("success")
 
-        // Check if this turn crossed the skill-evolution threshold.
-        // autoProposeSKill handles both modes (A: ask human first; B: LLM judges first).
-        const turnToolCallCount = getToolCallCount(threadId)
-        if (turnToolCallCount >= SKILL_EVOLUTION_THRESHOLD) {
-          resetToolCallCount(threadId)
-          if (skillUsageDetector.wasSkillUsed()) {
-            const activeSkills = skillUsageDetector.getActiveSkillNames()
-            const names = activeSkills.length > 0 ? ` [${activeSkills.join(", ")}]` : ""
-            console.log(
-              `[Agent] Threshold reached (${turnToolCallCount} calls) but loaded skill was used${names}, skipping auto skill evolution`
-            )
-          } else {
-            console.log(`[Agent] Threshold reached (${turnToolCallCount} calls), starting skill evolution flow`)
-            autoProposeSKill(
-              threadId,
-              message,
-              assistantText,
-              toolCallCounter.getNames(),
-              getAutoProposeToolCallCount(turnToolCallCount)
-            ).catch((e) =>
-              console.warn("[Agent] autoProposeSKill failed:", e)
-            )
+        if (isOnlineSkillEvolutionEnabled()) {
+          const proposalContext = appendTurnToProposalWindow("success")
+
+          // Check if this turn crossed the skill-evolution threshold.
+          const sessionToolCallCount = proposalContext.toolCallCount
+          const threshold = getSkillEvolutionThreshold()
+          if (shouldEvaluateSkillProposalWindow(sessionToolCallCount, threshold)) {
+            const mode = getSkillProposalMode(isSkillAutoProposeEnabled())
+            console.log(`[SkillEvolution][${threadId}] Threshold reached ${JSON.stringify({
+              toolCallCount: sessionToolCallCount,
+              windowToolCallCount: proposalContext.toolCallCount,
+              threshold,
+              mode,
+              skillUsed: proposalContext.usedLoadedSkill,
+              activeSkills: proposalContext.activeSkillNames,
+              turnCount: proposalContext.turnCount,
+              errorCount: proposalContext.errorCount,
+              toolCallSummary: proposalContext.toolCallSummary
+            })}`)
+            if (proposalContext.usedLoadedSkill) {
+              const names = proposalContext.activeSkillNames.length > 0 ? ` [${proposalContext.activeSkillNames.join(", ")}]` : ""
+              console.log(
+                `[SkillEvolution][${threadId}] Threshold skip because loaded skill was used${names}`
+              )
+            } else {
+              console.log(`[SkillEvolution][${threadId}] Threshold passed without loaded skill usage, evaluating proposal mode`)
+              await autoProposeSKill(threadId, proposalContext).catch((e) =>
+                console.warn("[Agent] autoProposeSKill failed:", e)
+              )
+            }
           }
+        } else {
+          resetSkillEvolutionSession(threadId)
         }
 
         const conversation = assistantText.trim()
@@ -726,12 +919,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           error: errMsg
         })
         notifyIfBackground("❌ 任务失败", errMsg)
+        if (isOnlineSkillEvolutionEnabled()) {
+          appendTurnToProposalWindow("error", errMsg)
+        } else {
+          resetSkillEvolutionSession(threadId)
+        }
         tracer.finish("error", errMsg).catch(() => {})
       } else {
         tracer.finish("cancelled").catch(() => {})
       }
     } finally {
-      window.removeListener("closed", onWindowClosed)
       activeRuns.delete(threadId)
     }
   })
@@ -826,7 +1023,6 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
     } finally {
-      window.removeListener("closed", onWindowClosed)
       activeRuns.delete(threadId)
     }
   })
@@ -919,7 +1115,6 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
     } finally {
-      window.removeListener("closed", onWindowClosed)
       activeRuns.delete(threadId)
     }
   })

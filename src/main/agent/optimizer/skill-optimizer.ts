@@ -25,6 +25,7 @@ import { v4 as uuid } from "uuid"
 import { getCustomSkillsDir } from "../../storage"
 import { readRecentTraces, readThreadTraces } from "../trace/collector"
 import type { AgentTrace } from "../trace/types"
+import { stripLLMFormatting } from "../skill-evolution/skill-proposal-logic"
 
 // ─────────────────────────────────────────────────────────
 // Types
@@ -82,6 +83,11 @@ export interface OptimizationRunResult {
   summary: string
 }
 
+interface CustomSkillRecord {
+  skillId: string
+  content: string
+}
+
 // ─────────────────────────────────────────────────────────
 // Prompts
 // ─────────────────────────────────────────────────────────
@@ -99,6 +105,7 @@ Your job:
 
 Output ONLY a JSON array of skill proposals. Each proposal must have:
 {
+  "action": "create" | "patch",
   "skillId": "snake_case_identifier",
   "name": "Human Readable Name",
   "description": "When should this skill be loaded? Describe the user intent that should trigger it. Be specific.",
@@ -131,7 +138,9 @@ Rules:
 - If no skill is worth creating, output an empty array: []
 - Maximum 3 proposals per analysis.
 - Skills should be specific and actionable, not generic advice.
-- The description field (trigger) is the MOST important — make it precise.`
+- The description field (trigger) is the MOST important — make it precise.
+- If the analyzed traces already used an existing skill and the improvement belongs in that skill, return action="patch" for that exact skillId.
+- Only return action="create" when a new skill is genuinely needed and no used skill should be updated.`
 
 // ─────────────────────────────────────────────────────────
 // Trace summarization helpers
@@ -169,6 +178,7 @@ function summarizeTrace(trace: AgentTrace): string {
   return `Trace ${trace.traceId.slice(0, 8)} | ${trace.outcome} | ${trace.totalToolCalls} tool calls
 User message: ${trace.userMessage.slice(0, 150)}
 Tools used: ${toolList}
+Active skills: ${trace.activeSkills.join(", ") || "(none)"}
 Steps:
 ${stepSummaries}`
 }
@@ -177,23 +187,93 @@ ${stepSummaries}`
 // Existing skills reader
 // ─────────────────────────────────────────────────────────
 
-function readExistingCustomSkills(): string {
+function readCustomSkillRecords(filterIds?: string[]): CustomSkillRecord[] {
   const dir = getCustomSkillsDir()
-  if (!existsSync(dir)) return "(no custom skills yet)"
+  if (!existsSync(dir)) return []
+  const filter = filterIds ? new Set(filterIds) : null
   try {
-    const skills = readdirSync(dir, { withFileTypes: true })
+    return readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
+      .filter((d) => !filter || filter.has(d.name))
       .map((d) => {
         const mdPath = join(dir, d.name, "SKILL.md")
         if (!existsSync(mdPath)) return null
-        const content = readFileSync(mdPath, "utf-8").slice(0, 400)
-        return `--- ${d.name} ---\n${content}`
+        return {
+          skillId: d.name,
+          content: readFileSync(mdPath, "utf-8")
+        } satisfies CustomSkillRecord
       })
-      .filter(Boolean)
-    return skills.length ? skills.join("\n\n") : "(no custom skills yet)"
+      .filter((skill): skill is CustomSkillRecord => !!skill)
   } catch {
-    return "(error reading skills)"
+    return []
   }
+}
+
+function formatSkillRecords(skills: CustomSkillRecord[], slice: number): string {
+  if (skills.length === 0) return "(none)"
+  return skills
+    .map((skill) => `--- ${skill.skillId} ---\n${skill.content.slice(0, slice)}`)
+    .join("\n\n")
+}
+
+function getUniqueActiveSkillIds(traces: AgentTrace[]): string[] {
+  return Array.from(
+    new Set(
+      traces
+        .flatMap((trace) => trace.activeSkills)
+        .map((skillId) => skillId.trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+function extractJsonArrayCandidates(text: string): string[] {
+  const candidates: string[] = []
+
+  for (let start = text.indexOf("["); start !== -1; start = text.indexOf("[", start + 1)) {
+    let depth = 0
+    let inString = false
+    let escaping = false
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i]
+
+      if (inString) {
+        if (escaping) {
+          escaping = false
+          continue
+        }
+        if (ch === "\\") {
+          escaping = true
+          continue
+        }
+        if (ch === "\"") {
+          inString = false
+        }
+        continue
+      }
+
+      if (ch === "\"") {
+        inString = true
+        continue
+      }
+
+      if (ch === "[") {
+        depth += 1
+        continue
+      }
+
+      if (ch === "]") {
+        depth -= 1
+        if (depth === 0) {
+          candidates.push(text.slice(start, i + 1))
+          break
+        }
+      }
+    }
+  }
+
+  return candidates
 }
 
 // ─────────────────────────────────────────────────────────
@@ -209,6 +289,8 @@ export interface SkillOptimizerOptions {
   minInterestScore?: number
   /** Thread ID to scope analysis to a single thread (optional) */
   threadId?: string
+  /** Explicit traces to analyze as one aggregated offline batch (optional) */
+  traces?: AgentTrace[]
 }
 
 export class SkillOptimizer {
@@ -216,12 +298,14 @@ export class SkillOptimizer {
   private readonly traceLimit: number
   private readonly minInterestScore: number
   private readonly threadId?: string
+  private readonly traces?: AgentTrace[]
 
   constructor(opts: SkillOptimizerOptions) {
     this.model = opts.model
     this.traceLimit = opts.traceLimit ?? 30
     this.minInterestScore = opts.minInterestScore ?? 4
     this.threadId = opts.threadId
+    this.traces = opts.traces
   }
 
   /**
@@ -233,19 +317,24 @@ export class SkillOptimizer {
    */
   async run(): Promise<OptimizationRunResult> {
     const startedAt = new Date().toISOString()
+    const scopeLabel = this.traces ? "选中内容" : this.threadId ? "当前会话" : "最近执行记录"
 
     // Load traces
-    const rawTraces = this.threadId
-      ? readThreadTraces(this.threadId)
-      : readRecentTraces(this.traceLimit)
+    const rawTraces = this.traces
+      ? [...this.traces]
+      : this.threadId
+        ? readThreadTraces(this.threadId)
+        : readRecentTraces(this.traceLimit)
 
     // Filter interesting traces
-    const interesting = rawTraces
-      .map((t) => ({ trace: t, score: interestScore(t) }))
-      .filter(({ score }) => score >= this.minInterestScore)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10) // cap at 10 traces to avoid huge prompts
-      .map(({ trace }) => trace)
+    const interesting = this.traces
+      ? rawTraces
+      : rawTraces
+        .map((t) => ({ trace: t, score: interestScore(t) }))
+        .filter(({ score }) => score >= this.minInterestScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10) // cap at 10 traces to avoid huge prompts
+        .map(({ trace }) => trace)
 
     if (interesting.length === 0) {
       return {
@@ -253,21 +342,31 @@ export class SkillOptimizer {
         endedAt: new Date().toISOString(),
         tracesAnalyzed: rawTraces.length,
         candidates: [],
-        summary: `分析了 ${rawTraces.length} 条 trace，未发现值得优化的模式（所有任务复杂度较低或无重复规律）。`
+        summary: `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，未发现值得优化的模式（所有任务复杂度较低或无重复规律）。`
       }
     }
 
     // Build the prompt
-    const existingSkills = readExistingCustomSkills()
+    const existingSkills = formatSkillRecords(readCustomSkillRecords(), 400)
+    const usedSkillIds = getUniqueActiveSkillIds(interesting)
+    const usedSkillDetails = formatSkillRecords(readCustomSkillRecords(usedSkillIds), 2000)
     const traceSummaries = interesting.map(summarizeTrace).join("\n\n")
 
     const userPrompt = `# Existing Custom Skills
 ${existingSkills}
 
+# Skills already used in analyzed traces
+${usedSkillIds.join(", ") || "(none)"}
+
+# Current content of used skills
+${usedSkillDetails}
+
 # Execution Traces to Analyze (${interesting.length} traces)
 ${traceSummaries}
 
 Based on these traces, suggest skills that would make future runs faster and more reliable.
+If the traces already used an existing skill and the improvement belongs there, update that skill instead of creating a new one.
+When updating an existing skill, set action="patch" and keep skillId exactly equal to the existing skill ID.
 Only suggest skills that are NOT already covered by existing custom skills above.
 Output JSON array only.`
 
@@ -301,20 +400,16 @@ Output JSON array only.`
       tracesAnalyzed: rawTraces.length,
       candidates,
       summary: candidates.length > 0
-        ? `分析了 ${rawTraces.length} 条 trace（选取 ${interesting.length} 条高价值），生成了 ${candidates.length} 个技能优化候选。`
-        : `分析了 ${rawTraces.length} 条 trace，LLM 判断暂无值得创建的新技能。`
+        ? `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace（选取 ${interesting.length} 条高价值），生成了 ${candidates.length} 个技能优化候选。`
+        : `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，LLM 判断暂无值得创建的新技能。`
     }
   }
 
   private _parseCandidates(raw: string, sourceTraces: AgentTrace[]): SkillOptimizationCandidate[] {
-    // Strip markdown code fences if LLM included them
-    const cleaned = raw
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim()
+    const cleaned = stripLLMFormatting(raw)
 
     let proposals: Array<{
+      action?: CandidateAction
       skillId: string
       name: string
       description: string
@@ -326,18 +421,45 @@ Output JSON array only.`
       proposals = JSON.parse(cleaned)
       if (!Array.isArray(proposals)) proposals = []
     } catch {
-      console.warn("[SkillOptimizer] Failed to parse LLM response as JSON:", cleaned.slice(0, 200))
-      return []
+      const candidates = extractJsonArrayCandidates(cleaned)
+      proposals = []
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        try {
+          const parsed = JSON.parse(candidates[i]) as Array<{
+            action?: CandidateAction
+            skillId: string
+            name: string
+            description: string
+            rationale: string
+            content: string
+          }>
+          if (Array.isArray(parsed)) {
+            proposals = parsed
+            break
+          }
+        } catch {
+          continue
+        }
+      }
+      if (proposals.length === 0) {
+        console.warn("[SkillOptimizer] Failed to parse LLM response as JSON:", cleaned.slice(0, 200))
+        return []
+      }
     }
 
     const sourceTraceIds = sourceTraces.map((t) => t.traceId)
+    const usedSkillIds = new Set(getUniqueActiveSkillIds(sourceTraces))
     const now = new Date().toISOString()
 
     return proposals
       .filter((p) => p.skillId && p.name && p.description && p.content)
+      .filter((p) => {
+        if (usedSkillIds.size === 0) return true
+        return usedSkillIds.has(p.skillId)
+      })
       .map((p) => ({
         candidateId: uuid(),
-        action: "create" as CandidateAction,
+        action: (p.action === "patch" || usedSkillIds.has(p.skillId) ? "patch" : "create") as CandidateAction,
         skillId: p.skillId,
         name: p.name,
         description: p.description,

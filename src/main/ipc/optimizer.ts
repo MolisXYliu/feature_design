@@ -2,17 +2,18 @@
  * IPC handlers for the Skill Optimizer (offline evolution loop).
  *
  * Channels:
- *   optimizer:run       — Invoke (renderer → main): start an optimization run
- *   optimizer:candidates — Handle (renderer → main): get current candidates
- *   optimizer:approve   — Handle (renderer → main): approve a candidate → writes skill
- *   optimizer:reject    — Handle (renderer → main): reject a candidate
- *   optimizer:clear     — Handle (renderer → main): clear all candidates
- *   optimizer:traces    — Handle (renderer → main): list recent traces (metadata only)
+ *   optimizer:run          — Invoke (renderer → main): start an optimization run
+ *   optimizer:candidates   — Handle (renderer → main): get current candidates
+ *   optimizer:approve      — Handle (renderer → main): approve a candidate → writes skill
+ *   optimizer:reject       — Handle (renderer → main): reject a candidate
+ *   optimizer:clear        — Handle (renderer → main): clear all candidates
+ *   optimizer:traces       — Handle (renderer → main): list recent traces (metadata only)
+ *   optimizer:traceDetail  — Handle (renderer → main): get full trace detail
+ *   optimizer:deleteTraces — Handle (renderer → main): delete one or more traces
  */
 
-import { IpcMain } from "electron"
+import { BrowserWindow, IpcMain } from "electron"
 import { ChatOpenAI } from "@langchain/openai"
-import { getCustomModelConfigs } from "../storage"
 import { mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import {
@@ -25,16 +26,23 @@ import {
 } from "../agent/optimizer/skill-optimizer"
 import {
   readRecentTraces,
-  listTracedThreads,
-  readThreadTraces
+  readThreadTraces,
+  readTraceById,
+  deleteTraces
 } from "../agent/trace/collector"
+import { buildTraceTree } from "../agent/trace/tree-builder"
 import type { AgentTrace } from "../agent/trace/types"
-import { getCustomSkillsDir, invalidateEnabledSkillsCache, isSkillAutoProposeEnabled, setSkillAutoProposeEnabled } from "../storage"
-import { BrowserWindow } from "electron"
-
-// ─────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────
+import {
+  getCustomModelConfigs,
+  getCustomSkillsDir,
+  invalidateEnabledSkillsCache,
+  isOnlineSkillEvolutionEnabled,
+  setOnlineSkillEvolutionEnabled,
+  isSkillAutoProposeEnabled,
+  setSkillAutoProposeEnabled,
+  getSkillEvolutionThreshold,
+  setSkillEvolutionThreshold
+} from "../storage"
 
 function notifyRenderer(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -55,9 +63,15 @@ function getDefaultModel(): ChatOpenAI | null {
   })
 }
 
-// ─────────────────────────────────────────────────────────
-// Apply an approved candidate to disk
-// ─────────────────────────────────────────────────────────
+function mergePendingCandidates(newCandidates: OptimizationRunResult["candidates"]): OptimizationRunResult["candidates"] {
+  if (newCandidates.length === 0) return getCandidates().filter((c) => c.status === "pending")
+
+  const existing = getCandidates().filter((c) => c.status === "pending")
+  const existingIds = new Set(existing.map((c) => c.skillId))
+  const fresh = newCandidates.filter((c) => !existingIds.has(c.skillId))
+  setCandidates([...existing, ...fresh])
+  return getCandidates().filter((c) => c.status === "pending")
+}
 
 function applyCandidate(skillId: string, content: string): { success: boolean; error?: string } {
   try {
@@ -65,7 +79,6 @@ function applyCandidate(skillId: string, content: string): { success: boolean; e
     mkdirSync(skillDir, { recursive: true })
     writeFileSync(join(skillDir, "SKILL.md"), content, "utf-8")
     invalidateEnabledSkillsCache()
-    // Notify renderer that skills changed
     notifyRenderer("skills:changed")
     return { success: true }
   } catch (e) {
@@ -73,21 +86,20 @@ function applyCandidate(skillId: string, content: string): { success: boolean; e
   }
 }
 
-// ─────────────────────────────────────────────────────────
-// Registration
-// ─────────────────────────────────────────────────────────
-
 export function registerOptimizerHandlers(ipcMain: IpcMain): void {
   console.log("[Optimizer] Registering optimizer handlers...")
 
-  /**
-   * Run the optimization loop.
-   * Returns OptimizationRunResult with generated candidates.
-   * Candidates are also stored in memory for subsequent calls.
-   */
   ipcMain.handle(
     "optimizer:run",
-    async (_event, opts?: { threadId?: string; traceLimit?: number }): Promise<OptimizationRunResult> => {
+    async (
+      _event,
+      opts?: {
+        threadId?: string
+        traceLimit?: number
+        mode?: "auto" | "selected"
+        traceIds?: string[]
+      }
+    ): Promise<OptimizationRunResult> => {
       console.log("[Optimizer] Starting optimization run...", opts)
 
       const model = getDefaultModel()
@@ -101,6 +113,39 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
         }
       }
 
+      const runMode = opts?.mode ?? "auto"
+
+      if (runMode === "selected") {
+        const selectedIds = [...new Set(opts?.traceIds ?? [])]
+        const selectedTraces = selectedIds
+          .map((traceId) => readTraceById(traceId))
+          .filter((trace): trace is AgentTrace => !!trace)
+
+        if (selectedTraces.length === 0) {
+          return {
+            startedAt: new Date().toISOString(),
+            endedAt: new Date().toISOString(),
+            tracesAnalyzed: 0,
+            candidates: [],
+            summary: "未找到可分析的 trace，请重新选择后再试。"
+          }
+        }
+
+        const optimizer = new SkillOptimizer({
+          model,
+          traces: selectedTraces
+        })
+        const runResult = await optimizer.run()
+
+        return {
+          startedAt: runResult.startedAt,
+          endedAt: runResult.endedAt,
+          tracesAnalyzed: runResult.tracesAnalyzed,
+          candidates: mergePendingCandidates(runResult.candidates),
+          summary: runResult.summary
+        }
+      }
+
       const optimizer = new SkillOptimizer({
         model,
         traceLimit: opts?.traceLimit ?? 30,
@@ -108,33 +153,16 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
       })
 
       const result = await optimizer.run()
-
-      // Store candidates in memory
-      if (result.candidates.length > 0) {
-        // Merge with existing pending candidates (don't discard previous pending ones)
-        const existing = getCandidates().filter((c) => c.status === "pending")
-        const existingIds = new Set(existing.map((c) => c.skillId))
-        const newOnes = result.candidates.filter((c) => !existingIds.has(c.skillId))
-        setCandidates([...existing, ...newOnes])
-        result.candidates = getCandidates().filter((c) => c.status === "pending")
-      }
-
+      result.candidates = mergePendingCandidates(result.candidates)
       console.log(`[Optimizer] Run complete: ${result.summary}`)
       return result
     }
   )
 
-  /**
-   * Get current candidates (all statuses).
-   */
   ipcMain.handle("optimizer:candidates", async (): Promise<ReturnType<typeof getCandidates>> => {
     return getCandidates()
   })
 
-  /**
-   * Approve a candidate — writes the skill to disk.
-   * Returns { success, skillId, error? }
-   */
   ipcMain.handle(
     "optimizer:approve",
     async (
@@ -148,7 +176,6 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
 
       const result = applyCandidate(candidate.skillId, candidate.proposedContent)
       if (!result.success) {
-        // Roll back status
         updateCandidateStatus(candidateId, "rejected")
         return { success: false, skillId: candidate.skillId, error: result.error }
       }
@@ -158,9 +185,6 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
     }
   )
 
-  /**
-   * Reject a candidate (does not write to disk).
-   */
   ipcMain.handle(
     "optimizer:reject",
     async (_event, { candidateId }: { candidateId: string }): Promise<{ success: boolean }> => {
@@ -170,16 +194,10 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
     }
   )
 
-  /**
-   * Clear all candidates from memory.
-   */
   ipcMain.handle("optimizer:clear", async (): Promise<void> => {
     clearCandidates()
   })
 
-  /**
-   * List recent traces (metadata only — no steps, to keep payload small).
-   */
   ipcMain.handle(
     "optimizer:traces",
     async (
@@ -214,33 +232,53 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
     }
   )
 
-  /**
-   * Get full trace detail by traceId (including steps + tool calls).
-   * Searches across all thread trace dirs.
-   */
   ipcMain.handle(
     "optimizer:traceDetail",
     async (_event, { traceId }: { traceId: string }): Promise<AgentTrace | null> => {
-      const threads = listTracedThreads()
-      for (const threadId of threads) {
-        const traces = readThreadTraces(threadId)
-        const found = traces.find((t) => t.traceId === traceId)
-        if (found) return found
+      const found = readTraceById(traceId)
+      if (!found) return null
+      return {
+        ...found,
+        nodes: buildTraceTree(found)
       }
-      return null
     }
   )
 
-  /**
-   * Get / set the skill auto-propose setting.
-   * When true (default), main process auto-generates a skill proposal dialog.
-   * When false, the agent model gets a nudge prompt and decides itself.
-   */
+  ipcMain.handle(
+    "optimizer:deleteTraces",
+    async (
+      _event,
+      { traceIds }: { traceIds: string[] }
+    ): Promise<{ deletedIds: string[]; failed: Array<{ traceId: string; error: string }> }> => {
+      const result = deleteTraces(traceIds ?? [])
+      if (result.deletedIds.length > 0) {
+        notifyRenderer("optimizer:tracesDeleted", { deletedIds: result.deletedIds })
+      }
+      return result
+    }
+  )
+
+  ipcMain.handle("optimizer:getOnlineSkillEvolutionEnabled", async (): Promise<boolean> => {
+    return isOnlineSkillEvolutionEnabled()
+  })
+
+  ipcMain.handle("optimizer:setOnlineSkillEvolutionEnabled", async (_event, enabled: boolean): Promise<void> => {
+    setOnlineSkillEvolutionEnabled(enabled)
+  })
+
   ipcMain.handle("optimizer:getAutoPropose", async (): Promise<boolean> => {
     return isSkillAutoProposeEnabled()
   })
 
   ipcMain.handle("optimizer:setAutoPropose", async (_event, enabled: boolean): Promise<void> => {
     setSkillAutoProposeEnabled(enabled)
+  })
+
+  ipcMain.handle("optimizer:getThreshold", async (): Promise<number> => {
+    return getSkillEvolutionThreshold()
+  })
+
+  ipcMain.handle("optimizer:setThreshold", async (_event, value: number): Promise<void> => {
+    setSkillEvolutionThreshold(value)
   })
 }

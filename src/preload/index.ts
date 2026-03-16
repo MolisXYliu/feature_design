@@ -462,9 +462,21 @@ const api = {
   skillEvolution: {
     // ── Phase 1: Intent banner ("Want to save as skill?") ──────────
     onIntentRequest: (
-      callback: (req: { requestId: string; summary: string; toolCallCount: number }) => void
+      callback: (req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }) => void
     ): (() => void) => {
-      const handler = (_: unknown, req: { requestId: string; summary: string; toolCallCount: number }): void => {
+      const handler = (_: unknown, req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }): void => {
         callback(req)
       }
       ipcRenderer.on("skill:intentRequest", handler)
@@ -531,7 +543,12 @@ const api = {
   },
   optimizer: {
     /** Run the offline optimization loop — returns candidates for review */
-    run: (opts?: { threadId?: string; traceLimit?: number }): Promise<{
+    run: (opts?: {
+      threadId?: string
+      traceLimit?: number
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+    }): Promise<{
       startedAt: string
       endedAt: string
       tracesAnalyzed: number
@@ -567,6 +584,30 @@ const api = {
         }>
         summary: string
       }>,
+    /** Listen to selected-trace optimizer progress (serial task updates). */
+    onRunProgress: (
+      cb: (payload: {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      })
+      ipcRenderer.on("optimizer:runProgress", handler)
+      return () => ipcRenderer.removeListener("optimizer:runProgress", handler)
+    },
     /** Get current in-memory candidates */
     getCandidates: (): Promise<Array<{
       candidateId: string
@@ -643,6 +684,47 @@ const api = {
       outcome: string
       errorMessage?: string
       activeSkills: string[]
+      nodes?: Array<{
+        id: string
+        type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+        parentId: string | null
+        name?: string
+        status?: "running" | "success" | "error" | "cancelled" | "unknown"
+        startedAt: string
+        endedAt?: string
+        input?: unknown
+        output?: unknown
+        metadata?: Record<string, unknown>
+      }>
+      modelCalls?: Array<{
+        messageId?: string
+        startedAt: string
+        inputMessages: Array<{
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }>
+        outputMessage: {
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+        tokenUsage?: {
+          inputTokens?: number
+          outputTokens?: number
+          totalTokens?: number
+          cacheReadTokens?: number
+          cacheCreationTokens?: number
+        }
+      }>
       steps: Array<{
         index: number
         startedAt: string
@@ -655,11 +737,91 @@ const api = {
         }>
       }>
     } | null> =>
-      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<null>,
+      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        endedAt: string
+        durationMs: number
+        userMessage: string
+        modelId: string
+        totalToolCalls: number
+        outcome: string
+        errorMessage?: string
+        activeSkills: string[]
+        nodes?: Array<{
+          id: string
+          type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+          parentId: string | null
+          name?: string
+          status?: "running" | "success" | "error" | "cancelled" | "unknown"
+          startedAt: string
+          endedAt?: string
+          input?: unknown
+          output?: unknown
+          metadata?: Record<string, unknown>
+        }>
+        modelCalls?: Array<{
+          messageId?: string
+          startedAt: string
+          inputMessages: Array<{
+            role: "system" | "user" | "assistant" | "tool" | "unknown"
+            content: string
+            name?: string
+            toolCallId?: string
+          }>
+          outputMessage: {
+            role: "system" | "user" | "assistant" | "tool" | "unknown"
+            content: string
+            name?: string
+            toolCallId?: string
+          }
+          toolCalls: Array<{
+            name: string
+            args: Record<string, unknown>
+            result?: string
+            durationMs?: number
+          }>
+          tokenUsage?: {
+            inputTokens?: number
+            outputTokens?: number
+            totalTokens?: number
+            cacheReadTokens?: number
+            cacheCreationTokens?: number
+          }
+        }>
+        steps: Array<{
+          index: number
+          startedAt: string
+          assistantText: string
+          toolCalls: Array<{
+            name: string
+            args: Record<string, unknown>
+            result?: string
+            durationMs?: number
+          }>
+        }>
+      } | null>,
+    deleteTraces: (traceIds: string[]): Promise<{
+      deletedIds: string[]
+      failed: Array<{ traceId: string; error: string }>
+    }> =>
+      ipcRenderer.invoke("optimizer:deleteTraces", { traceIds }) as Promise<{
+        deletedIds: string[]
+        failed: Array<{ traceId: string; error: string }>
+      }>,
+    getOnlineSkillEvolutionEnabled: (): Promise<boolean> =>
+      ipcRenderer.invoke("optimizer:getOnlineSkillEvolutionEnabled") as Promise<boolean>,
+    setOnlineSkillEvolutionEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setOnlineSkillEvolutionEnabled", enabled) as Promise<void>,
     getAutoPropose: (): Promise<boolean> =>
       ipcRenderer.invoke("optimizer:getAutoPropose") as Promise<boolean>,
     setAutoPropose: (enabled: boolean): Promise<void> =>
-      ipcRenderer.invoke("optimizer:setAutoPropose", enabled) as Promise<void>
+      ipcRenderer.invoke("optimizer:setAutoPropose", enabled) as Promise<void>,
+    getThreshold: (): Promise<number> =>
+      ipcRenderer.invoke("optimizer:getThreshold") as Promise<number>,
+    setThreshold: (value: number): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setThreshold", value) as Promise<void>
   }
 }
 

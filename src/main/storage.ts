@@ -137,25 +137,81 @@ export function getSkillsSources(): string[] {
 
 const SKILL_EVOLUTION_SETTINGS_FILE = join(OPENWORK_DIR, "skill-evolution-settings.json")
 
-/**
- * When true (default), after a conversation meets the tool-call threshold the
- * main process automatically generates a skill proposal and shows a confirmation
- * dialog.  When false, the agent model is given a nudge prompt and decides
- * whether to call manage_skill itself.
- */
-export function isSkillAutoProposeEnabled(): boolean {
-  if (!existsSync(SKILL_EVOLUTION_SETTINGS_FILE)) return true
+interface SkillEvolutionSettings {
+  onlineEnabled?: boolean
+  autoPropose?: boolean
+  threshold?: number
+}
+
+function readSkillEvolutionSettings(): SkillEvolutionSettings {
+  if (!existsSync(SKILL_EVOLUTION_SETTINGS_FILE)) return {}
   try {
-    const parsed = JSON.parse(readFileSync(SKILL_EVOLUTION_SETTINGS_FILE, "utf-8"))
-    return parsed.autoPropose !== false
+    return JSON.parse(readFileSync(SKILL_EVOLUTION_SETTINGS_FILE, "utf-8")) as SkillEvolutionSettings
   } catch {
-    return true
+    return {}
   }
 }
 
-export function setSkillAutoProposeEnabled(enabled: boolean): void {
+function writeSkillEvolutionSettings(settings: SkillEvolutionSettings): void {
   getOpenworkDir()
-  writeFileSync(SKILL_EVOLUTION_SETTINGS_FILE, JSON.stringify({ autoPropose: enabled }, null, 2))
+  writeFileSync(SKILL_EVOLUTION_SETTINGS_FILE, JSON.stringify(settings, null, 2))
+}
+
+/**
+ * Controls whether the online skill-evolution feature is enabled at all.
+ * When false, no automatic proposal flow runs during a live conversation.
+ */
+export function isOnlineSkillEvolutionEnabled(): boolean {
+  return readSkillEvolutionSettings().onlineEnabled === true
+}
+
+export function setOnlineSkillEvolutionEnabled(enabled: boolean): void {
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: enabled,
+    autoPropose: current.autoPropose === true,
+    threshold: getSkillEvolutionThreshold()
+  })
+}
+
+/**
+ * Online skill-evolution mode selector:
+ * - true  => direct trigger after threshold (Mode A / 直接触发)
+ * - false => ask worthiness LLM first     (Mode B / 模型判断)
+ */
+export function isSkillAutoProposeEnabled(): boolean {
+  return readSkillEvolutionSettings().autoPropose === true
+}
+
+export function setSkillAutoProposeEnabled(enabled: boolean): void {
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: current.onlineEnabled === true,
+    autoPropose: enabled,
+    threshold: getSkillEvolutionThreshold()
+  })
+}
+
+const SKILL_EVOLUTION_THRESHOLD_DEFAULT = 10
+const SKILL_EVOLUTION_THRESHOLD_MIN = 1
+const SKILL_EVOLUTION_THRESHOLD_MAX = 99
+
+export function getSkillEvolutionThreshold(): number {
+  const value = Number(readSkillEvolutionSettings().threshold)
+  if (Number.isInteger(value) && value >= SKILL_EVOLUTION_THRESHOLD_MIN && value <= SKILL_EVOLUTION_THRESHOLD_MAX) {
+    return value
+  }
+  return SKILL_EVOLUTION_THRESHOLD_DEFAULT
+}
+
+export function setSkillEvolutionThreshold(value: number): void {
+  const clamped = Math.max(SKILL_EVOLUTION_THRESHOLD_MIN, Math.min(SKILL_EVOLUTION_THRESHOLD_MAX, Math.round(value)))
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: current.onlineEnabled === true,
+    autoPropose: current.autoPropose === true,
+    threshold: clamped
+  })
 }
 
 // ── Memory settings ──

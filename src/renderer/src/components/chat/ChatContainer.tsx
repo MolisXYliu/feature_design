@@ -54,6 +54,14 @@ interface ChatContainerProps {
   threadId: string
 }
 
+interface SkillIntentBannerRequest {
+  requestId: string
+  summary: string
+  toolCallCount: number
+  mode: "mode_a_rule" | "mode_b_llm"
+  recommendationReason?: string
+}
+
 const THINKING_MESSAGES = [
   "我先想想...",
   "让我捋一捋...",
@@ -100,7 +108,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   // Skill creation human-confirmation state
   const [skillConfirmRequest, setSkillConfirmRequest] = useState<SkillConfirmRequest | null>(null)
   // Skill intent banner state ("Want to save as a skill?")
-  const [skillIntentRequest, setSkillIntentRequest] = useState<{ requestId: string; summary: string; toolCallCount: number } | null>(null)
+  const [skillIntentRequest, setSkillIntentRequest] = useState<SkillIntentBannerRequest | null>(null)
 
   // Skill generation state stored globally so RightPanel can render the virtual subagent card
   const { setSkillGenerationPhase, appendSkillGenerationToken } = useAppStore(
@@ -831,9 +839,25 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       {skillIntentRequest && (
         <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 bg-violet-500/10 border-b border-violet-500/20 text-xs">
           <Sparkles className="size-3.5 text-violet-500 shrink-0" />
-          <span className="flex-1 text-violet-700 dark:text-violet-300 leading-snug">
-            本次对话使用了 <strong>{skillIntentRequest.toolCallCount}</strong> 次工具调用，是否将它沉淀为可复用的技能？
-          </span>
+          <div className="flex-1 text-violet-700 dark:text-violet-300 leading-snug">
+            {skillIntentRequest.mode === "mode_b_llm" ? (
+              <>
+                <div>
+                  大模型判断这段流程具有复用价值，建议将它沉淀为可复用的技能。
+                  本次累计使用了 <strong>{skillIntentRequest.toolCallCount}</strong> 次工具调用。
+                </div>
+                {skillIntentRequest.recommendationReason ? (
+                  <div className="mt-0.5 text-[11px] text-violet-600/80 dark:text-violet-200/80">
+                    推荐依据：{skillIntentRequest.recommendationReason}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div>
+                本次对话使用了 <strong>{skillIntentRequest.toolCallCount}</strong> 次工具调用，是否将它沉淀为可复用的技能？
+              </div>
+            )}
+          </div>
           <button
             className="shrink-0 rounded px-2.5 py-1 bg-violet-500 text-white hover:bg-violet-600 transition-colors font-medium"
             onClick={() => handleSkillIntentYes(skillIntentRequest.requestId)}

@@ -115,6 +115,10 @@ export interface SkillIntentRequest {
   summary: string
   /** Number of tool calls made */
   toolCallCount: number
+  /** Trigger source for this suggestion */
+  mode: "mode_a_rule" | "mode_b_llm"
+  /** Optional model recommendation reason for Mode B */
+  recommendationReason?: string
 }
 
 /**

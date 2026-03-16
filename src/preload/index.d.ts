@@ -246,7 +246,13 @@ interface CustomAPI {
   skillEvolution: {
     /** Phase 1 — intent banner: "Want to save this as a skill?" */
     onIntentRequest: (
-      callback: (req: { requestId: string; summary: string; toolCallCount: number }) => void
+      callback: (req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }) => void
     ) => () => void
     intentResponse: (requestId: string, accepted: boolean) => Promise<void>
     /** Phase 2 — full detail dialog: show skill preview for final adoption */
@@ -266,7 +272,12 @@ interface CustomAPI {
     ) => () => void
   }
   optimizer: {
-    run: (opts?: { threadId?: string; traceLimit?: number }) => Promise<{
+    run: (opts?: {
+      threadId?: string
+      traceLimit?: number
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+    }) => Promise<{
       startedAt: string
       endedAt: string
       tracesAnalyzed: number
@@ -284,6 +295,17 @@ interface CustomAPI {
       }>
       summary: string
     }>
+    onRunProgress: (
+      cb: (payload: {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      }) => void
+    ) => () => void
     getCandidates: () => Promise<Array<{
       candidateId: string
       action: "create" | "patch"
@@ -322,6 +344,47 @@ interface CustomAPI {
       outcome: string
       errorMessage?: string
       activeSkills: string[]
+      nodes?: Array<{
+        id: string
+        type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+        parentId: string | null
+        name?: string
+        status?: "running" | "success" | "error" | "cancelled" | "unknown"
+        startedAt: string
+        endedAt?: string
+        input?: unknown
+        output?: unknown
+        metadata?: Record<string, unknown>
+      }>
+      modelCalls?: Array<{
+        messageId?: string
+        startedAt: string
+        inputMessages: Array<{
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }>
+        outputMessage: {
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+        tokenUsage?: {
+          inputTokens?: number
+          outputTokens?: number
+          totalTokens?: number
+          cacheReadTokens?: number
+          cacheCreationTokens?: number
+        }
+      }>
       steps: Array<{
         index: number
         startedAt: string
@@ -334,8 +397,16 @@ interface CustomAPI {
         }>
       }>
     } | null>
+    deleteTraces: (traceIds: string[]) => Promise<{
+      deletedIds: string[]
+      failed: Array<{ traceId: string; error: string }>
+    }>
+    getOnlineSkillEvolutionEnabled: () => Promise<boolean>
+    setOnlineSkillEvolutionEnabled: (enabled: boolean) => Promise<void>
     getAutoPropose: () => Promise<boolean>
     setAutoPropose: (enabled: boolean) => Promise<void>
+    getThreshold: () => Promise<number>
+    setThreshold: (value: number) => Promise<void>
   }
 }
 
