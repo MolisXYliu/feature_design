@@ -555,14 +555,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
   }
 
+  /** Build a readonly-sandbox block error message for the given file and action verb. */
+  private readonlyBlockedError(filePath: string, action: string): string {
+    return LocalSandbox.isElevated()
+      ? `只读沙箱模式下仅允许${action}工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。`
+      : `只读沙箱模式下禁止${action}文件 '${filePath}'。如需${action}请以管理员身份运行或切换沙箱模式。`
+  }
+
   /**
    * Override write to enforce readonly sandbox restrictions.
    */
   async write(filePath: string, content: string): Promise<WriteResult> {
     if (this.isWriteBlocked(filePath)) {
-      return LocalSandbox.isElevated()
-        ? { error: `只读沙箱模式下仅允许写入工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。` }
-        : { error: `只读沙箱模式下禁止写入文件 '${filePath}'。如需写入请以管理员身份运行或切换沙箱模式。` }
+      return { error: this.readonlyBlockedError(filePath, "写入") }
     }
     return super.write(filePath, content)
   }
@@ -571,25 +576,26 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Override uploadFiles to enforce readonly sandbox restrictions on each file.
    */
   async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
-    if (this.windowsSandbox === "readonly") {
-      const results: { path: string; error: string | null }[] = []
-      for (const [filePath, content] of files) {
-        if (this.isWriteBlocked(filePath)) {
-          results.push({
-            path: filePath,
-            error: LocalSandbox.isElevated()
-              ? `只读沙箱模式下仅允许写入工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。`
-              : `只读沙箱模式下禁止写入文件 '${filePath}'。如需写入请以管理员身份运行或切换沙箱模式。`
-          })
-        } else {
-          // Allowed — delegate to parent for this single file
-          const [res] = await super.uploadFiles([[filePath, content]])
-          results.push(res)
-        }
-      }
-      return results
+    if (this.windowsSandbox !== "readonly") return super.uploadFiles(files)
+
+    // Separate blocked files from allowed files, preserving original order
+    const indexed = files.map(([filePath, content], i) => ({ filePath, content, i, blocked: this.isWriteBlocked(filePath) }))
+    const allowed = indexed.filter((e) => !e.blocked)
+
+    // Batch-delegate all allowed files in one call
+    const allowedResults = allowed.length > 0
+      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, string | Buffer]))
+      : []
+
+    // Merge results back in original order
+    const results: { path: string; error: string | null }[] = new Array(files.length)
+    let ai = 0
+    for (const entry of indexed) {
+      results[entry.i] = entry.blocked
+        ? { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
+        : allowedResults[ai++]
     }
-    return super.uploadFiles(files)
+    return results
   }
 
   /**
@@ -606,9 +612,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     replaceAll = false
   ): Promise<EditResult> {
     if (this.isWriteBlocked(filePath)) {
-      return LocalSandbox.isElevated()
-        ? { error: `只读沙箱模式下仅允许编辑工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。` }
-        : { error: `只读沙箱模式下禁止编辑文件 '${filePath}'。如需编辑请以管理员身份运行或切换沙箱模式。` }
+      return { error: this.readonlyBlockedError(filePath, "编辑") }
     }
     try {
       const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
