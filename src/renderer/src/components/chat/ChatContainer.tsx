@@ -175,7 +175,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   const needUpdateVersion=useMemo(()=>{
-    return  latestVersion !== __APP_VERSION__
+    return latestVersion !== __APP_VERSION__
     // return  latestVersion !== version
     // return false
   },[latestVersion])
