@@ -13,6 +13,7 @@ import {
   getEnabledSkillsSources,
   getEnabledMcpConnectors,
   getCustomModelConfigs,
+  getUserInfo,
   isMemoryEnabled,
   DEFAULT_MAX_TOKENS,
   getEnabledPluginSkillsSources,
@@ -511,7 +512,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
-
+  const userInfo = getUserInfo()
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
@@ -519,6 +520,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
+### userinfo
+- sap编号、员工编号:${userInfo?.sapId}
+- yst编号、一事通编号: ${userInfo?.ystId}
+- userName、员工姓名: ${userInfo?.userName}
+- originOrgId、员工机构号: ${userInfo?.originOrgId}
+- orgName、员机构号名称: ${userInfo?.orgName}
+- ystRefreshToken、刷新token: ${userInfo?.ystRefreshToken}
+- ystCode、一事通code: ${userInfo?.ystCode}
 
 ### System Environment
 - Operating system: ${platform} (${process.arch})

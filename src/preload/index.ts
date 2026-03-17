@@ -14,6 +14,7 @@ import type {
   PluginMetadata,
   PluginManifest
 } from "../main/types"
+import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
@@ -223,6 +224,12 @@ const api = {
       maxTokens?: number
     }): Promise<{ id: string }> => {
       return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
+    },
+    upsertUserInfo: (config: UserInfoConfig): Promise<{ id: string }> => {
+      return ipcRenderer.invoke("models:upsertUserInfo", config) as Promise<{ id: string }>
+    },
+    getUserInfo: (): Promise<UserInfoConfig | null> => {
+      return ipcRenderer.invoke("models:getUserInfo") as Promise<UserInfoConfig | null>
     },
     deleteCustomConfig: (id: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>

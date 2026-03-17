@@ -347,6 +347,17 @@ export interface CustomModelConfig {
   maxTokens?: number
 }
 
+export interface UserInfoConfig {
+  sapId?: string//8
+  ystId?: string//6
+  userName?: string
+  originOrgId?: string
+  orgName?: string
+  ystRefreshToken?: string
+  ystCode?: string
+  ystAccessToken?: string
+}
+
 export const DEFAULT_MAX_TOKENS = 128_000
 export const MIN_MAX_TOKENS = 32_000
 export const MAX_MAX_TOKENS = 128_000
@@ -370,6 +381,7 @@ interface StoredCustomModelRecord {
 
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
 const CUSTOM_MODELS_FILE = join(OPENWORK_DIR, "custom-models.json")
+const USERINFO_MODELS_FILE = join(OPENWORK_DIR, "userinfo-models.json")
 
 function normalizeMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -489,6 +501,10 @@ function writeCustomModelsRaw(items: StoredCustomModelRecord[]): void {
   writeFileSync(CUSTOM_MODELS_FILE, JSON.stringify(items, null, 2))
 }
 
+function writeUserInfoModelsRaw(items: UserInfoConfig): void {
+  writeFileSync(USERINFO_MODELS_FILE, JSON.stringify(items, null, 2))
+}
+
 function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -567,6 +583,13 @@ export function getCustomModelConfigById(id: string): CustomModelConfig | null {
   }
 }
 
+export function getUserInfo(): UserInfoConfig | null {
+  if (!existsSync(USERINFO_MODELS_FILE)) return null
+  const content = readFileSync(USERINFO_MODELS_FILE, "utf-8")
+  const userInfo = JSON.parse(content) as UserInfoConfig
+  return userInfo
+}
+
 export function upsertCustomModelConfig(
   config: Omit<CustomModelConfig, "id"> & { id?: string }
 ): string {
@@ -625,6 +648,13 @@ export function upsertCustomModelConfig(
   }
 
   return targetId
+}
+
+export function upsertUserInfoConfig(
+  config: Omit<UserInfoConfig, "id"> & { id?: string }
+): string {
+  writeUserInfoModelsRaw(config)
+  return config.userName || '';
 }
 
 export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
