@@ -11,9 +11,11 @@ import { registerMemoryHandlers } from "./ipc/memory"
 import { registerGitHandlers } from "./ipc/git"
 import { registerPluginHandlers } from "./ipc/plugins"
 import { registerSandboxHandlers } from "./ipc/sandbox"
+import { registerChatXHandlers } from "./ipc/chatx"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
+import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
 
@@ -126,6 +128,7 @@ if (!gotTheLock) {
     registerGitHandlers()
     registerPluginHandlers(ipcMain)
     registerSandboxHandlers(ipcMain)
+    registerChatXHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
@@ -167,6 +170,7 @@ if (!gotTheLock) {
     // Start scheduled task scheduler and heartbeat service
     startScheduler()
     startHeartbeat()
+    startChatX()
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -185,6 +189,7 @@ if (!gotTheLock) {
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()
+    stopChatX()
     closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
     flush()
   })

@@ -80,6 +80,7 @@ interface SchedulerToolContext {
   workspacePath: string
   modelId?: string
   threadId?: string
+  chatxRobotChatId?: string | null
 }
 
 /**
@@ -205,6 +206,7 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             prompt,
             modelId: context.modelId ?? null,
             workDir: context.workspacePath,
+            chatxRobotChatId: context.chatxRobotChatId ?? null,
             frequency: freq,
             runAt,
             runAtTime: input.runAtTime ?? null,
@@ -241,6 +243,7 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             prompt,
             modelId: existing.modelId,
             workDir: existing.workDir,
+            chatxRobotChatId: existing.chatxRobotChatId ?? null,
             frequency: input.frequency ?? existing.frequency,
             runAt: input.runAt ? fixRunAtTimezone(input.runAt) : existing.runAt,
             runAtTime: input.runAtTime ?? existing.runAtTime,

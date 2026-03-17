@@ -8,6 +8,7 @@ import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
 import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
 import { notifyIfBackground } from "../services/notify"
+import { trySendChatXReply } from "../services/chatx"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -141,6 +142,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
+
+        // If this is a ChatX-linked thread, also send reply via HTTP
+        const trimmedReply = assistantText.trim()
+        if (metadata.chatxRobotChatId && trimmedReply) {
+          trySendChatXReply(metadata.chatxRobotChatId as string, trimmedReply)
+        }
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`

@@ -51,7 +51,9 @@ import type {
   ScheduledTaskFrequency,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig,
+  ChatXRobotConfig
 } from "../../main/types"
 
 export type {
@@ -64,7 +66,9 @@ export type {
   ScheduledTaskFrequency,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig,
+  ChatXRobotConfig
 }
 
 export type StreamEvent =

@@ -2,6 +2,7 @@ import { v4 as uuid } from "uuid"
 import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
 import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord } from "../storage"
+import { trySendChatXReply } from "./chatx"
 import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread } from "../db"
 import { StreamConverter } from "../agent/stream-converter"
@@ -179,6 +180,10 @@ async function executeTask(taskId: string): Promise<void> {
         console.log(`[Scheduler] Once task auto-disabled: ${task.name}`)
       }
       showTaskNotification(task.name, "ok", lastAssistantText)
+      // If task is linked to a ChatX robot, send reply via HTTP
+      if (task.chatxRobotChatId && lastAssistantText) {
+        trySendChatXReply(task.chatxRobotChatId, lastAssistantText)
+      }
       console.log(`[Scheduler] Task completed: ${task.name}`)
     } else {
       broadcastToChannel(channel, { type: "done" })

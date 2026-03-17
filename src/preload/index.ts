@@ -12,7 +12,8 @@ import type {
   ScheduledTaskUpsert,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig
 } from "../main/types"
 
 // Simple electron API - replaces @electron-toolkit/preload
@@ -472,6 +473,14 @@ const api = {
       ipcRenderer.invoke("plugins:setEnabled", { id, enabled }) as Promise<void>,
     getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+  },
+  chatx: {
+    getConfig: (): Promise<ChatXConfig> =>
+      ipcRenderer.invoke("chatx:get-config") as Promise<ChatXConfig>,
+    saveConfig: (updates: Partial<ChatXConfig>): Promise<void> =>
+      ipcRenderer.invoke("chatx:save-config", updates) as Promise<void>,
+    restart: (): Promise<void> =>
+      ipcRenderer.invoke("chatx:restart") as Promise<void>
   },
   sandbox: {
     getMode: (): Promise<"none" | "unelevated"> =>

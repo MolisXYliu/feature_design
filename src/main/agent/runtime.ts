@@ -51,6 +51,7 @@ import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
+import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { getWindowsSandboxMode, getYoloMode } from "../storage"
 
@@ -643,10 +644,21 @@ The workspace root is: ${workspacePath}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const extraTools: any[] = []
   if (!options.noSchedulerTool) {
+    let chatxRobotChatId: string | null = null
+    if (options.threadId) {
+      try {
+        const threadRow = getThread(options.threadId)
+        if (threadRow?.metadata) {
+          const meta = JSON.parse(threadRow.metadata)
+          chatxRobotChatId = (meta.chatxRobotChatId as string) || null
+        }
+      } catch { /* ignore */ }
+    }
     extraTools.push(createSchedulerTool({
       workspacePath,
       modelId: options.modelId,
-      threadId: options.threadId
+      threadId: options.threadId,
+      chatxRobotChatId
     }))
   }
 

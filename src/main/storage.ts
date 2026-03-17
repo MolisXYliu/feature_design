@@ -846,6 +846,7 @@ export function upsertScheduledTask(
     prompt: config.prompt.trim(),
     modelId: config.modelId,
     workDir: config.workDir,
+    chatxRobotChatId: config.chatxRobotChatId ?? existing?.chatxRobotChatId ?? null,
     frequency: config.frequency,
     runAt: config.runAt ?? existing?.runAt ?? null,
     runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
@@ -1184,6 +1185,57 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
     console.warn(`[Plugins] Failed to parse .mcp.json at ${filePath}`)
     return null
   }
+}
+
+// ── ChatX ──────────────────────────────────────────────────────────────────────
+
+const CHATX_CONFIG_FILE = join(OPENWORK_DIR, "chatx-config.json")
+
+function defaultChatXConfig(): import("./types").ChatXConfig {
+  return {
+    enabled: false,
+    wsUrl: "",
+    userIp: "",
+    robots: []
+  }
+}
+
+export function getChatXConfig(): import("./types").ChatXConfig {
+  getOpenworkDir()
+  if (!existsSync(CHATX_CONFIG_FILE)) return defaultChatXConfig()
+  try {
+    const content = readFileSync(CHATX_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultChatXConfig()
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      wsUrl: typeof parsed.wsUrl === "string" ? parsed.wsUrl : defaults.wsUrl,
+      userIp: typeof parsed.userIp === "string" ? parsed.userIp : defaults.userIp,
+      robots: Array.isArray(parsed.robots)
+        ? (parsed.robots as unknown[]).filter(
+            (item): item is import("./types").ChatXRobotConfig =>
+              item != null &&
+              typeof item === "object" &&
+              typeof (item as Record<string, unknown>).chatId === "string" &&
+              typeof (item as Record<string, unknown>).httpUrl === "string" &&
+              typeof (item as Record<string, unknown>).fromId === "string" &&
+              typeof (item as Record<string, unknown>).clientId === "string" &&
+              typeof (item as Record<string, unknown>).clientSecret === "string" &&
+              typeof (item as Record<string, unknown>).channel === "string" &&
+              Array.isArray((item as Record<string, unknown>).toUserList)
+          )
+        : defaults.robots
+    }
+  } catch {
+    return defaultChatXConfig()
+  }
+}
+
+export function saveChatXConfig(updates: Partial<import("./types").ChatXConfig>): void {
+  getOpenworkDir()
+  const current = getChatXConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(CHATX_CONFIG_FILE, JSON.stringify(merged, null, 2))
 }
 
 // ── Sandbox Settings ──────────────────────────────────────────────────────────

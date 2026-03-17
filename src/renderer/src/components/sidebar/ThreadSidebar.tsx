@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu } from "lucide-react"
+import type { ChatXRobotConfig } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -123,6 +124,11 @@ function ThreadListItem({
                       <span className="shrink-0 text-[10px] px-1 py-px rounded bg-primary/15 text-primary font-medium">定时</span>
                       <span className="truncate">{thread.title.slice(5)}</span>
                     </>
+                  ) : thread.title?.startsWith("[机器人] ") ? (
+                    <>
+                      <Cpu className="size-3 shrink-0 text-blue-400" />
+                      <span className="truncate">{thread.title.slice(6)}</span>
+                    </>
                   ) : (
                     <span className="truncate">{thread.title || truncate(thread.thread_id, 20)}</span>
                   )}
@@ -183,6 +189,20 @@ export function ThreadSidebar(): React.JSX.Element {
 
   const { cleanupThread } = useThreadContext()
 
+  const [robots, setRobots] = useState<ChatXRobotConfig[]>([])
+  const [showRobotPicker, setShowRobotPicker] = useState(false)
+  const robotPickerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showRobotPicker) return
+    const handleClickOutside = (e: MouseEvent): void => {
+      if (robotPickerRef.current && !robotPickerRef.current.contains(e.target as Node)) {
+        setShowRobotPicker(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [showRobotPicker])
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState("")
   const [unreadIds, setUnreadIds] = useState<Set<string>>(() => {
@@ -242,8 +262,52 @@ export function ThreadSidebar(): React.JSX.Element {
     setEditingTitle("")
   }
 
+  const loadRobots = useCallback(async () => {
+    try {
+      const config = await window.api.chatx.getConfig()
+      if (!config.enabled) {
+        setRobots([])
+        return
+      }
+      // Only show robots that have all required fields filled
+      const valid = (config.robots || []).filter(
+        (r) => r.chatId && r.httpUrl && r.fromId && r.clientId && r.clientSecret && r.channel && r.workDir && r.toUserList.length > 0
+      )
+      setRobots(valid)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    loadRobots()
+  }, [loadRobots, showCustomizeView])
+
   const handleNewThread = async (): Promise<void> => {
     await createThread({ title: `Thread ${new Date().toLocaleDateString()}` })
+  }
+
+  const [creatingRobot, setCreatingRobot] = useState(false)
+
+  const handleNewRobotThread = async (robot: ChatXRobotConfig): Promise<void> => {
+    if (creatingRobot) return
+    setCreatingRobot(true)
+    setShowRobotPicker(false)
+    try {
+      if (!robot.workDir) {
+        alert("该机器人未配置工作目录")
+        return
+      }
+      const now = new Date()
+      const timeTag = `${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`
+      await createThread({
+        workspacePath: robot.workDir,
+        title: `[机器人] ${robot.chatId} · ${timeTag}`,
+        chatxChatId: robot.chatId,
+        chatxRobotChatId: robot.chatId,
+        model: robot.modelId || undefined
+      })
+    } finally {
+      setCreatingRobot(false)
+    }
   }
 
   return (
@@ -261,6 +325,35 @@ export function ThreadSidebar(): React.JSX.Element {
           </div>
           <span className="text-muted-foreground">新任务</span>
         </Button>
+        {robots.length > 0 && (
+          <div className="relative" ref={robotPickerRef}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-sm font-semibold"
+              onClick={() => setShowRobotPicker(!showRobotPicker)}
+            >
+              <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+                <Cpu className="size-3" />
+              </div>
+              <span className="text-muted-foreground">机器人对话</span>
+            </Button>
+            {showRobotPicker && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-1 shadow-md">
+                {robots.map((robot, i) => (
+                  <button
+                    key={i}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted transition-colors"
+                    onClick={() => handleNewRobotThread(robot)}
+                  >
+                    <Cpu className="size-3 shrink-0 text-blue-400" />
+                    <span className="truncate">{robot.chatId || `机器人 ${i + 1}`}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <Button
           variant="ghost"
           size="sm"
