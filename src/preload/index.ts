@@ -21,6 +21,8 @@ const electronAPI = {
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {
+
+
       ipcRenderer.on(channel, (_event, ...args) => listener(...args))
       return () => ipcRenderer.removeListener(channel, listener)
     },
