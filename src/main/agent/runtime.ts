@@ -318,13 +318,13 @@ ${shellGuidance}
 
   const readonlySection = windowsSandbox === "readonly"
     ? `
-### Read-Only Sandbox
+### 只读沙箱模式
 
-**IMPORTANT:** You are running in a read-only sandbox environment.
-- You can read all files on disk freely.
-- Write operations are blocked under normal privileges. When the application is running as administrator, writes to the workspace directory are permitted.
-- This mode is intended for security auditing, code review, and read-only analysis tasks.
-- Avoid write operations unless explicitly requested by the user. Suggest changes instead of writing directly.
+**重要提示：** 你正在只读沙箱环境中运行。
+- 你可以自由读取磁盘上的所有文件。
+- 普通权限下写入操作被禁止。以管理员身份运行时允许写入工作目录内的文件。
+- 此模式适用于安全审查、代码分析等只读场景。
+- 除非用户明确要求，否则避免执行写入操作，应以建议修改替代直接写入。
 `
     : ""
 

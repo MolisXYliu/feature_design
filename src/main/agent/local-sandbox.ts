@@ -11,7 +11,7 @@
 
 import { spawn, execSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { constants as fsConstants, existsSync } from "node:fs"
+import { constants as fsConstants, existsSync, realpathSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
@@ -107,6 +107,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.workingDir = options.rootDir ?? process.cwd()
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
+
+    // Eagerly cache the elevation check during construction to avoid blocking
+    // the event loop on the first file-write hot path (execSync("net session")).
+    if (process.platform === "win32" && this.windowsSandbox === "readonly") {
+      LocalSandbox.isElevated()
+    }
 
     // Cache parent's private fields once to avoid scattered (this as any) casts
     this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
@@ -516,6 +522,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * - readonly + non-admin: block all writes
    * - readonly + admin: only allow writes within the working directory
    * - unelevated / none: allow all writes (shell sandbox handles restriction)
+   *
+   * Uses realpathSync to resolve symlinks and toLowerCase for Windows
+   * case-insensitive path comparison.
    */
   private isWriteBlocked(filePath: string): boolean {
     if (this.windowsSandbox !== "readonly") return false
@@ -523,8 +532,22 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Admin readonly: restrict to working directory only (matches disk-write-cwd)
     try {
       const resolved = path.resolve(this.workingDir, filePath)
-      const normalizedCwd = path.resolve(this.workingDir) + path.sep
-      return !resolved.startsWith(normalizedCwd) && resolved !== path.resolve(this.workingDir)
+      // Resolve symlinks to prevent traversal via symlinked directories.
+      // If the file doesn't exist yet, resolve its parent directory instead.
+      let realTarget: string
+      try {
+        realTarget = realpathSync(resolved)
+      } catch {
+        // File doesn't exist yet — resolve parent dir + basename
+        const parentReal = realpathSync(path.dirname(resolved))
+        realTarget = path.join(parentReal, path.basename(resolved))
+      }
+      const realCwd = realpathSync(this.workingDir)
+      // Windows paths are case-insensitive
+      const normalizedTarget = realTarget.toLowerCase()
+      const normalizedCwd = realCwd.toLowerCase()
+      const cwdPrefix = normalizedCwd + path.sep
+      return !normalizedTarget.startsWith(cwdPrefix) && normalizedTarget !== normalizedCwd
     } catch {
       return true
     }
@@ -540,6 +563,31 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         : { error: `只读沙箱模式下禁止写入文件 '${filePath}'。如需写入请以管理员身份运行或切换沙箱模式。` }
     }
     return super.write(filePath, content)
+  }
+
+  /**
+   * Override uploadFiles to enforce readonly sandbox restrictions on each file.
+   */
+  async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
+    if (this.windowsSandbox === "readonly") {
+      const results: { path: string; error: string | null }[] = []
+      for (const [filePath, content] of files) {
+        if (this.isWriteBlocked(filePath)) {
+          results.push({
+            path: filePath,
+            error: LocalSandbox.isElevated()
+              ? `只读沙箱模式下仅允许写入工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。`
+              : `只读沙箱模式下禁止写入文件 '${filePath}'。如需写入请以管理员身份运行或切换沙箱模式。`
+          })
+        } else {
+          // Allowed — delegate to parent for this single file
+          const [res] = await super.uploadFiles([[filePath, content]])
+          results.push(res)
+        }
+      }
+      return results
+    }
+    return super.uploadFiles(files)
   }
 
   /**
@@ -1022,16 +1070,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ]
 
     // ACL grant/revoke needed for unelevated mode and readonly+admin (restricted token still needs NTFS permission).
-    // Readonly non-admin has no write access at all, so ACL changes are unnecessary.
+    // Readonly non-admin also needs TEMP writable so commands (git, python, etc.) that write temp files don't fail.
     const aclDirs: string[] = []
     if (!isReadonly || elevated) {
       aclDirs.push(this.workingDir)
-      const tmpDir = process.env.TEMP || process.env.TMP
-      if (tmpDir && tmpDir !== this.workingDir) {
-        aclDirs.push(tmpDir)
-      }
-      await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
     }
+    // Always grant TEMP write for all sandbox modes — even readonly non-admin
+    // needs it for commands that create temp files.
+    const tmpDir = process.env.TEMP || process.env.TMP
+    if (tmpDir && !aclDirs.includes(tmpDir)) {
+      aclDirs.push(tmpDir)
+    }
+    await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
 
     try {
     return await new Promise<ExecuteResponse>((resolve) => {
