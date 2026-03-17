@@ -33,6 +33,7 @@ interface ToolCallRendererProps {
   needsApproval?: boolean
   showApprovalButtons?: boolean
   onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
+  threadId: string // Add threadId prop
 }
 
 const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -496,7 +497,8 @@ export function ToolCallRenderer({
   isError,
   needsApproval,
   showApprovalButtons = true,
-  onApprovalDecision
+  onApprovalDecision,
+  threadId
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
@@ -702,7 +704,7 @@ export function ToolCallRenderer({
         // Collapsed view - show output preview
         if (output.trim()) {
           return (
-            <div className="space-y-2">
+            <pre className="space-y-2">
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
                 <span>Command completed</span>
@@ -711,7 +713,7 @@ export function ToolCallRenderer({
                 {output.slice(0, 500)}
                 {output.length > 500 && "..."}
               </pre>
-            </div>
+            </pre>
           )
         }
         return (
@@ -773,6 +775,7 @@ export function ToolCallRenderer({
                 filePath={path}
                 operation={toolCall.name}
                 operationId={toolCall.id}
+                threadId={threadId}
                 onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
               />
             </div>

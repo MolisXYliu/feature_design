@@ -49,6 +49,7 @@ interface MessageBubbleProps {
   toolResults?: Map<string, ToolResultInfo>
   pendingApproval?: HITLRequest | null
   onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
+  threadId: string // Add threadId prop
 }
 
 export function MessageBubble({
@@ -57,7 +58,8 @@ export function MessageBubble({
   isStreaming,
   toolResults,
   pendingApproval,
-  onApprovalDecision
+  onApprovalDecision,
+  threadId
 }: MessageBubbleProps): React.JSX.Element | null {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const isUser = message.role === "user"
@@ -209,6 +211,7 @@ export function MessageBubble({
                     needsApproval={needsApproval}
                     showApprovalButtons={!isBatch}
                     onApprovalDecision={onApprovalDecision}
+                    threadId={threadId}
                   />
                 );
               }
@@ -258,6 +261,7 @@ export function MessageBubble({
                         isError={result?.is_error}
                         needsApproval={false}
                         onApprovalDecision={undefined}
+                        threadId={threadId}
                       />
                     </div>
                   )}

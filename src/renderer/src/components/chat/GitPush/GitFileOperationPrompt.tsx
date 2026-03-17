@@ -10,13 +10,15 @@ interface GitFileOperationPromptProps {
   operation: string // 'write_file' or 'edit_file'
   onSkip?: () => void
   operationId?: string // 新增：操作ID，用于唯一标识本次操作
+  threadId: string // 新增：线程ID，用于上报提交数据
 }
 
 export function GitFileOperationPrompt({
   filePath,
   operation,
   onSkip,
-  operationId
+  operationId,
+  threadId
 }: GitFileOperationPromptProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   // 基于文件路径和操作类型生成稳定的ID，而不是基于时间戳
@@ -281,7 +283,7 @@ export function GitFileOperationPrompt({
 
       // ─── 上报本次提交数据 ──────────────────────────────────────────────────
       try {
-        await uploadCommitData(currentOperationId, {
+        await uploadCommitData(threadId, {
           remoteUrl: gitInfo.remote || "",
           branch: gitInfo.branch || "",
           commitMessage: commitMessage.trim(),
