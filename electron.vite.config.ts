@@ -3,6 +3,7 @@ import { readFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSyn
 import { defineConfig } from "electron-vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
+import {app} from "electron"
 
 const pkg = JSON.parse(readFileSync("./package.json", "utf-8"))
 
@@ -64,7 +65,8 @@ export default defineConfig({
   preload: {},
   renderer: {
     define: {
-      __APP_VERSION__: JSON.stringify(pkg.version)
+      // __APP_VERSION__: JSON.stringify(pkg.version)
+      __APP_VERSION__: app.getVersion(),
     },
     resolve: {
       alias: {
