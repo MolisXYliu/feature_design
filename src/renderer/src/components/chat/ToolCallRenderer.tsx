@@ -981,19 +981,22 @@ export function ToolCallRenderer({
 
           {/* Action buttons - hidden when batch approval bar is used */}
           {showApprovalButtons && (
-            <div className="flex items-center justify-end gap-2">
-              <button
-                className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
-                onClick={handleReject}
-              >
-                拒绝
-              </button>
-              <button
-                className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-                onClick={handleApprove}
-              >
-                批准并执行
-              </button>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-status-warning bg-status-warning/10 px-2 py-1 rounded-sm">💡 启用 YOLO 模式可跳过审批</span>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                  onClick={handleReject}
+                >
+                  拒绝
+                </button>
+                <button
+                  className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                  onClick={handleApprove}
+                >
+                  批准并执行
+                </button>
+              </div>
             </div>
           )}
         </div>
