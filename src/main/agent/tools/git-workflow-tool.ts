@@ -3,7 +3,7 @@ import { z } from "zod"
 import { execSync } from "child_process"
 import { existsSync } from "fs"
 import path from "path"
-import { useCallback } from "react";
+import { platform } from "os"
 
 export function createGitWorkflowTool(workspacePath: string) {
   return tool(
@@ -28,6 +28,35 @@ export function createGitWorkflowTool(workspacePath: string) {
   )
 }
 
+// Helper function to execute git commands with Windows compatibility
+function executeGitCommand(command: string, workspacePath: string): string {
+  const shell = platform() === 'win32' ? 'cmd.exe' : '/bin/bash'
+  return execSync(command, {
+    cwd: workspacePath,
+    encoding: "utf-8",
+    shell: shell,
+    env: {
+      ...process.env,
+      // Disable Git LFS for operations that don't need it
+      GIT_LFS_SKIP_SMUDGE: "1"
+    }
+  }).trim()
+}
+
+// Helper function to read file content with Windows compatibility
+function readFileContent(filePath: string, workspacePath: string): string {
+  const isWindows = platform() === 'win32'
+  const command = isWindows
+    ? `type "${filePath}"`
+    : `cat "${filePath}"`
+
+  return execSync(command, {
+    cwd: workspacePath,
+    encoding: "utf-8",
+    shell: isWindows ? 'cmd.exe' : '/bin/bash'
+  })
+}
+
 export async function getGitInfo(
   workspacePath: string,
   commitMessage: string,
@@ -50,12 +79,8 @@ export async function getGitInfo(
     let targetBranch = branch
     if (!branch || branch === "current") {
       try {
-        // Use more compatible command instead of --show-current
-        //   targetBranch = execSync("git branch --show-current", { 这个代码windows不支持
-        targetBranch = execSync("git rev-parse --abbrev-ref HEAD", {
-          cwd: workspacePath,
-          encoding: "utf-8"
-        }).trim()
+        // Use more compatible command for all platforms including Windows
+        targetBranch = executeGitCommand("git rev-parse --abbrev-ref HEAD", workspacePath)
         console.log("Current branch:", targetBranch)
 
         if (!targetBranch) {
@@ -71,12 +96,14 @@ export async function getGitInfo(
     // Get remote URL
     let remoteUrl: string
     try {
-      remoteUrl = execSync(`git remote get-url ${remoteName}`, {
-        cwd: workspacePath,
-        encoding: "utf-8"
-      }).trim()
+      remoteUrl = executeGitCommand(`git remote get-url ${remoteName}`, workspacePath)
     } catch {
-      remoteUrl = "Remote not found"
+      try {
+        // Fallback: try to get any remote URL
+        remoteUrl = executeGitCommand("git remote get-url origin", workspacePath)
+      } catch {
+        remoteUrl = "Remote not found"
+      }
     }
 
     // Get current status and changed files
@@ -84,11 +111,7 @@ export async function getGitInfo(
     let changedFiles: Array<{ path: string; status: string; oldContent?: string; newContent?: string; diff?: string }> = []
 
     try {
-      const status = execSync("git status --porcelain", {
-        cwd: workspacePath,
-        encoding: "utf-8"
-      }).trim()
-
+      const status = executeGitCommand("git status --porcelain", workspacePath)
       hasChanges = status.length > 0
 
       if (hasChanges) {
@@ -130,14 +153,9 @@ export async function getGitInfo(
               // New/added files
               try {
                 if (existsSync(fullFilePath)) {
-                  const newContent = execSync(`cat "${fullFilePath}"`, {
-                    cwd: workspacePath,
-                    encoding: "utf-8"
-                  })
+                  const newContent = readFileContent(filePath, workspacePath)
                   fileInfo.oldContent = ""
                   fileInfo.newContent = newContent
-                  // const lines = newContent.split('\n')
-                  // fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => '+' + line).join('\n')}`
                 }
               } catch (error) {
                 console.warn(`Failed to read new file ${filePath}:`, error)
@@ -145,14 +163,9 @@ export async function getGitInfo(
             } else if (statusCode.includes('D')) {
               // Deleted files
               try {
-                const oldContent = execSync(`git show HEAD:"${filePath}"`, {
-                  cwd: workspacePath,
-                  encoding: "utf-8"
-                })
+                const oldContent = executeGitCommand(`git show HEAD:"${filePath}"`, workspacePath)
                 fileInfo.oldContent = oldContent
                 fileInfo.newContent = ""
-                // const lines = oldContent.split('\n')
-                // fileInfo.diff = `--- a/${filePath}\n+++ /dev/null\n@@ -1,${lines.length} +0,0 @@\n${lines.map(line => '-' + line).join('\n')}`
               } catch (error) {
                 console.warn(`Failed to get old content for deleted file ${filePath}:`, error)
               }
@@ -162,45 +175,28 @@ export async function getGitInfo(
                 // Get diff using git diff
                 let diffOutput = ""
                 try {
-                  diffOutput = execSync(`git diff HEAD -- "${filePath}"`, {
-                    cwd: workspacePath,
-                    encoding: "utf-8"
-                  })
+                  diffOutput = executeGitCommand(`git diff HEAD -- "${filePath}"`, workspacePath)
                 } catch {
                   // If HEAD diff fails, try with cached/staged changes
                   try {
-                    diffOutput = execSync(`git diff --cached -- "${filePath}"`, {
-                      cwd: workspacePath,
-                      encoding: "utf-8"
-                    })
+                    diffOutput = executeGitCommand(`git diff --cached -- "${filePath}"`, workspacePath)
                   } catch {
                     // If both fail, try working directory diff
-                    diffOutput = execSync(`git diff -- "${filePath}"`, {
-                      cwd: workspacePath,
-                      encoding: "utf-8"
-                    })
+                    diffOutput = executeGitCommand(`git diff -- "${filePath}"`, workspacePath)
                   }
                 }
 
                 if (diffOutput.trim()) {
-                  // fileInfo.diff = diffOutput
-
                   // Get old and new content
                   try {
-                    fileInfo.oldContent = execSync(`git show HEAD:"${filePath}"`, {
-                      cwd: workspacePath,
-                      encoding: "utf-8"
-                    })
+                    fileInfo.oldContent = executeGitCommand(`git show HEAD:"${filePath}"`, workspacePath)
                   } catch {
                     fileInfo.oldContent = ""
                   }
 
                   try {
                     if (existsSync(fullFilePath)) {
-                      fileInfo.newContent = execSync(`cat "${fullFilePath}"`, {
-                        cwd: workspacePath,
-                        encoding: "utf-8"
-                      })
+                      fileInfo.newContent = readFileContent(filePath, workspacePath)
                     } else {
                       fileInfo.newContent = ""
                     }
@@ -211,16 +207,10 @@ export async function getGitInfo(
                   // No diff available, but try to get content anyway
                   try {
                     if (existsSync(fullFilePath)) {
-                      fileInfo.newContent = execSync(`cat "${fullFilePath}"`, {
-                        cwd: workspacePath,
-                        encoding: "utf-8"
-                      })
+                      fileInfo.newContent = readFileContent(filePath, workspacePath)
                     }
                     try {
-                      fileInfo.oldContent = execSync(`git show HEAD:"${filePath}"`, {
-                        cwd: workspacePath,
-                        encoding: "utf-8"
-                      })
+                      fileInfo.oldContent = executeGitCommand(`git show HEAD:"${filePath}"`, workspacePath)
                     } catch {
                       fileInfo.oldContent = ""
                     }
