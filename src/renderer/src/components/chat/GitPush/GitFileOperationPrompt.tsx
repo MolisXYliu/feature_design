@@ -354,7 +354,7 @@ export function GitFileOperationPrompt({
           </div>
           <div className="text-blue-700 dark:text-blue-300 mt-1">
             <span>是否要提交到Git？</span>
-            <span>（你也可以最后告诉大模型“使用git_workflow提交代码”进行批量提交）</span>
+            <span>（你也可以最后告诉大模型“使用git_workflow工具提交代码”进行批量提交）</span>
           </div>
 
           {/* 显示文件历史提交信息（如果有的话） */}
