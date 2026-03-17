@@ -2,6 +2,7 @@ import { useMemo } from "react"
 import { useAppStore } from "@/lib/store"
 import { useAllThreadStates, useAllStreamLoadingStates } from "@/lib/thread-context"
 import { KanbanColumn } from "./KanbanColumn"
+import { KanbanHeader } from "./KanbanHeader"
 import { ThreadKanbanCard, SubagentKanbanCard } from "./KanbanCard"
 import type { Thread, Subagent } from "@/types"
 
@@ -104,14 +105,15 @@ export function KanbanView(): React.JSX.Element {
   }, [threads, allThreadStates, showSubagentsInKanban])
 
   const columnData: { status: KanbanStatus; title: string }[] = [
-    { status: "pending", title: "PENDING" },
-    { status: "in_progress", title: "IN PROGRESS" },
-    { status: "interrupted", title: "BLOCKED" },
-    { status: "done", title: "DONE" }
+    { status: "pending", title: "待处理" },
+    { status: "in_progress", title: "进行中" },
+    { status: "interrupted", title: "待审批" },
+    { status: "done", title: "已完成" }
   ]
 
   return (
     <div className="flex flex-col h-full bg-background">
+      <KanbanHeader className="h-10 shrink-0 border-b border-border" />
       <div className="flex-1 overflow-x-auto p-2">
         <div className="flex h-full min-w-max gap-2">
           {columnData.map(({ status, title }) => {
@@ -138,7 +140,7 @@ export function KanbanView(): React.JSX.Element {
                   />
                 ))}
                 {totalCount === 0 && (
-                  <div className="text-center text-sm text-muted-foreground py-8">No items</div>
+                  <div className="text-center text-sm text-muted-foreground py-8">暂无任务</div>
                 )}
               </KanbanColumn>
             )

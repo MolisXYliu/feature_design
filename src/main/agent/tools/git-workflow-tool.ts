@@ -3,6 +3,7 @@ import { z } from "zod"
 import { execSync } from "child_process"
 import { existsSync } from "fs"
 import path from "path"
+import { useCallback } from "react";
 
 export function createGitWorkflowTool(workspacePath: string) {
   return tool(
@@ -49,20 +50,23 @@ export async function getGitInfo(
     let targetBranch = branch
     if (!branch || branch === "current") {
       try {
-        targetBranch = execSync("git branch --show-current", {
+        // Use more compatible command instead of --show-current
+        //   targetBranch = execSync("git branch --show-current", { 这个代码windows不支持
+        targetBranch = execSync("git rev-parse --abbrev-ref HEAD", {
           cwd: workspacePath,
           encoding: "utf-8"
         }).trim()
+        console.log("Current branch:", targetBranch)
 
         if (!targetBranch) {
-          targetBranch = "main"
+          targetBranch = ""
         }
       } catch {
-        targetBranch = "main"
+        targetBranch = ""
       }
     }
 
-    const remoteName = remote || "origin"
+    const remoteName = remote || ""
 
     // Get remote URL
     let remoteUrl: string

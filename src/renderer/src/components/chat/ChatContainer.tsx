@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock, Notebook, Megaphone, Zap
+  Clock, Notebook, Megaphone, Zap, Wrench
 } from "lucide-react";
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -130,7 +130,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const queryLatestVersion = async ()=>{
    try {
-     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/version',{
+     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/cmbdevclaw/versions/list',{
        method: "GET",
        headers: {
          "Content-Type": "application/json"
@@ -980,7 +980,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               <div className="flex items-center gap-3">
                                 <div
                                   className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
-                                  {icon}
+                                  <Wrench className={'size-4'}/>
                                 </div>
                                 <div className="text-xs text-foreground leading-5">{label}</div>
                               </div>
@@ -1057,7 +1057,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               <div className={`text-sm font-semibold leading-5 ${
                                 needUpdateVersion ? 'text-red-700' : ''
                               } transition-colors duration-200`}>
-                                {needUpdateVersion? '有新版本！' : '版本更新'}
+                                {needUpdateVersion? '发现新版本！' : '版本列表'}
                               </div>
                             </div>
                             {needUpdateVersion && (

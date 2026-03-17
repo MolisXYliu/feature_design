@@ -38,7 +38,7 @@ export function KanbanColumn({
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-section-header">{title}</span>
-        <Badge variant={config.badge}>{count}</Badge>
+        <Badge variant={config.badge} className="rounded-full min-w-[22px] justify-center">{count}</Badge>
       </div>
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-2">{children}</div>

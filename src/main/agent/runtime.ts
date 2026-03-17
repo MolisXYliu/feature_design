@@ -180,7 +180,7 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
   const summarizationOptions = {
     model,
     backend: filesystemBackend,
-    historyPathPrefix: ".cmbcoworkagent/conversation_history",
+    historyPathPrefix: ".cmbdevclaw/conversation_history",
     ...(trimTokensToSummarize != null && { trimTokensToSummarize }),
     ...(summarizationTrigger != null && { trigger: summarizationTrigger }),
     ...(summarizationKeep != null && { keep: summarizationKeep }),
@@ -191,15 +191,34 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
     }
   }
 
+  // Create filesystem middleware and fix grep tool's misleading "Regex pattern" param description
+  // (upstream bug: description says "Regex" but implementation uses literal -F matching)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const createFsMiddleware = (): any => {
+    const mw = createFilesystemMiddleware({
+      backend: filesystemBackend,
+      ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
+      ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const grepTool = mw.tools?.find((t: any) => t.name === "grep") as any
+    if (grepTool?.schema?.shape?.pattern) {
+      const oldDesc = grepTool.schema.shape.pattern.description ?? "(unknown)"
+      grepTool.schema = grepTool.schema.extend({
+        pattern: grepTool.schema.shape.pattern.describe("Text pattern to search for (literal, not regex)")
+      })
+      console.log(`[Runtime] grep schema patched: "${oldDesc}" → "${grepTool.schema.shape.pattern.description}"`)
+    } else {
+      console.warn("[Runtime] grep tool schema patch skipped: tool or pattern field not found")
+    }
+    return mw
+  }
+
   // Base middleware for custom subagents (no skills — custom subagents must define their own)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const subagentMiddleware: any[] = [
     todoListMiddleware(),
-    createFilesystemMiddleware({
-      backend: filesystemBackend,
-      ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
-      ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
-    }),
+    createFsMiddleware(),
     createSummarizationMiddleware(summarizationOptions),
     anthropicPromptCachingMiddleware({ unsupportedModelBehavior: "ignore" }),
     createPatchToolCallsMiddleware()
@@ -211,11 +230,7 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
     tools,
     middleware: [
       todoListMiddleware(),
-      createFilesystemMiddleware({
-        backend: filesystemBackend,
-        ...(filesystemSystemPrompt && { systemPrompt: filesystemSystemPrompt }),
-        ...(toolTokenLimitBeforeEvict != null && { toolTokenLimitBeforeEvict })
-      }),
+      createFsMiddleware(),
       createSubAgentMiddleware({
         defaultModel: model,
         defaultTools: tools,
@@ -516,7 +531,7 @@ ${subagentShellGuidance}
 - write_file: write to a file in the filesystem
 - edit_file: edit a file in the filesystem
 - glob: find files matching a pattern (e.g., "**/*.py")
-- grep: search for text within files
+- grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
 
 The workspace root is: ${workspacePath}`
@@ -648,6 +663,7 @@ The workspace root is: ${workspacePath}`
   }
 
   // Add git_push tool
+  // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
 
   const triggerTokens = Math.floor(maxTokens * 0.75)

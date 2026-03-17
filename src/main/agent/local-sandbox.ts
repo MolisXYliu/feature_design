@@ -114,6 +114,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       LocalSandbox.isElevated()
     }
 
+    // Redirect deepagents' virtual eviction paths (e.g. /large_tool_results/)
+    // to workspace-local dirs, since virtualMode=false treats "/" as absolute
+    // and writing to system root fails on macOS (SIP) and Windows (permissions).
+    // MUST run before caching _resolvePath below, so the cache captures the patched version.
+    this.patchResolvePath()
+
     // Cache parent's private fields once to avoid scattered (this as any) casts
     this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
     this._virtualMode = ((this as any).virtualMode as boolean) ?? false
@@ -126,34 +132,30 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
     }
 
-    // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
-    // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
-    // this.patchResolvePath()
-
   }
 
-  // private patchResolvePath(): void {
-  //   if (typeof (this as any).resolvePath !== "function") {
-  //     console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
-  //     return
-  //   }
-  //   const original = (this as any).resolvePath.bind(this)
-  //   const workingDir = this.workingDir
-  //   const redirects: Record<string, string> = {
-  //     "/large_tool_results/": ".cmbcoworkagent/large_tool_results"
-  //   }
-  //   ;(this as any).resolvePath = (key: string): string => {
-  //     for (const [prefix, localDir] of Object.entries(redirects)) {
-  //       if (key.startsWith(prefix)) {
-  //         const redirected = join(workingDir, localDir, key.slice(prefix.length))
-  //         console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
-  //         key = redirected
-  //         break
-  //       }
-  //     }
-  //     return original(key)
-  //   }
-  // }
+  private patchResolvePath(): void {
+    if (typeof (this as any).resolvePath !== "function") {
+      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
+      return
+    }
+    const original = (this as any).resolvePath.bind(this)
+    const workingDir = this.workingDir
+    const redirects: Record<string, string> = {
+      "/large_tool_results/": ".cmbdevclaw/large_tool_results"
+    }
+    ;(this as any).resolvePath = (key: string): string => {
+      for (const [prefix, localDir] of Object.entries(redirects)) {
+        if (key.startsWith(prefix)) {
+          const redirected = path.join(workingDir, localDir, key.slice(prefix.length))
+          console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
+          key = redirected
+          break
+        }
+      }
+      return original(key)
+    }
+  }
 
   private static readonly MAX_GREP_MATCHES = 200
   private static readonly MAX_GREP_CHARS = 24_000

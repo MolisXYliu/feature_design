@@ -754,29 +754,30 @@ export function ToolCallRenderer({
         }
 
         // Check if this operation might need Git commit (any file operation)
-        // todo 暂时注释，看后续是否要放开，编辑文件导致的git提交
-        // if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
-        //   return (
-        //     <div className="space-y-2">
-        //       <div className={'overflow-scroll'}>
-        //         <DiffDisplay
-        //           oldValue={args.old_string || ""}
-        //           newValue={args.new_string  || ""}
-        //         />
-        //       </div>
-        //       <div className="text-xs text-status-nominal flex items-center gap-1.5">
-        //         <CheckCircle2 className="size-3" />
-        //         <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
-        //       </div>
-        //       <GitFileOperationPrompt
-        //         filePath={path}
-        //         operation={toolCall.name}
-        //         operationId={toolCall.id}
-        //         onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
-        //       />
-        //     </div>
-        //   )
-        // }
+        // 编辑文件导致的git提交
+        // todo 暂时放开，等后续批量git完善之后，再根据实际情况调整哪些操作需要展示git提交
+        if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
+          return (
+            <div className="space-y-2">
+              <div className={'overflow-scroll'}>
+                <DiffDisplay
+                  oldValue={args.old_string || ""}
+                  newValue={args.new_string  || ""}
+                />
+              </div>
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
+              </div>
+              <GitFileOperationPrompt
+                filePath={path}
+                operation={toolCall.name}
+                operationId={toolCall.id}
+                onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+              />
+            </div>
+          )
+        }
 
         // Show confirmation message for file operations
         if (typeof result === "string" && result.trim()) {
