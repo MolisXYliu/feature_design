@@ -352,7 +352,10 @@ export function GitFileOperationPrompt({
           <div className="font-medium text-blue-800 dark:text-blue-200">
             文件已{operation === "edit_file" ? "修改" : "创建"}
           </div>
-          <div className="text-blue-700 dark:text-blue-300 mt-1">是否要提交到Git？</div>
+          <div className="text-blue-700 dark:text-blue-300 mt-1">
+            <span>是否要提交到Git？</span>
+            <span>（你也可以最后告诉大模型“使用git_workflow提交代码”进行批量提交）</span>
+          </div>
 
           {/* 显示文件历史提交信息（如果有的话） */}
           {hasFileCommitHistory && latestCommitRecord && (

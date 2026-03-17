@@ -367,30 +367,17 @@ export function GitFileOperationPromptWithProps({
               <GitBranch className="size-3" />
               提交到Git
             </button>
-            <button
-              onClick={() => {
-                // 通知Git工具用户跳过了操作
-                if (operationId && operationId.startsWith('git_workflow_')) {
-                  window.electron.ipcRenderer.invoke(
-                    "complete-git-workflow",
-                    operationId,
-                    false,
-                    "用户跳过了Git操作"
-                  ).then(() => {
-                    console.log('通知Git工具用户跳过操作:', operationId)
-                  }).catch((error) => {
-                    console.warn('通知Git工具失败:', error)
-                  })
-                }
-
-                if (onSkip) {
-                  onSkip()
-                }
-              }}
-              className="px-2 py-1 text-xs border border-blue-200 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
-            >
-              暂时跳过
-            </button>
+            {/*<button*/}
+            {/*  onClick={() => {*/}
+            {/*    // 通知Git工具用户跳过了操作*/}
+            {/*    if (onSkip) {*/}
+            {/*      onSkip()*/}
+            {/*    }*/}
+            {/*  }}*/}
+            {/*  className="px-2 py-1 text-xs border border-blue-200 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"*/}
+            {/*>*/}
+            {/*  暂时跳过*/}
+            {/*</button>*/}
           </div>
         </div>
       </div>
