@@ -1140,6 +1140,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  threadId={threadId}
                 />
               );
             })}

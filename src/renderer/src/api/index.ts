@@ -40,7 +40,7 @@ const threadsApi = {
     formData.append('unique_id', params.unique_id)
     formData.append('file', params.file)
 
-    return request<UploadThreadsResponse>('/threads/upload', {
+    return request<UploadThreadsResponse>('/api/trajectories/threads/upload', {
       method: 'POST',
       body: formData,
       // Content-Type is set automatically by the browser for multipart/form-data
