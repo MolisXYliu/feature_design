@@ -32,6 +32,7 @@ import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble";
 import { uploadChatData ,ChatReportPayload} from "@/api"
+import { marketApi } from "../../api/market";
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -103,6 +104,22 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [latestVersion, setLatestVersion] = useState('');
 
   const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
+
+  const goodSkillsRef= useRef([])
+
+  const queryRemoteSkills=()=>{
+    marketApi.getSkills().then(res => {
+      const goodSkills = res?.data?.filter(it => it.featured === '精品')
+      console.log(goodSkills)
+      goodSkillsRef.current = goodSkills || []
+    })
+  }
+
+  const getTargetRemoteSkill = (name)=>{
+    const target = goodSkillsRef.current?.find(it => it.name === name)
+    return target?.guidance || ''
+  }
+
 
   // Get persisted thread state and actions from context
   const {
@@ -841,9 +858,10 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
-    (skill: SkillMetadata): void => {
+    (skill: SkillMetadata, label:string): void => {
+      const custPrompt = label ? getTargetRemoteSkill(label) : ''
       const prompt = buildSkillPrompt(skill)
-      setInput(prompt)
+      setInput(custPrompt || prompt)
       requestAnimationFrame(() => {
         const textarea = inputRef.current
         if (!textarea) return
@@ -996,7 +1014,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                           <button
                             key={skill.path}
                             type="button"
-                            onClick={() => handleUseSkillPrompt(skill)}
+                            onClick={() => handleUseSkillPrompt(skill, label)}
                             className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                           >
                             <div className="flex items-center gap-3">
