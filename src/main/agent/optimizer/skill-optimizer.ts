@@ -20,9 +20,9 @@
 import { ChatOpenAI } from "@langchain/openai"
 import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { join } from "path"
-import { existsSync, readdirSync, readFileSync } from "fs"
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs"
 import { v4 as uuid } from "uuid"
-import { getCustomSkillsDir } from "../../storage"
+import { getCustomSkillsDir, getOptimizerCandidatesPath } from "../../storage"
 import { readRecentTraces, readThreadTraces } from "../trace/collector"
 import type { AgentTrace } from "../trace/types"
 import { stripLLMFormatting } from "../skill-evolution/skill-proposal-logic"
@@ -500,12 +500,77 @@ Output JSON array only.`
 
 /** In-memory store of current optimization run candidates. */
 let _currentCandidates: SkillOptimizationCandidate[] = []
+let _candidatesLoaded = false
+
+function isValidCandidateStatus(status: unknown): status is SkillOptimizationCandidate["status"] {
+  return status === "pending" || status === "approved" || status === "rejected"
+}
+
+function isValidCandidateAction(action: unknown): action is CandidateAction {
+  return action === "create" || action === "patch"
+}
+
+function isSkillOptimizationCandidate(value: unknown): value is SkillOptimizationCandidate {
+  if (!value || typeof value !== "object") return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.candidateId === "string" &&
+    isValidCandidateAction(candidate.action) &&
+    typeof candidate.skillId === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.description === "string" &&
+    typeof candidate.proposedContent === "string" &&
+    typeof candidate.rationale === "string" &&
+    Array.isArray(candidate.sourceTraceIds) &&
+    candidate.sourceTraceIds.every((item) => typeof item === "string") &&
+    typeof candidate.generatedAt === "string" &&
+    isValidCandidateStatus(candidate.status)
+  )
+}
+
+function loadCandidatesFromDisk(): void {
+  if (_candidatesLoaded) return
+  _candidatesLoaded = true
+
+  const filePath = getOptimizerCandidatesPath()
+  if (!existsSync(filePath)) {
+    _currentCandidates = []
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf-8")) as unknown
+    if (!Array.isArray(parsed)) {
+      _currentCandidates = []
+      return
+    }
+    _currentCandidates = parsed.filter(isSkillOptimizationCandidate)
+  } catch (error) {
+    console.warn("[SkillOptimizer] Failed to load persisted candidates:", error)
+    _currentCandidates = []
+  }
+}
+
+function persistCandidates(): void {
+  try {
+    writeFileSync(
+      getOptimizerCandidatesPath(),
+      JSON.stringify(_currentCandidates, null, 2),
+      "utf-8"
+    )
+  } catch (error) {
+    console.warn("[SkillOptimizer] Failed to persist candidates:", error)
+  }
+}
 
 export function setCandidates(candidates: SkillOptimizationCandidate[]): void {
+  loadCandidatesFromDisk()
   _currentCandidates = candidates
+  persistCandidates()
 }
 
 export function getCandidates(): SkillOptimizationCandidate[] {
+  loadCandidatesFromDisk()
   return _currentCandidates
 }
 
@@ -513,13 +578,17 @@ export function updateCandidateStatus(
   candidateId: string,
   status: "approved" | "rejected"
 ): SkillOptimizationCandidate | null {
+  loadCandidatesFromDisk()
   const candidate = _currentCandidates.find((c) => c.candidateId === candidateId)
   if (candidate) {
     candidate.status = status
+    persistCandidates()
   }
   return candidate ?? null
 }
 
 export function clearCandidates(): void {
+  loadCandidatesFromDisk()
   _currentCandidates = []
+  persistCandidates()
 }

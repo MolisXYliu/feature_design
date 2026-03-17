@@ -43,6 +43,10 @@ export function getRendererLogPath(): string {
   return join(getLogsDir(), "renderer.log")
 }
 
+export function getOptimizerCandidatesPath(): string {
+  return join(getOpenworkDir(), "optimizer-candidates.json")
+}
+
 export function getThreadCheckpointDir(): string {
   const dir = join(getOpenworkDir(), "threads")
   if (!existsSync(dir)) {

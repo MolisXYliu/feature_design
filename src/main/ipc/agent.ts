@@ -538,6 +538,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const trimContent = (s: string): string =>
         s.length > MAX_TRACE_CONTENT ? `${s.slice(0, MAX_TRACE_CONTENT)}\n…(truncated)` : s
 
+      const normalizeMessageText = (s: string): string =>
+        s.replace(/\r\n/g, "\n").trim()
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const extractText = (raw: any): string => {
         if (typeof raw === "string") return trimContent(raw)
@@ -635,7 +638,23 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
             // Values mode usually carries fuller tool-call args than messages mode.
             if (Array.isArray(state.messages)) {
-              for (let i = 0; i < state.messages.length; i++) {
+              let currentTurnStartIndex = -1
+              for (let i = state.messages.length - 1; i >= 0; i--) {
+                const msg = state.messages[i]
+                const kwargs = msg?.kwargs || {}
+                const classId = Array.isArray(msg?.id) ? msg.id : []
+                const className = classId[classId.length - 1] || ""
+                const role = toRole(className, kwargs)
+                if (role !== "user") continue
+                if (normalizeMessageText(extractText(kwargs.content)) === normalizeMessageText(message)) {
+                  currentTurnStartIndex = i
+                  break
+                }
+              }
+
+              const valuesStartIndex = currentTurnStartIndex >= 0 ? currentTurnStartIndex + 1 : 0
+
+              for (let i = valuesStartIndex; i < state.messages.length; i++) {
                 const msg = state.messages[i]
                 const tcs = msg?.kwargs?.tool_calls
 
@@ -707,6 +726,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                     const tc = tcs[tcIndex]
                     const tcId = typeof tc?.id === "string" ? tc.id : ""
                     const toolRef = tcId || `${aiMsgId || "ai_unknown"}:${tcIndex}:${JSON.stringify(tc?.args ?? {})}`
+                    const counted = toolCallCounter.register(tc, aiMsgId, tcIndex)
                     if (!_toolNodeByRef.has(toolRef)) {
                       const parentId = aiMsgId ? _llmNodeByMessageId.get(aiMsgId) : undefined
                       const toolNodeId = tracer.addToolNode({
@@ -718,6 +738,11 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                         metadata: { index: tcIndex }
                       })
                       _toolNodeByRef.set(toolRef, toolNodeId)
+                    }
+
+                    if (counted) {
+                      const turnCount = toolCallCounter.getCount()
+                      console.log(`[Agent] Turn tool call #${turnCount} (${tc?.name ?? "unknown"}) in thread ${threadId} [values]`)
                     }
 
                     if (tc?.name !== "read_file") continue
