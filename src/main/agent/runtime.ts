@@ -13,6 +13,7 @@ import {
   getEnabledSkillsSources,
   getEnabledMcpConnectors,
   getCustomModelConfigs,
+  getUserInfo,
   isMemoryEnabled,
   DEFAULT_MAX_TOKENS,
   getEnabledPluginSkillsSources,
@@ -267,9 +268,9 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(windowsSandbox?: "none" | "unelevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
-  const isUnelevated = process.platform === "win32" && windowsSandbox === "unelevated"
-  const resolved = isUnelevated
+function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly")
+  const resolved = isSandboxed
     ? LocalSandbox.resolvedWindowsSandboxShell()
     : LocalSandbox.resolvedShell()
   const base = path.basename(resolved).replace(/\.exe$/i, "").toLowerCase()
@@ -299,7 +300,7 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated"): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
@@ -332,8 +333,20 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
+  const readonlySection = windowsSandbox === "readonly"
+    ? `
+### 只读沙箱模式
+
+**重要提示：** 你正在只读沙箱环境中运行。
+- 你可以自由读取磁盘上的所有文件。
+- 普通权限下写入操作被禁止。以管理员身份运行时允许写入工作目录内的文件。
+- 此模式适用于安全审查、代码分析等只读场景。
+- 除非用户明确要求，否则避免执行写入操作，应以建议修改替代直接写入。
+`
+    : ""
+
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + readonlySection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache
@@ -500,7 +513,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
-
+  const userInfo = getUserInfo()
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
@@ -508,6 +521,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
+### userinfo
+- sap编号、员工编号:${userInfo?.sapId}
+- yst编号、一事通编号: ${userInfo?.ystId}
+- userName、员工姓名: ${userInfo?.userName}
+- originOrgId、员工机构号: ${userInfo?.originOrgId}
+- orgName、员机构号名称: ${userInfo?.orgName}
+- ystRefreshToken、刷新token: ${userInfo?.ystRefreshToken}
+- ystCode、一事通code: ${userInfo?.ystCode}
 
 ### System Environment
 - Operating system: ${platform} (${process.arch})

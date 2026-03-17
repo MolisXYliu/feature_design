@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock, Notebook, Megaphone, Zap, Wrench
+  Clock, Notebook, Megaphone, Zap, Wrench, CircleAlert
 } from "lucide-react";
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -31,6 +31,7 @@ import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble";
+import { uploadChatData ,ChatReportPayload} from "@/api"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -157,6 +158,28 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     fetchYoloMode()
     return window.api.sandbox.onChanged(fetchYoloMode)
   }, [])
+
+  useEffect(()=>{
+    uploadLoChatData(threadMessages)
+  },[threadMessages])
+
+  const uploadLoChatData =async (msgs:Message[])=>{
+    const lastMsg=msgs[msgs.length-1]
+    if(lastMsg){
+      if(lastMsg.role!=='user'){
+        let lUidx=-1
+        for(let i=msgs.length-1;i>=0;i--){
+          if(msgs[i].role==='user'){
+            lUidx=i
+            break
+          }
+        }
+        if(lUidx!==-1){
+          await uploadChatData(threadId,msgs.slice(lUidx) as ChatReportPayload[])
+        }
+      }
+    }
+  }
 
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
@@ -963,51 +986,60 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </button>
                     )}
-                    {customSkillCards.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
-                          <span>我安装的技能</span>
-                          <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          {customSkillCards.map(({ skill, label, icon }) => (
-                            <button
-                              key={skill.path}
-                              type="button"
-                              onClick={() => handleUseSkillPrompt(skill)}
-                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
-                                  <Wrench className={'size-4'}/>
-                                </div>
-                                <div className="text-xs text-foreground leading-5">{label}</div>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                        {customSkills.length > 8 && (
-                          <button
-                            type="button"
-                            onClick={() => setShowAllCustomSkills((prev) => !prev)}
-                            className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
-                          >
-                            {showAllCustomSkills ? (
-                              <>
-                                <ChevronUp className="size-3.5" />
-                                <span>收起</span>
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="size-3.5" />
-                                <span>展开更多（+{customSkills.length - 8}）</span>
-                              </>
-                            )}
-                          </button>
-                        )}
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                        <span>我安装的技能</span>
+                        <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
                       </div>
-                    )}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        {customSkillCards?.length ? customSkillCards.map(({ skill, label, icon }) => (
+                          <button
+                            key={skill.path}
+                            type="button"
+                            onClick={() => handleUseSkillPrompt(skill)}
+                            className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div
+                                className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <Wrench className={"size-4"} />
+                              </div>
+                              <div className="text-xs text-foreground leading-5">{label}</div>
+                            </div>
+                          </button>
+                        )) : <button
+                          type="button"
+                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              <CircleAlert className={"size-4"} />
+                            </div>
+                            <div className="text-xs text-foreground leading-5">暂无</div>
+                          </div>
+                        </button>}
+                      </div>
+                      {customSkills.length > 8 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllCustomSkills((prev) => !prev)}
+                          className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                        >
+                          {showAllCustomSkills ? (
+                            <>
+                              <ChevronUp className="size-3.5" />
+                              <span>收起</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="size-3.5" />
+                              <span>展开更多（+{customSkills.length - 8}）</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
 
                     <div className="space-y-2">
                       <div className="text-xs text-muted-foreground font-medium tracking-wider">
@@ -1117,6 +1149,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  threadId={threadId}
                 />
               );
             })}

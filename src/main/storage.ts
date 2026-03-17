@@ -347,6 +347,17 @@ export interface CustomModelConfig {
   maxTokens?: number
 }
 
+export interface UserInfoConfig {
+  sapId?: string//8
+  ystId?: string//6
+  userName?: string
+  originOrgId?: string
+  orgName?: string
+  ystRefreshToken?: string
+  ystCode?: string
+  ystAccessToken?: string
+}
+
 export const DEFAULT_MAX_TOKENS = 128_000
 export const MIN_MAX_TOKENS = 32_000
 export const MAX_MAX_TOKENS = 128_000
@@ -370,6 +381,7 @@ interface StoredCustomModelRecord {
 
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
 const CUSTOM_MODELS_FILE = join(OPENWORK_DIR, "custom-models.json")
+const USERINFO_MODELS_FILE = join(OPENWORK_DIR, "userinfo-models.json")
 
 function normalizeMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -489,6 +501,10 @@ function writeCustomModelsRaw(items: StoredCustomModelRecord[]): void {
   writeFileSync(CUSTOM_MODELS_FILE, JSON.stringify(items, null, 2))
 }
 
+function writeUserInfoModelsRaw(items: UserInfoConfig): void {
+  writeFileSync(USERINFO_MODELS_FILE, JSON.stringify(items, null, 2))
+}
+
 function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -567,6 +583,13 @@ export function getCustomModelConfigById(id: string): CustomModelConfig | null {
   }
 }
 
+export function getUserInfo(): UserInfoConfig | null {
+  if (!existsSync(USERINFO_MODELS_FILE)) return null
+  const content = readFileSync(USERINFO_MODELS_FILE, "utf-8")
+  const userInfo = JSON.parse(content) as UserInfoConfig
+  return userInfo
+}
+
 export function upsertCustomModelConfig(
   config: Omit<CustomModelConfig, "id"> & { id?: string }
 ): string {
@@ -625,6 +648,13 @@ export function upsertCustomModelConfig(
   }
 
   return targetId
+}
+
+export function upsertUserInfoConfig(
+  config: Omit<UserInfoConfig, "id"> & { id?: string }
+): string {
+  writeUserInfoModelsRaw(config)
+  return config.userName || '';
 }
 
 export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
@@ -1242,12 +1272,15 @@ export function saveChatXConfig(updates: Partial<import("./types").ChatXConfig>)
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-function readSandboxSettings(): { mode: "none" | "unelevated"; yolo: boolean } {
+const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly">(["none", "unelevated", "readonly"])
+type SandboxMode = "none" | "unelevated" | "readonly"
+
+function readSandboxSettings(): { mode: SandboxMode; yolo: boolean } {
   if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "none", yolo: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
     return {
-      mode: parsed.mode === "unelevated" ? "unelevated" : "none",
+      mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "none",
       yolo: parsed.yolo === true
     }
   } catch (err) {
@@ -1256,17 +1289,17 @@ function readSandboxSettings(): { mode: "none" | "unelevated"; yolo: boolean } {
   }
 }
 
-function updateSandboxSettings(patch: Partial<{ mode: "none" | "unelevated"; yolo: boolean }>): void {
+function updateSandboxSettings(patch: Partial<{ mode: SandboxMode; yolo: boolean }>): void {
   getOpenworkDir()
   const current = readSandboxSettings()
   writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ ...current, ...patch }, null, 2))
 }
 
-export function getWindowsSandboxMode(): "none" | "unelevated" {
+export function getWindowsSandboxMode(): SandboxMode {
   return readSandboxSettings().mode
 }
 
-export function setWindowsSandboxMode(mode: "none" | "unelevated"): void {
+export function setWindowsSandboxMode(mode: SandboxMode): void {
   updateSandboxSettings({ mode })
 }
 
