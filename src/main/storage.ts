@@ -27,6 +27,22 @@ export function getCheckpointDbPath(): string {
   return join(getOpenworkDir(), "langgraph.sqlite")
 }
 
+export function getLogsDir(): string {
+  const dir = join(getOpenworkDir(), "logs")
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+export function getMainLogPath(): string {
+  return join(getLogsDir(), "main.log")
+}
+
+export function getRendererLogPath(): string {
+  return join(getLogsDir(), "renderer.log")
+}
+
 export function getThreadCheckpointDir(): string {
   const dir = join(getOpenworkDir(), "threads")
   if (!existsSync(dir)) {

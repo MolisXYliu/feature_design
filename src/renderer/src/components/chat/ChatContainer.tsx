@@ -519,6 +519,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   // ── Skill creation human-confirmation listener ──────────
   useEffect(() => {
+    console.log("[ChatContainer] Registering skill confirm listener")
     const cleanup = window.api.skillEvolution.onConfirmRequest((req) => {
       console.log("[ChatContainer] Received skill confirm request:", req.requestId, req.name)
       setSkillConfirmRequest(req)
@@ -529,31 +530,41 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [setSkillGenerationPhase])
 
   const handleSkillApprove = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Approving skill confirm request:", requestId)
     void window.api.skillEvolution.confirmResponse(requestId, true)
     setSkillConfirmRequest(null)
   }, [])
 
   const handleSkillReject = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Rejecting skill confirm request:", requestId)
     void window.api.skillEvolution.confirmResponse(requestId, false)
     setSkillConfirmRequest(null)
   }, [])
 
   // ── Skill intent banner listener (Mode A: "Want to save as skill?") ──
   useEffect(() => {
+    console.log("[ChatContainer] Registering skill intent listener")
     const cleanup = window.api.skillEvolution.onIntentRequest((req) => {
-      console.log("[ChatContainer] Received skill intent request:", req.requestId)
+      console.log(
+        "[ChatContainer] Received skill intent request:",
+        req.requestId,
+        req.mode,
+        req.toolCallCount
+      )
       setSkillIntentRequest(req)
     })
     return cleanup
   }, [])
 
   const handleSkillIntentYes = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Accepting skill intent request:", requestId)
     setSkillGenerationPhase("generating")
     setSkillIntentRequest(null)
     void window.api.skillEvolution.intentResponse(requestId, true)
   }, [setSkillGenerationPhase])
 
   const handleSkillIntentNo = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Skipping skill intent request:", requestId)
     setSkillIntentRequest(null)
     void window.api.skillEvolution.intentResponse(requestId, false)
   }, [])

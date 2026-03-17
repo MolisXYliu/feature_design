@@ -29,15 +29,18 @@ import { v4 as uuid } from "uuid"
 // ─────────────────────────────────────────────────────────
 
 function notifyRenderer(channel: string, payload?: unknown): void {
+  let sentCount = 0
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
         win.webContents.send(channel, payload)
+        sentCount += 1
       }
     } catch {
       // Window may have been destroyed between check and send — ignore
     }
   }
+  console.log(`[SkillEvolution] notifyRenderer channel=${channel} windows=${sentCount}`)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -73,6 +76,7 @@ function ensureResponseHandler(): void {
 
   // Handle both intent responses ("yes / no, create skill?") and full confirm responses ("adopt / reject")
   ipcMain.handle("skill:intentResponse", (_event, { requestId, accepted }: { requestId: string; accepted: boolean }) => {
+    console.log(`[SkillEvolution] Received intent response: ${requestId} accepted=${accepted}`)
     const resolve = _pendingResponses.get(requestId)
     if (resolve) {
       _pendingResponses.delete(requestId)
@@ -81,6 +85,7 @@ function ensureResponseHandler(): void {
   })
 
   ipcMain.handle("skill:confirmResponse", (_event, { requestId, approved }: { requestId: string; approved: boolean }) => {
+    console.log(`[SkillEvolution] Received confirmation response: ${requestId} approved=${approved}`)
     const resolve = _pendingResponses.get(requestId)
     if (resolve) {
       _pendingResponses.delete(requestId)
@@ -128,7 +133,9 @@ export interface SkillIntentRequest {
 export async function requestSkillIntent(req: SkillIntentRequest): Promise<boolean> {
   const promise = waitForResponse(req.requestId)
   notifyRenderer("skill:intentRequest", req)
-  console.log(`[SkillEvolution] Sent intent request: ${req.requestId}`)
+  console.log(
+    `[SkillEvolution] Sent intent request: ${req.requestId} mode=${req.mode} toolCallCount=${req.toolCallCount}`
+  )
   return promise
 }
 
@@ -145,7 +152,9 @@ export async function requestSkillIntent(req: SkillIntentRequest): Promise<boole
 export async function requestSkillConfirmation(req: SkillConfirmRequest): Promise<boolean> {
   const promise = waitForResponse(req.requestId)
   notifyRenderer("skill:confirmRequest", req)
-  console.log(`[SkillEvolution] Sent confirmation request: ${req.requestId} for skill "${req.name}"`)
+  console.log(
+    `[SkillEvolution] Sent confirmation request: ${req.requestId} for skill "${req.name}" (${req.skillId})`
+  )
   return promise
 }
 

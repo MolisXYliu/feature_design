@@ -1,5 +1,21 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage } from "electron"
 import { join } from "path"
+import { writeMainLog, writeRendererLog } from "./logging"
+
+function getConsoleLevelName(level: number): string {
+  switch (level) {
+    case 0:
+      return "INFO"
+    case 1:
+      return "WARN"
+    case 2:
+      return "ERROR"
+    case 3:
+      return "DEBUG"
+    default:
+      return "LOG"
+  }
+}
 
 function withEpipeGuard<T extends (...args: unknown[]) => void>(fn: T): T {
   return ((...args: Parameters<T>) => {
@@ -12,12 +28,19 @@ function withEpipeGuard<T extends (...args: unknown[]) => void>(fn: T): T {
   }) as T
 }
 
+function withMainFileLogging<T extends (...args: unknown[]) => void>(level: string, fn: T): T {
+  return ((...args: Parameters<T>) => {
+    writeMainLog(level, args)
+    fn(...args)
+  }) as T
+}
+
 // Guard console writes so broken stdout/stderr pipes don't crash main process.
-console.log = withEpipeGuard(console.log.bind(console))
-console.info = withEpipeGuard(console.info.bind(console))
-console.warn = withEpipeGuard(console.warn.bind(console))
-console.error = withEpipeGuard(console.error.bind(console))
-console.debug = withEpipeGuard(console.debug.bind(console))
+console.log = withEpipeGuard(withMainFileLogging("INFO", console.log.bind(console)))
+console.info = withEpipeGuard(withMainFileLogging("INFO", console.info.bind(console)))
+console.warn = withEpipeGuard(withMainFileLogging("WARN", console.warn.bind(console)))
+console.error = withEpipeGuard(withMainFileLogging("ERROR", console.error.bind(console)))
+console.debug = withEpipeGuard(withMainFileLogging("DEBUG", console.debug.bind(console)))
 
 // Suppress EPIPE errors that occur when stdout/stderr pipe closes (e.g. during dev mode
 // or when the renderer window is destroyed while the main process is still logging).
@@ -32,6 +55,9 @@ process.stderr.on("error", (err: NodeJS.ErrnoException) => {
 process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
   if (err.code === "EPIPE") return // silently ignore broken pipe
   console.error("[Main] Uncaught exception:", err)
+})
+process.on("unhandledRejection", (reason) => {
+  console.error("[Main] Unhandled rejection:", reason)
 })
 import { registerAgentHandlers } from "./ipc/agent"
 import { registerThreadHandlers } from "./ipc/threads"
@@ -77,9 +103,33 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  mainWindow.on("unresponsive", () => {
+    console.warn("[Main] BrowserWindow became unresponsive")
+  })
+
+  mainWindow.on("responsive", () => {
+    console.info("[Main] BrowserWindow recovered responsiveness")
+  })
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: "deny" }
+  })
+
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    writeRendererLog(getConsoleLevelName(level), message, { sourceId, line })
+  })
+
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    console.error("[Main] Renderer failed to load:", {
+      errorCode,
+      errorDescription,
+      validatedURL
+    })
+  })
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[Main] Renderer process gone:", details)
   })
 
   // HMR for renderer based on electron-vite cli

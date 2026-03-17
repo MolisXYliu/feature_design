@@ -100,16 +100,6 @@ interface TraceDetail extends TraceEntry {
   nodes?: TraceNode[]
 }
 
-interface RunProgress {
-  runId: string
-  traceId: string
-  index: number
-  total: number
-  status: "pending" | "running" | "completed" | "failed"
-  message?: string
-  candidateCount?: number
-}
-
 type Tab = "candidates" | "traces"
 
 function buildFallbackNodes(detail: TraceDetail): TraceNode[] {
@@ -200,6 +190,14 @@ function buildFallbackNodes(detail: TraceDetail): TraceNode[] {
 function fmt(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(2)}s`
+}
+
+function isSameIdSet(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const item of a) {
+    if (!b.has(item)) return false
+  }
+  return true
 }
 
 function outcomeColor(outcome: string): string {
@@ -637,10 +635,6 @@ function EmptyState({ icon, title, desc }: { icon: React.ReactNode; title: strin
 }
 
 export function EvolutionPanel(): React.JSX.Element {
-  const [tab, setTab] = useState<Tab>("candidates")
-  const [running, setRunning] = useState(false)
-  const [runningSummary, setRunningSummary] = useState<string | null>(null)
-  const [summary, setSummary] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<SkillCandidate[]>([])
   const [traces, setTraces] = useState<TraceEntry[]>([])
   const [tracesLoading, setTracesLoading] = useState(false)
@@ -651,10 +645,23 @@ export function EvolutionPanel(): React.JSX.Element {
   const [threshold, setThreshold] = useState(10)
   const [thresholdInput, setThresholdInput] = useState("10")
   const [thresholdSaved, setThresholdSaved] = useState(false)
-  const [selectedTraceIds, setSelectedTraceIds] = useState<Set<string>>(new Set())
-  const [runProgress, setRunProgress] = useState<Record<string, RunProgress>>({})
-
-  const { threads, loadThreads } = useAppStore()
+  const {
+    threads,
+    loadThreads,
+    evolutionTab: tab,
+    setEvolutionTab: setTab,
+    evolutionRunning: running,
+    setEvolutionRunning: setRunning,
+    evolutionRunningSummary: runningSummary,
+    setEvolutionRunningSummary: setRunningSummary,
+    evolutionSummary: summary,
+    setEvolutionSummary: setSummary,
+    evolutionSelectedTraceIds: selectedTraceIds,
+    setEvolutionSelectedTraceIds,
+    evolutionRunProgress: runProgress,
+    setEvolutionRunProgress,
+    mergeEvolutionRunProgress
+  } = useAppStore()
 
   const pendingCount = candidates.filter((c) => c.status === "pending").length
 
@@ -663,16 +670,18 @@ export function EvolutionPanel(): React.JSX.Element {
     try {
       const list = await window.api.optimizer.getTraces({ limit: 80 })
       setTraces(list)
-      setSelectedTraceIds((prev) => {
-        const keep = new Set<string>()
-        const valid = new Set(list.map((t) => t.traceId))
-        for (const id of prev) if (valid.has(id)) keep.add(id)
-        return keep
-      })
+      const keep = new Set<string>()
+      const valid = new Set(list.map((t) => t.traceId))
+      for (const id of selectedTraceIds) {
+        if (valid.has(id)) keep.add(id)
+      }
+      if (!isSameIdSet(keep, selectedTraceIds)) {
+        setEvolutionSelectedTraceIds(keep)
+      }
     } finally {
       setTracesLoading(false)
     }
-  }, [])
+  }, [selectedTraceIds, setEvolutionSelectedTraceIds])
 
   const runOptimizer = useCallback(async (
     opts?: {
@@ -685,7 +694,7 @@ export function EvolutionPanel(): React.JSX.Element {
     setRunning(true)
     setRunningSummary(pendingMessage)
     setSummary(null)
-    setRunProgress({})
+    setEvolutionRunProgress({})
     try {
       const result = await window.api.optimizer.run(opts)
       setSummary(result.summary)
@@ -696,7 +705,7 @@ export function EvolutionPanel(): React.JSX.Element {
       setRunning(false)
       setRunningSummary(null)
     }
-  }, [])
+  }, [setEvolutionRunProgress, setRunning, setRunningSummary, setSummary])
 
   useEffect(() => {
     if (threads.length === 0) {
@@ -725,9 +734,9 @@ export function EvolutionPanel(): React.JSX.Element {
     if (typeof onRunProgress !== "function") return
 
     return onRunProgress((payload) => {
-      setRunProgress((prev) => ({ ...prev, [payload.traceId]: payload }))
+      mergeEvolutionRunProgress(payload)
     })
-  }, [])
+  }, [mergeEvolutionRunProgress])
 
   const toggleOnlineSkillEvolution = useCallback(async () => {
     const next = !onlineSkillEvolutionEnabled
@@ -786,13 +795,11 @@ export function EvolutionPanel(): React.JSX.Element {
   }, [])
 
   const toggleTraceChecked = useCallback((traceId: string, checked: boolean) => {
-    setSelectedTraceIds((prev) => {
-      const next = new Set(prev)
-      if (checked) next.add(traceId)
-      else next.delete(traceId)
-      return next
-    })
-  }, [])
+    const next = new Set(selectedTraceIds)
+    if (checked) next.add(traceId)
+    else next.delete(traceId)
+    setEvolutionSelectedTraceIds(next)
+  }, [selectedTraceIds, setEvolutionSelectedTraceIds])
 
   const handleDeleteTraces = useCallback(async (traceIds: string[]) => {
     if (traceIds.length === 0) return
@@ -811,19 +818,17 @@ export function EvolutionPanel(): React.JSX.Element {
     if (!confirmed) return
 
     const result = await window.api.optimizer.deleteTraces(traceIds)
-    if (result.deletedIds.length > 0) {
-      const deleted = new Set(result.deletedIds)
-      setTraces((prev) => prev.filter((trace) => !deleted.has(trace.traceId)))
-      setSelectedTraceIds((prev) => {
-        const next = new Set(prev)
-        for (const id of deleted) next.delete(id)
-        return next
-      })
-      if (selectedTrace && deleted.has(selectedTrace.traceId)) {
-        setSelectedTrace(null)
-        setSummary("当前打开的 trace 已删除")
+      if (result.deletedIds.length > 0) {
+        const deleted = new Set(result.deletedIds)
+        setTraces((prev) => prev.filter((trace) => !deleted.has(trace.traceId)))
+        const nextSelected = new Set(selectedTraceIds)
+        for (const id of deleted) nextSelected.delete(id)
+        setEvolutionSelectedTraceIds(nextSelected)
+        if (selectedTrace && deleted.has(selectedTrace.traceId)) {
+          setSelectedTrace(null)
+          setSummary("当前打开的 trace 已删除")
+        }
       }
-    }
 
     await loadTraces()
 
@@ -832,7 +837,7 @@ export function EvolutionPanel(): React.JSX.Element {
     } else {
       setSummary(`已删除 ${result.deletedIds.length} 条 trace`)
     }
-  }, [selectedTrace, loadTraces])
+  }, [loadTraces, selectedTrace, selectedTraceIds, setEvolutionSelectedTraceIds, setSummary])
 
   const progressItems = Object.values(runProgress).sort((a, b) => a.index - b.index)
   const allTraceIds = useMemo(() => traces.map((trace) => trace.traceId), [traces])
@@ -886,24 +891,23 @@ export function EvolutionPanel(): React.JSX.Element {
   }, [runOptimizer, selectedTraceIds, selectedThreadCount])
 
   const toggleSelectAll = useCallback(() => {
-    setSelectedTraceIds((prev) => {
-      if (allTraceIds.length === 0) return prev
-      if (allTraceIds.every((id) => prev.has(id))) return new Set<string>()
-      return new Set(allTraceIds)
-    })
-  }, [allTraceIds])
+    if (allTraceIds.length === 0) return
+    if (allTraceIds.every((id) => selectedTraceIds.has(id))) {
+      setEvolutionSelectedTraceIds(new Set<string>())
+      return
+    }
+    setEvolutionSelectedTraceIds(new Set(allTraceIds))
+  }, [allTraceIds, selectedTraceIds, setEvolutionSelectedTraceIds])
 
   const toggleThreadChecked = useCallback((threadId: string, checked: boolean) => {
-    setSelectedTraceIds((prev) => {
-      const next = new Set(prev)
-      const traceIds = traces.filter((trace) => trace.threadId === threadId).map((trace) => trace.traceId)
-      for (const traceId of traceIds) {
-        if (checked) next.add(traceId)
-        else next.delete(traceId)
-      }
-      return next
-    })
-  }, [traces])
+    const next = new Set(selectedTraceIds)
+    const traceIds = traces.filter((trace) => trace.threadId === threadId).map((trace) => trace.traceId)
+    for (const traceId of traceIds) {
+      if (checked) next.add(traceId)
+      else next.delete(traceId)
+    }
+    setEvolutionSelectedTraceIds(next)
+  }, [selectedTraceIds, setEvolutionSelectedTraceIds, traces])
 
   const handleDeleteThread = useCallback(async (threadId: string) => {
     const traceIds = traces.filter((trace) => trace.threadId === threadId).map((trace) => trace.traceId)
@@ -924,7 +928,7 @@ export function EvolutionPanel(): React.JSX.Element {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-1 min-w-0 flex-col h-full overflow-hidden">
       <div className="shrink-0 border-b border-border px-4 py-3 flex items-center gap-2">
         <Sparkles className="size-4 text-muted-foreground" />
         <span className="text-sm font-semibold flex-1">自优化</span>

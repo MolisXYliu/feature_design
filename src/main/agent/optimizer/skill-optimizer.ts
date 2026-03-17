@@ -227,6 +227,26 @@ function getUniqueActiveSkillIds(traces: AgentTrace[]): string[] {
   )
 }
 
+function buildNoCandidateSummary(
+  scopeLabel: string,
+  rawTraceCount: number,
+  interestingTraceCount: number,
+  usedSkillIds: string[]
+): string {
+  if (usedSkillIds.length > 0) {
+    const analyzedSuffix = interestingTraceCount > 0 && interestingTraceCount !== rawTraceCount
+      ? `（选取 ${interestingTraceCount} 条高价值）`
+      : ""
+    return `分析了${scopeLabel}中的 ${rawTraceCount} 条 trace${analyzedSuffix}，LLM 判断当前已使用的技能暂无更新必要。`
+  }
+
+  if (interestingTraceCount > 0 && interestingTraceCount !== rawTraceCount) {
+    return `分析了${scopeLabel}中的 ${rawTraceCount} 条 trace（选取 ${interestingTraceCount} 条高价值），LLM 判断暂无值得创建的新技能。`
+  }
+
+  return `分析了${scopeLabel}中的 ${rawTraceCount} 条 trace，LLM 判断暂无值得创建的新技能。`
+}
+
 function extractJsonArrayCandidates(text: string): string[] {
   const candidates: string[] = []
 
@@ -335,6 +355,7 @@ export class SkillOptimizer {
         .sort((a, b) => b.score - a.score)
         .slice(0, 10) // cap at 10 traces to avoid huge prompts
         .map(({ trace }) => trace)
+    const usedSkillIds = getUniqueActiveSkillIds(interesting.length > 0 ? interesting : rawTraces)
 
     if (interesting.length === 0) {
       return {
@@ -342,13 +363,14 @@ export class SkillOptimizer {
         endedAt: new Date().toISOString(),
         tracesAnalyzed: rawTraces.length,
         candidates: [],
-        summary: `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，未发现值得优化的模式（所有任务复杂度较低或无重复规律）。`
+        summary: usedSkillIds.length > 0
+          ? `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，当前已使用的技能暂无更新必要。`
+          : `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，未发现值得优化的模式（所有任务复杂度较低或无重复规律）。`
       }
     }
 
     // Build the prompt
     const existingSkills = formatSkillRecords(readCustomSkillRecords(), 400)
-    const usedSkillIds = getUniqueActiveSkillIds(interesting)
     const usedSkillDetails = formatSkillRecords(readCustomSkillRecords(usedSkillIds), 2000)
     const traceSummaries = interesting.map(summarizeTrace).join("\n\n")
 
@@ -401,7 +423,7 @@ Output JSON array only.`
       candidates,
       summary: candidates.length > 0
         ? `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace（选取 ${interesting.length} 条高价值），生成了 ${candidates.length} 个技能优化候选。`
-        : `分析了${scopeLabel}中的 ${rawTraces.length} 条 trace，LLM 判断暂无值得创建的新技能。`
+        : buildNoCandidateSummary(scopeLabel, rawTraces.length, interesting.length, usedSkillIds)
     }
   }
 
