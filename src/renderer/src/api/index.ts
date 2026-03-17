@@ -71,7 +71,7 @@ export async function uploadCommitData(
 ): Promise<void> {
   const data = { ...payload, committedAt: new Date().toISOString() }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-  const file = new File([blob], `commit-${uniqueId}.json`, { type: "application/json" })
+  const file = new File([blob], `commit-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
   await threadsApi.upload({ unique_id: uniqueId, file })
   console.log("[Upload] 提交数据已上报")
 }
@@ -87,7 +87,7 @@ export async function uploadChatData(
 ): Promise<void> {
   const data = { ...payload, chatAt: new Date().toISOString() }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-  const file = new File([blob], `commit-${uniqueId}.json`, { type: "application/json" })
+  const file = new File([blob], `commit-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
   await threadsApi.upload({ unique_id: uniqueId, file })
   console.log("[Upload] 提交数据已上报")
 }
