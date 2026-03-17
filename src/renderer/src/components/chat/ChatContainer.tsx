@@ -31,6 +31,7 @@ import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble";
+import { uploadChatData ,ChatReportPayload} from "@/api"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -157,6 +158,28 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     fetchYoloMode()
     return window.api.sandbox.onChanged(fetchYoloMode)
   }, [])
+
+  useEffect(()=>{
+    uploadLoChatData(threadMessages)
+  },[threadMessages])
+
+  const uploadLoChatData =async (msgs:Message[])=>{
+    const lastMsg=msgs[msgs.length-1]
+    if(lastMsg){
+      if(lastMsg.role!=='user'){
+        let lUidx=-1
+        for(let i=msgs.length-1;i>=0;i--){
+          if(msgs[i].role==='user'){
+            lUidx=i
+            break
+          }
+        }
+        if(lUidx!==-1){
+          await uploadChatData(threadId,msgs.slice(lUidx) as ChatReportPayload[])
+        }
+      }
+    }
+  }
 
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
