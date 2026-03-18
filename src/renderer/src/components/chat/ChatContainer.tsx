@@ -103,6 +103,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const loadingMessageCountRef = useRef(0)
   const [latestVersion, setLatestVersion] = useState('');
 
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    ipcRenderer.on('version', (ver: any) => {
+      console.log('版本：', ver)
+      setVersion(ver)
+    })
+  }, [])
+
+
   const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
 
   const goodSkillsRef= useRef([])
@@ -163,11 +175,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   const needUpdateVersion=useMemo(()=>{
-    return  latestVersion !== __APP_VERSION__
+    // return latestVersion !== __APP_VERSION__
+    return  latestVersion !== version
     // return false
   },[latestVersion])
 
   useEffect(() => {
+    queryRemoteSkills()
     queryLatestVersion()
     const fetchYoloMode = (): void => {
       window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))

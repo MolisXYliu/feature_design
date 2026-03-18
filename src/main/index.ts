@@ -50,6 +50,18 @@ function createWindow(): void {
     return { action: "deny" }
   })
 
+    mainWindow.webContents.on('did-finish-load', () => {
+
+      const version = app.getVersion()
+       console.log('version---------------', version)
+
+      // 增加容错：确保窗口存在且页面已加载完成
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        // 使用invoke确认发送成功（可选）
+        mainWindow.webContents.send('version', version);
+      }
+    })
+
   // HMR for renderer based on electron-vite cli
   if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
     console.log('local render')
