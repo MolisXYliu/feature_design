@@ -47,6 +47,7 @@ export interface MarketItem {
   // Add field to track if user can delete this item
   canDelete?: boolean
   ip?:string
+  installed?: boolean  // 新增已安装状态字段
 }
 
 export interface MarketUpdateResponse {
@@ -316,8 +317,8 @@ export const marketApi = {
     if (userId) {
       formData.append("user_id", userId)
     }
-    const ip = localStorage.getItem('localIp')
-    formData.append('ip',ip )
+    const ip = localStorage.getItem("localIp")
+    formData.append("ip", ip || "")
 
     const response = await fetch(ENDPOINTS.upload, {
       method: "POST",
@@ -371,8 +372,8 @@ export const marketApi = {
     if (userId) {
       formData.append("user_id", userId)
     }
-    const ip = localStorage.getItem('localIp')
-    formData.append('ip', ip)
+    const ip = localStorage.getItem("localIp")
+    formData.append("ip", ip || "")
 
     console.log(`Auto-incrementing version to: ${currentVersion}`)
 

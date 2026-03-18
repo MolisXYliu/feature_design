@@ -93,10 +93,13 @@ interface MarketItemCardProps {
   onDelete: (item: MarketItem) => void
   onUpdate: (item: MarketItem) => void
   onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
+  onUpdateInstall: (item: MarketItem) => void  // 新增更新安装回调
   isDownloading?: boolean
+  isInstalled?: boolean  // 新增已安装状态
+  isUpdating?: boolean   // 新增更新中状态
 }
 
-function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = false }: MarketItemCardProps) {
+function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall, isDownloading = false, isInstalled = false, isUpdating = false }: MarketItemCardProps) {
   const handleInstallDownload = () => {
     onDownload(item, false) // Install to application
   }
@@ -104,6 +107,11 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = 
   const handleLocalDownload = () => {
     onDownload(item, true) // Download to local file system
   }
+
+  const handleUpdateInstall = () => {
+    onUpdateInstall(item)  // 更新安装
+  }
+
   const ip = localStorage.getItem('localIp')
 
 
@@ -111,7 +119,15 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = 
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1">
-          <h3 className="font-medium text-sm line-clamp-1 mb-1">{item.name}</h3>
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-medium text-sm line-clamp-1">{item.name}</h3>
+            {isInstalled && (
+              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                <CheckCircle className="size-3" />
+                已安装
+              </span>
+            )}
+          </div>
           {item.category && (
             <div className="flex items-center gap-1 mb-1">
               <Tag className="size-3 text-muted-foreground" />
@@ -122,19 +138,31 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = 
           )}
         </div>
         <div className="flex items-center gap-1 ml-2">
-          {isDownloading ? (
+          {isDownloading || isUpdating ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
           ) : (
             <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-3 gap-1"
-                onClick={handleInstallDownload}
-              >
-                <Zap className="size-3" />
-                安装
-              </Button>
+              {isInstalled ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                  onClick={handleUpdateInstall}
+                >
+                  <Zap className="size-3" />
+                  更新安装
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-3 gap-1"
+                  onClick={handleInstallDownload}
+                >
+                  <Zap className="size-3" />
+                  安装
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -218,6 +246,8 @@ export function MarketPanel(): React.JSX.Element {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [downloadingItems, setDownloadingItems] = useState<Set<string>>(new Set())
+  const [updatingItems, setUpdatingItems] = useState<Set<string>>(new Set())  // 新增更新中状态
+  const [installedSkills, setInstalledSkills] = useState<string[]>([])  // 新增已安装skills列表
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; item: MarketItem | null }>({
     open: false,
     item: null
@@ -236,6 +266,83 @@ export function MarketPanel(): React.JSX.Element {
     type: "skill"
   })
 
+  // 新增：加载已安装的skills列表
+  const loadInstalledSkills = async () => {
+    try {
+      if (window.api?.skills?.list) {
+        const skillsMetadata = await window.api.skills.list()
+        const skillNames = skillsMetadata.map(skill => skill.name)
+        setInstalledSkills(skillNames)
+      }
+    } catch (error) {
+      console.error("Failed to load installed skills:", error)
+    }
+  }
+
+  // 在组件加载时获取已安装的skills列表
+  useEffect(() => {
+    loadInstalledSkills()
+  }, [])
+
+  // 新增：更新安装功能
+  const handleUpdateInstall = async (item: MarketItem) => {
+    const itemKey = item.id || item.name
+
+    // 添加到更新中集合
+    setUpdatingItems(prev => new Set(prev).add(itemKey))
+
+    try {
+      const itemName = item.name || item.id || ''
+
+      if (!itemName) {
+        console.error("Item name is required for update install")
+        return
+      }
+
+      // 如果是skill类型，先删除已有的skill
+      if (activeTab === "skill" && window.api?.skills?.delete) {
+        try {
+          // 查找已安装的skill路径
+          const skillsMetadata = await window.api.skills.list()
+          const existingSkill = skillsMetadata.find(skill => skill.name === itemName)
+
+          if (existingSkill) {
+            console.log(`Deleting existing skill: ${existingSkill.path}`)
+            await window.api.skills.delete(existingSkill.path)
+          }
+        } catch (deleteError) {
+          console.warn("Failed to delete existing skill, continuing with install:", deleteError)
+        }
+      }
+
+      // 下载并安装最新版本
+      const response = await marketApi.downloadItem(itemName, activeTab, false)
+
+      if (response.success) {
+        console.log(`Successfully updated and installed ${item.name}`)
+        setDownloadSuccess({ open: true, itemName: `${item.name} (已更新安装)` })
+
+        // 重新加载已安装的skills列表
+        if (activeTab === "skill") {
+          await loadInstalledSkills()
+        }
+      } else {
+        console.error("Update install failed:", response.error)
+        setError(response.error || "更新安装失败")
+      }
+    } catch (error) {
+      console.error("Failed to update install item:", error)
+      setError(error instanceof Error ? error.message : "更新安装失败")
+    } finally {
+      // 从更新中集合移除
+      setUpdatingItems(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(itemKey)
+        return newSet
+      })
+    }
+  }
+
   // Load data for current tab
   useEffect(() => {
     const loadData = async () => {
@@ -248,12 +355,13 @@ export function MarketPanel(): React.JSX.Element {
             if (skillsData.length === 0) {
               response = await marketApi.getSkills()
               if (response.success && response.data) {
-                // Add canDelete flag to each item
-                const dataWithDeleteFlag = response.data.map(item => ({
+                // Add canDelete flag and installed status to each item
+                const dataWithFlags = response.data.map(item => ({
                   ...item,
-                  canDelete: localStorageHelper.canDeleteItem(item.name, "skill")
+                  canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
+                  installed: installedSkills.includes(item.name)  // ���加已安装状态
                 }))
-                setSkillsData(dataWithDeleteFlag)
+                setSkillsData(dataWithFlags)
               }
             }
             break
@@ -293,7 +401,7 @@ export function MarketPanel(): React.JSX.Element {
     }
 
     loadData()
-  }, [activeTab, skillsData.length, mcpsData.length, pluginsData.length])
+  }, [activeTab, skillsData.length, mcpsData.length, pluginsData.length, installedSkills])
 
   const getCurrentData = () => {
     switch (activeTab) {
@@ -433,9 +541,33 @@ export function MarketPanel(): React.JSX.Element {
     setUpdateDialog({ open: true, item })
   }
 
-  const handleUniversalUpload = async (file: File, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string) => {
+  const handleUniversalUpload = async (
+    file: File | null,
+    name: string,
+    description: string,
+    category: string,
+    guidance?: string,
+    chineseName?: string,
+    userId?: string
+  ) => {
     try {
-      const result = await marketApi.uploadFile(file, activeTab, name, description, category, guidance, chineseName, userId)
+      if (!file) {
+        return {
+          success: false,
+          error: "文件不能为空"
+        }
+      }
+
+      const result = await marketApi.uploadFile(
+        file,
+        activeTab,
+        name,
+        description,
+        category,
+        guidance,
+        chineseName,
+        userId
+      )
 
       // If upload is successful, record it in localStorage
       if (result.success) {
@@ -453,9 +585,33 @@ export function MarketPanel(): React.JSX.Element {
     }
   }
 
-  const handleUniversalUpdate = async (file: File, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string) => {
+  const handleUniversalUpdate = async (
+    file: File | null,
+    name: string,
+    description: string,
+    category: string,
+    guidance?: string,
+    chineseName?: string,
+    userId?: string
+  ) => {
     try {
-      const result = await marketApi.updateItem(file, activeTab, name, description, category, guidance, chineseName, userId)
+      if (!file) {
+        return {
+          success: false,
+          error: "文件不能为空"
+        }
+      }
+
+      const result = await marketApi.updateItem(
+        file,
+        activeTab,
+        name,
+        description,
+        category,
+        guidance,
+        chineseName,
+        userId
+      )
 
       // Update is successful, no need to update localStorage since item already exists
       return result
@@ -579,7 +735,10 @@ export function MarketPanel(): React.JSX.Element {
                       onDelete={handleDelete}
                       onUpdate={handleUpdate}
                       onDownload={handleDownload}
+                      onUpdateInstall={handleUpdateInstall}  // 修正：使用正确的handleUpdateInstall函数
                       isDownloading={downloadingItems.has(item.id || item.name)}
+                      isInstalled={item.installed}  // 传递已安装状态
+                      isUpdating={updatingItems.has(item.id || item.name)}  // 修正：使用updatingItems而不是downloadingItems
                     />
                   ))
                 )}
