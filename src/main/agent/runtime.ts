@@ -46,13 +46,16 @@ import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
 import { createReadStream } from "fs"
 import { createGunzip } from "zlib"
 import { pipeline } from "stream/promises"
-import { app } from "electron"
+import { app, BrowserWindow } from "electron"
 import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { getWindowsSandboxMode, getYoloMode } from "../storage"
+import { ApprovalStore } from "./approval-store"
+import { ToolOrchestrator } from "./tool-orchestrator"
+import type { ApprovalRequest, ApprovalDecision } from "../types"
 
 /** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
 async function ensureCodexExe(exePath: string): Promise<void> {
@@ -70,6 +73,28 @@ async function ensureCodexExe(exePath: string): Promise<void> {
   } catch (e) {
     console.error("[Runtime] Failed to extract codex.exe:", e)
   }
+}
+
+// ── Pending Approvals (shared between orchestrator and IPC) ──
+
+/** Map of pending approval promises keyed by request ID. */
+export const pendingApprovals = new Map<string, {
+  resolve: (decision: ApprovalDecision) => void
+  request: ApprovalRequest
+  targetWebContentsIds: number[]
+}>()
+
+/** Per-thread approval store cache. */
+const approvalStores = new Map<string, ApprovalStore>()
+
+export function getOrCreateApprovalStore(threadId: string): ApprovalStore {
+  let store = approvalStores.get(threadId)
+  if (!store) {
+    store = new ApprovalStore()
+    store.loadPermanentRules()
+    approvalStores.set(threadId, store)
+  }
+  return store
 }
 
 const BASE_PROMPT =
@@ -513,6 +538,50 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     codexExePath: codexExists ? codexExePath : undefined
   })
 
+  // ── Wire up the approval orchestrator ──
+  const yoloMode = getYoloMode()
+  if (!yoloMode) {
+    const approvalStore = getOrCreateApprovalStore(threadId)
+
+    // The approval requester sends requests to the renderer via BrowserWindow IPC.
+    // It returns a Promise that is resolved when the renderer sends back a decision.
+    // P3 fix: auto-reject after 5 minutes to prevent indefinite hangs.
+    const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
+
+    const requestApproval = (req: ApprovalRequest): Promise<ApprovalDecision> => {
+      return new Promise<ApprovalDecision>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          if (pendingApprovals.has(req.id)) {
+            pendingApprovals.delete(req.id)
+            console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
+            resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
+          }
+        }, APPROVAL_TIMEOUT_MS)
+
+        pendingApprovals.set(req.id, {
+          resolve: (decision: ApprovalDecision) => {
+            clearTimeout(timeoutId)
+            resolve(decision)
+          },
+          request: req,
+          targetWebContentsIds: BrowserWindow.getAllWindows().map(w => w.webContents.id)
+        })
+        console.log(`[Orchestrator] sending approval request on channel: approval:request:${threadId}, reqId=${req.id}, command=${req.command}`)
+        // Broadcast to all windows — the active one will display the approval UI
+        for (const win of BrowserWindow.getAllWindows()) {
+          win.webContents.send(`approval:request:${threadId}`, req)
+        }
+      })
+    }
+
+    const rawExecute = (command: string, sandboxMode?: string): Promise<import("deepagents").ExecuteResponse> => {
+      return backend.executeRaw(command, sandboxMode)
+    }
+
+    const orchestrator = new ToolOrchestrator(approvalStore, rawExecute, requestApproval, false)
+    backend.setOrchestrator(orchestrator)
+  }
+
   let systemPrompt = getSystemPrompt(workspacePath, windowsSandbox)
   if (extraSystemPrompt) {
     systemPrompt += "\n\n" + extraSystemPrompt
@@ -691,7 +760,10 @@ The workspace root is: ${workspacePath}`
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    interruptOn: getYoloMode() ? undefined : { execute: true },
+    // When the orchestrator is active (non-YOLO), it handles execute approval
+    // internally via IPC — no need for the HITL middleware to intercept execute.
+    // HITL middleware is still used in YOLO=false mode for non-execute tools if needed.
+    interruptOn: undefined,
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,

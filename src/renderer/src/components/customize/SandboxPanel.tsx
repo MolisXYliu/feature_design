@@ -51,6 +51,10 @@ export function SandboxPanel(): React.JSX.Element {
   const [elevatedSetupStatus, setElevatedSetupStatus] = useState<ElevatedSetupStatus>("idle")
   const [elevatedSetupError, setElevatedSetupError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  // Developer backdoor
+  const [devMode, setDevMode] = useState(false)
+  const [devPassword, setDevPassword] = useState("")
+  const [unlocked, setUnlocked] = useState(false)
 
   useEffect(() => {
     mountedRef.current = true
@@ -259,40 +263,93 @@ export function SandboxPanel(): React.JSX.Element {
           )}
 
           <div className={cn("flex flex-col gap-3 max-w-lg", !isWindows && "opacity-40")}>
-            {MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() => handleSelectMode(opt.value)}
-                disabled={!isWindows || modePending}
-                className={cn(
-                  "flex items-start gap-3 rounded-lg border-2 p-4 text-left transition-colors",
-                  modePending && "opacity-60 cursor-not-allowed",
-                  mode === opt.value
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40 hover:bg-muted/40"
-                )}
-              >
-                <div className={cn(
-                  "mt-0.5 shrink-0",
-                  mode === opt.value ? "text-primary" : "text-muted-foreground"
-                )}>
-                  {opt.icon}
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{opt.label}</span>
-                    {mode === opt.value && (
-                      <span className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5">
-                        当前
-                      </span>
+            {MODE_OPTIONS.map((opt) => {
+              const isRestricted = opt.value !== "elevated" && !unlocked
+              const isDisabled = !isWindows || modePending || isRestricted
+              return (
+                <div key={opt.value} className="relative">
+                  <button
+                    onClick={() => handleSelectMode(opt.value)}
+                    disabled={isDisabled}
+                    className={cn(
+                      "flex items-start gap-3 rounded-lg border-2 p-4 text-left transition-colors w-full",
+                      isDisabled && "opacity-50 cursor-not-allowed",
+                      !isDisabled && modePending && "opacity-60 cursor-not-allowed",
+                      mode === opt.value
+                        ? "border-primary bg-primary/5"
+                        : isDisabled
+                          ? "border-border"
+                          : "border-border hover:border-primary/40 hover:bg-muted/40"
                     )}
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    {opt.description}
-                  </p>
+                  >
+                    <div className={cn(
+                      "mt-0.5 shrink-0",
+                      mode === opt.value ? "text-primary" : "text-muted-foreground"
+                    )}>
+                      {opt.icon}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{opt.label}</span>
+                        {mode === opt.value && (
+                          <span className="text-xs rounded-full bg-primary/10 text-primary px-2 py-0.5">
+                            当前
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        {opt.description}
+                      </p>
+                      {isRestricted && (
+                        <p className="text-xs text-amber-500 mt-0.5">如需选择请联系开发人员</p>
+                      )}
+                    </div>
+                  </button>
                 </div>
-              </button>
-            ))}
+              )
+            })}
+
+            {/* Developer backdoor */}
+            {!unlocked && isWindows && (
+              <div className="pt-1 text-center">
+                {!devMode ? (
+                  <button
+                    className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                    onClick={() => setDevMode(true)}
+                  >
+                    开发人员通道
+                  </button>
+                ) : (
+                  <div className="flex items-center justify-center gap-2">
+                    <input
+                      type="password"
+                      className="w-36 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+                      placeholder="请输入开发密码"
+                      value={devPassword}
+                      onChange={(e) => setDevPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && devPassword === "admin123456") {
+                          setUnlocked(true)
+                          setDevMode(false)
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      className="px-2 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                      onClick={() => {
+                        if (devPassword === "admin123456") {
+                          setUnlocked(true)
+                          setDevMode(false)
+                        }
+                      }}
+                    >
+                      确认
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Elevated setup status */}
@@ -325,19 +382,19 @@ export function SandboxPanel(): React.JSX.Element {
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={() => handleSelectMode("elevated")}
-                  disabled={modePending}
-                  className="rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
+                  onClick={() => { setElevatedSetupStatus("idle"); setElevatedSetupError(null) }}
+                  className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
                 >
                   重试
                 </button>
-                <button
-                  onClick={handleFallbackToUnelevated}
-                  disabled={modePending}
-                  className="rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
-                >
-                  回退到 Unelevated 沙箱
-                </button>
+                {unlocked && (
+                  <button
+                    onClick={handleFallbackToUnelevated}
+                    className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
+                  >
+                    回退到 Unelevated 沙箱
+                  </button>
+                )}
               </div>
             </div>
           )}

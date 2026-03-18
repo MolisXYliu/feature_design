@@ -242,9 +242,15 @@ interface CustomAPI {
     getMode: () => Promise<"none" | "unelevated" | "readonly" | "elevated">
     setMode: (mode: "none" | "unelevated" | "readonly" | "elevated") => Promise<void>
     checkElevatedSetup: () => Promise<{ setupComplete: boolean }>
-    runElevatedSetup: () => Promise<{ success: boolean; error?: string }>
+    runElevatedSetup: (workspacePaths?: string[]) => Promise<{ success: boolean; error?: string }>
     getYoloMode: () => Promise<boolean>
     setYoloMode: (yolo: boolean) => Promise<void>
+    isNuxNeeded: () => Promise<boolean>
+    completeNux: (mode: "elevated" | "unelevated" | "none") => Promise<void>
+    getApprovalRules: () => Promise<Array<{ pattern: string; decision: string }>>
+    deleteApprovalRule: (pattern: string) => Promise<void>
+    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
+    onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
 }

@@ -15,7 +15,8 @@ import {
   File,
   Folder,
   Maximize2,
-  X
+  X,
+  AlertCircle
 } from "lucide-react"
 import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge"
@@ -32,7 +33,11 @@ interface ToolCallRendererProps {
   isError?: boolean
   needsApproval?: boolean
   showApprovalButtons?: boolean
-  onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
+  onApprovalDecision?: (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit") => void
+  /** Sandbox retry context — shown when sandbox blocked the command */
+  retryReason?: string
+  /** Which approval button types to show */
+  approvalTypes?: ("approve" | "approve_session" | "approve_permanent" | "reject")[]
 }
 
 const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -496,7 +501,9 @@ export function ToolCallRenderer({
   isError,
   needsApproval,
   showApprovalButtons = true,
-  onApprovalDecision
+  onApprovalDecision,
+  retryReason,
+  approvalTypes = ["approve", "approve_session", "approve_permanent", "reject"]
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
@@ -978,19 +985,49 @@ export function ToolCallRenderer({
 
           {/* Action buttons - hidden when batch approval bar is used */}
           {showApprovalButtons && (
-            <div className="flex items-center justify-end gap-2">
-              <button
-                className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
-                onClick={handleReject}
-              >
-                拒绝
-              </button>
-              <button
-                className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-                onClick={handleApprove}
-              >
-                批准并执行
-              </button>
+            <div className="space-y-2">
+              {/* Sandbox retry info */}
+              {retryReason && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 p-2 text-xs text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="size-3 mt-0.5 shrink-0" />
+                  <span>{retryReason}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 flex-wrap">
+                {approvalTypes.includes("reject") && (
+                  <button
+                    className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                    onClick={handleReject}
+                  >
+                    拒绝
+                  </button>
+                )}
+                {approvalTypes.includes("approve") && (
+                  <button
+                    className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
+                  >
+                    {retryReason ? "无沙箱重试" : "运行"}
+                  </button>
+                )}
+                {!retryReason && approvalTypes.includes("approve_session") && (
+                  <button
+                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-sm hover:bg-blue-700 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_session") }}
+                  >
+                    本会话允许
+                  </button>
+                )}
+                {!retryReason && approvalTypes.includes("approve_permanent") && (
+                  <button
+                    className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-sm hover:bg-purple-700 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_permanent") }}
+                  >
+                    始终允许
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -302,6 +302,37 @@ export interface PluginMcpServerConfig {
   headers?: Record<string, string>
 }
 
+// ── Approval / Sandbox Policy Types ──
+
+/** Review decision for command approval */
+export type ReviewDecision =
+  | "approved"            // approve this invocation only
+  | "approved_session"    // approve for the remainder of this session (cached)
+  | "approved_permanent"  // always allow this command pattern (persisted)
+  | "denied"              // reject
+  | "abort"               // abort the entire run
+
+/** Command safety classification */
+export type ExecSafetyLevel = "safe" | "needs_approval" | "forbidden"
+
+/** Fine-grained approval request sent to the renderer */
+export interface ApprovalRequest extends HITLRequest {
+  safety_level: ExecSafetyLevel
+  command: string
+  cwd: string
+  reason?: string           // why approval is needed
+  retry_reason?: string     // sandbox-failure retry context
+  allowed_approval_types: ApprovalDecisionType[]
+}
+
+export type ApprovalDecisionType = "approve" | "approve_session" | "approve_permanent" | "reject"
+
+/** Fine-grained approval decision from the renderer */
+export interface ApprovalDecision {
+  type: ApprovalDecisionType
+  tool_call_id: string
+}
+
 // Skills types
 export interface SkillMetadata {
   name: string
