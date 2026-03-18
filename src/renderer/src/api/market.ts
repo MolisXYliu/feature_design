@@ -1,4 +1,3 @@
-
 export type MarketItemType = "skill" | "mcp" | "plugin"
 
 
@@ -38,13 +37,24 @@ export interface MarketItem {
   created_at: string
   category?: string // Add category field
   featured?: string // eg:官方推荐；精品；热门；个人；
-  version?:string // eg:1.0.1
+  version?: string // eg:1.0.1
   user_id?: string // 110
+  guidance?: string // Usage guidance for the skill/item
+  chinese_name?: string // Chinese name for the skill/item
   // Only keep essential UI fields for compatibility
   id?: string
   type?: MarketItemType
   // Add field to track if user can delete this item
   canDelete?: boolean
+  ip?:string
+  installed?: boolean  // 新增已安装状态字段
+}
+
+export interface MarketUpdateResponse {
+  type: string
+  name: string
+  message: string
+  s3_path: string
 }
 
 // Updated API endpoints to match exact specification
@@ -52,6 +62,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/mark
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
+  update: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`,
   download: (resourceType: string, name: string) => `${API_BASE_URL}/download/${resourceType}/${name}`,
   delete: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`
 }
@@ -69,98 +80,193 @@ const downloadBlobAsFile = (blob: Blob, filename: string) => {
 }
 
 
-// Updated API functions with the new endpoints
+// Cache for API responses to prevent duplicate calls
+interface CacheEntry {
+  data: MarketApiResponse
+  timestamp: number
+}
+
+const API_CACHE = new Map<string, CacheEntry>()
+const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes in milliseconds
+
+// Helper function to check if cache is valid
+const isCacheValid = (timestamp: number): boolean => {
+  return Date.now() - timestamp < CACHE_DURATION
+}
+
+// Helper function to get cached data
+const getCachedData = (key: string): MarketApiResponse | null => {
+  const cached = API_CACHE.get(key)
+  if (cached && isCacheValid(cached.timestamp)) {
+    console.log(`Using cached data for ${key}`)
+    return cached.data
+  }
+  return null
+}
+
+// Helper function to set cached data
+const setCachedData = (key: string, data: MarketApiResponse): void => {
+  API_CACHE.set(key, {
+    data,
+    timestamp: Date.now()
+  })
+}
+
+// Updated API functions with caching
 export const marketApi = {
   async getSkills(): Promise<MarketApiResponse> {
+    const cacheKey = 'skills'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching skills from API...")
-    const response = await fetch(ENDPOINTS.list("skill"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("skill"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching skills:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
   async getMcps(): Promise<MarketApiResponse> {
+    const cacheKey = 'mcps'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching MCPs from API...")
-    const response = await fetch(ENDPOINTS.list("mcp"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("mcp"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching MCPs:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
   async getPlugins(): Promise<MarketApiResponse> {
+    const cacheKey = 'plugins'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching plugins from API...")
-    const response = await fetch(ENDPOINTS.list("plugin"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("plugin"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching plugins:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
@@ -287,7 +393,7 @@ export const marketApi = {
     return { success: true }
   },
 
-  async uploadFile(file: File, resourceType: string, name: string, description: string, category:string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
+  async uploadFile(file: File, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
     console.log(`Uploading ${resourceType} file: ${file.name} category:${category}`)
 
     const formData = new FormData()
@@ -296,6 +402,18 @@ export const marketApi = {
     formData.append("description", description)
     formData.append("file", file)
     formData.append("category", category)
+    formData.append("version", "1.0.0") // Set default version to 1.0.0 for first upload
+    if (guidance) {
+      formData.append("guidance", guidance)
+    }
+    if (chineseName) {
+      formData.append("chinese_name", chineseName)
+    }
+    if (userId) {
+      formData.append("user_id", userId)
+    }
+    const ip = localStorage.getItem("localIp")
+    formData.append("ip", ip || "")
 
     const response = await fetch(ENDPOINTS.upload, {
       method: "POST",
@@ -313,6 +431,95 @@ export const marketApi = {
     return {
       success: true,
       data
+    }
+  },
+
+  async updateItem(file: File | null, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
+    console.log(`Updating ${resourceType} item: ${name} category:${category}`)
+
+    // First, get the current item to retrieve its version
+    let currentVersion = "1.0.1" // Start from 1.0.1 for first update
+    try {
+      const currentItems = await this.getItemsByType(resourceType)
+      const currentItem = currentItems.data?.find(item => item.name === name)
+      if (currentItem && currentItem.version) {
+        currentVersion = this.incrementVersion(currentItem.version)
+      }
+    } catch (error) {
+      console.warn("Could not retrieve current version, using default increment:", error)
+    }
+
+    const formData = new FormData()
+    formData.append("resource_type", resourceType)
+    formData.append("name", name)
+    formData.append("description", description)
+    if(file){
+      formData.append("file", file)
+    }
+    formData.append("category", category)
+    formData.append("version", currentVersion) // Add auto-incremented version
+    if (guidance) {
+      formData.append("guidance", guidance)
+    }
+    if (chineseName) {
+      formData.append("chinese_name", chineseName)
+    }
+    if (userId) {
+      formData.append("user_id", userId)
+    }
+    const ip = localStorage.getItem("localIp")
+    formData.append("ip", ip || "")
+
+    console.log(`Auto-incrementing version to: ${currentVersion}`)
+
+    const response = await fetch(ENDPOINTS.update(resourceType, name), {
+      method: "PUT",
+      headers: {
+        Authorization: "Bearer your-api-token"
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const data: MarketUpdateResponse = await response.json()
+    return {
+      success: true,
+      data
+    }
+  },
+
+  // Helper method to increment version number
+  incrementVersion(version: string): string {
+    const versionParts = version.split('.')
+    if (versionParts.length !== 3) {
+      // Invalid version format, return default increment
+      return "1.0.1"
+    }
+
+    const [major, minor, patch] = versionParts.map(part => parseInt(part, 10))
+
+    if (isNaN(major) || isNaN(minor) || isNaN(patch)) {
+      return "1.0.1"
+    }
+
+    // Increment patch version by 1
+    return `${major}.${minor}.${patch + 1}`
+  },
+
+  // Helper method to get items by type (reusing existing logic)
+  async getItemsByType(resourceType: string): Promise<MarketApiResponse> {
+    switch (resourceType) {
+      case "skill":
+        return this.getSkills()
+      case "mcp":
+        return this.getMcps()
+      case "plugin":
+        return this.getPlugins()
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`)
     }
   }
 }

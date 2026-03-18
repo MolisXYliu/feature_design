@@ -18,8 +18,13 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock, Notebook, Megaphone, Zap, Wrench, CircleAlert
-} from "lucide-react";
+  Clock,
+  Notebook,
+  Megaphone,
+  Zap,
+  Wrench,
+  CircleAlert
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -30,9 +35,9 @@ import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
-import { MessageBubble } from "./MessageBubble";
-import { uploadChatData ,ChatReportPayload} from "@/api"
-import { marketApi } from "../../api/market";
+import { MessageBubble } from "./MessageBubble"
+import { uploadChatData, ChatReportPayload } from "@/api"
+import { marketApi } from "../../api/market"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -101,37 +106,129 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
-  const [latestVersion, setLatestVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState("")
 
-  const [version, setVersion] = useState('')
+  const [version, setVersion] = useState("")
 
   useEffect(() => {
     const { ipcRenderer } = window.electron
 
-    ipcRenderer.on('version', (ver: any) => {
-      console.log('版本：', ver)
+    ipcRenderer.on("version", (ver: string) => {
+      console.log("版本：", ver)
       setVersion(ver)
     })
   }, [])
 
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
 
-  const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
-
-  const goodSkillsRef= useRef([])
-
-  const queryRemoteSkills=()=>{
-    marketApi.getSkills().then(res => {
-      const goodSkills = res?.data?.filter(it => it.featured === '精品')
-      console.log(goodSkills)
-      goodSkillsRef.current = goodSkills || []
+    ipcRenderer.on("ip", (ver: string) => {
+      console.log("local ip：", ver)
+      if (ver) {
+        localStorage.setItem("localIp", ver)
+      }
     })
-  }
+  }, [])
 
-  const getTargetRemoteSkill = (name)=>{
-    const target = goodSkillsRef.current?.find(it => it.name === name)
-    return target?.guidance || ''
-  }
+  const {
+    threads,
+    models,
+    loadThreads,
+    generateTitleForFirstMessage,
+    setShowCustomizeView
+  } = useAppStore()
 
+  const goodSkillsRef = useRef<SkillMetadata[]>([])
+
+  // Define loadSkills function at component level so it can be accessed everywhere
+  const loadSkills = useCallback(async (): Promise<void> => {
+    try {
+      const [loadedSkills, disabledList] = await Promise.all([
+        window.api.skills.list(),
+        window.api.skills.getDisabled()
+      ])
+      const disabledSet = new Set(disabledList)
+      // Include both built-in (project) and custom (user) skills
+      const availableSkills = loadedSkills.filter(
+        (s) => (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
+      )
+      setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+    } catch (error) {
+      console.error("[ChatContainer] Failed to load skills:", error)
+      setSkills([])
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
+  const queryRemoteSkills = useCallback(async () => {
+    try {
+      const res = await marketApi.getSkills()
+      const goodSkills = res?.data?.filter((it) => it.featured === "精品")
+      console.log("Found good skills:", goodSkills)
+      goodSkillsRef.current = goodSkills || []
+
+      // 自动安装所有精品技能
+      if (goodSkills && goodSkills.length > 0) {
+        await installAllGoodSkills(goodSkills)
+        // 安装完成后重新加载技能列表
+        await loadSkills()
+      }
+    } catch (error) {
+      console.error("Failed to query remote skills:", error)
+    }
+  }, [loadSkills])
+
+  const getTargetRemoteSkill = useCallback((name: string) => {
+    const target = goodSkillsRef.current?.find((it) => it.name === name)
+    return target?.guidance || ""
+  }, [])
+
+  const installAllGoodSkills = async (goodSkills: SkillMetadata[]) => {
+    console.log("Starting automatic installation of good skills...")
+
+    for (const skill of goodSkills) {
+      try {
+        const skillName = skill.name || skill.id || ""
+
+        if (!skillName) {
+          console.error("Skill name is required for installation:", skill)
+          continue
+        }
+
+        console.log(`Installing skill: ${skillName}`)
+
+        // 删除已存在的技能（如果有的话）
+        try {
+          const skillsMetadata = await window.api.skills.list()
+          const existingSkill = skillsMetadata.find((s) => s.name === skillName)
+
+          if (existingSkill) {
+            console.log(`Deleting existing skill: ${existingSkill.path}`)
+            await window.api.skills.delete(existingSkill.path)
+          }
+        } catch (deleteError) {
+          console.warn(
+            `Failed to delete existing skill ${skillName}, continuing with install:`,
+            deleteError
+          )
+        }
+
+        // 下载并安装技能
+        const response = await marketApi.downloadItem(skillName, "skill", false)
+
+        if (response.success) {
+          console.log(`Successfully installed skill: ${skillName}`)
+        } else {
+          console.error(`Failed to install skill ${skillName}:`, response.error)
+        }
+      } catch (error) {
+        console.error(`Failed to install skill ${skill.name}:`, error)
+      }
+    }
+
+    console.log("Finished automatic installation of good skills")
+  }
 
   // Get persisted thread state and actions from context
   const {
@@ -158,97 +255,63 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
-  const queryLatestVersion = async ()=>{
-   try {
-     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/cmbdevclaw/versions/list',{
-       method: "GET",
-       headers: {
-         "Content-Type": "application/json"
-         // Remove placeholder auth token for now
-       }
-     })
-     const data = await response.json()
-     setLatestVersion(data?.current?.version)
-   }catch (e){
-     console.log(e)
-   }
-  }
+  const queryLatestVersion = useCallback(async () => {
+    try {
+      const response = await fetch(
+        import.meta.env.VITE_API_BASE_URL + "/api/trajectories/cmbdevclaw/versions/list",
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json"
+            // Remove placeholder auth token for now
+          }
+        }
+      )
+      const data = await response.json()
+      setLatestVersion(data?.current?.version)
+    } catch (e) {
+      console.log(e)
+    }
+  }, [])
 
-  const needUpdateVersion=useMemo(()=>{
-    // return latestVersion !== __APP_VERSION__
-    return  latestVersion !== version
-    // return false
-  },[latestVersion])
+  const needUpdateVersion = useMemo(() => {
+    return latestVersion !== version
+  }, [latestVersion, version])
 
   useEffect(() => {
     queryRemoteSkills()
     queryLatestVersion()
     const fetchYoloMode = (): void => {
-      window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
+      window.api.sandbox
+        .getYoloMode()
+        .then(setYoloMode)
+        .catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
     }
     fetchYoloMode()
     return window.api.sandbox.onChanged(fetchYoloMode)
-  }, [])
+  }, []) // 移除queryRemoteSkills依赖，只在组件挂载时执行一次
 
-  useEffect(()=>{
-    uploadLoChatData(threadMessages)
-  },[threadMessages])
-
-  const uploadLoChatData =async (msgs:Message[])=>{
-    const lastMsg=msgs[msgs.length-1]
-    if(lastMsg){
-      if(lastMsg.role!=='user'){
-        let lUidx=-1
-        for(let i=msgs.length-1;i>=0;i--){
-          if(msgs[i].role==='user'){
-            lUidx=i
+  const uploadLoChatData = useCallback(async (msgs: Message[]) => {
+    const lastMsg = msgs[msgs.length - 1]
+    if (lastMsg) {
+      if (lastMsg.role !== "user") {
+        let lUidx = -1
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "user") {
+            lUidx = i
             break
           }
         }
-        if(lUidx!==-1){
-          await uploadChatData(threadId,msgs.slice(lUidx) as ChatReportPayload[])
+        if (lUidx !== -1) {
+          await uploadChatData(threadId, msgs.slice(lUidx) as ChatReportPayload[])
         }
       }
     }
-  }
+  }, [threadId])
 
   useEffect(() => {
-    const currentMessageCount = streamData.messages.length
-
-    if (!isLoading) {
-      wasLoadingRef.current = false
-      loadingMessageCountRef.current = 0
-      return
-    }
-
-    // First entering loading for this turn.
-    if (!wasLoadingRef.current) {
-      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
-      setThinkingMessageIndex(thinkingCycleRef.current)
-      loadingMessageCountRef.current = currentMessageCount
-      wasLoadingRef.current = true
-      return
-    }
-
-    // During the same turn, if new streamed messages arrive (e.g. tool round-trip),
-    // switch to next slogan once to mimic "stage changed" feedback.
-    if (currentMessageCount > loadingMessageCountRef.current) {
-      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
-      setThinkingMessageIndex(thinkingCycleRef.current)
-      loadingMessageCountRef.current = currentMessageCount
-    }
-  }, [isLoading, streamData.messages.length])
-
-  // Apple Intelligence glow: loading 时显示，淡出由 CSS transition + onTransitionEnd 控制
-  useEffect(() => {
-    if (isLoading) {
-      setGlowVisible(true)
-      return
-    }
-    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
-    const timer = setTimeout(() => setGlowVisible(false), 3000)
-    return () => clearTimeout(timer)
-  }, [isLoading])
+    uploadLoChatData(threadMessages)
+  }, [threadMessages, uploadLoChatData])
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "reject" | "edit"): Promise<void> => {
@@ -517,26 +580,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     let mounted = true
 
-    const loadSkills = async (): Promise<void> => {
-      try {
-        const [loadedSkills, disabledList] = await Promise.all([
-          window.api.skills.list(),
-          window.api.skills.getDisabled()
-        ])
-        if (!mounted) return
-        const disabledSet = new Set(disabledList)
-        // Include both built-in (project) and custom (user) skills
-        const availableSkills = loadedSkills.filter((s) =>
-          (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
-        )
-        setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
-      } catch (error) {
-        console.error("[ChatContainer] Failed to load skills:", error)
-        if (mounted) setSkills([])
-      } finally {
-        if (mounted) setSkillsLoading(false)
-      }
-    }
 
     void loadSkills()
 
@@ -872,8 +915,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
-    (skill: SkillMetadata, label:string): void => {
-      const custPrompt = label ? getTargetRemoteSkill(label) : ''
+    (skill: SkillMetadata, label?: string): void => {
+      const custPrompt = label ? getTargetRemoteSkill(label) : ""
       const prompt = buildSkillPrompt(skill)
       setInput(custPrompt || prompt)
       requestAnimationFrame(() => {
@@ -884,7 +927,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         textarea.setSelectionRange(cursor, cursor)
       })
     },
-    [buildSkillPrompt, setInput]
+    [buildSkillPrompt, setInput, getTargetRemoteSkill]
   )
 
   const handleCopyToClipboard = (text: string) => {
@@ -909,7 +952,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               </div>
-              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
+              <span>已复制目标链���到剪切板，请在浏览器中打开查看</span>
             </div>
           </div>
         </div>

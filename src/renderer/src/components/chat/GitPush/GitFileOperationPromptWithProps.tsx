@@ -33,6 +33,7 @@ interface GitFileOperationPromptWithPropsProps {
   onSkip?: () => void
   operationId?: string // 操作ID，用于唯一标识本次操作
   workspacePath:string
+  threadId?:string
 }
 
 export function GitFileOperationPromptWithProps({
@@ -43,7 +44,8 @@ export function GitFileOperationPromptWithProps({
   changedFiles = [],
   onSkip,
   operationId,
-  workspacePath
+  workspacePath,
+   threadId
 }: GitFileOperationPromptWithPropsProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   const currentOperationId = useMemo(() => {
@@ -246,11 +248,11 @@ export function GitFileOperationPromptWithProps({
 
       // ─── 上报本次提交数据 ──────────────────────────────────────────────────
       try {
-        await uploadCommitData(currentOperationId, {
+        await uploadCommitData(threadId || currentOperationId, {
           remoteUrl: remoteUrl || "",
           branch: branch || "",
           commitMessage: commitMessage.trim(),
-          changedFiles: changedFiles.map((f) => f.path),
+          changedFiles: changedFiles,
           workspacePath: gitRepoPath,
           commands,
           commitHash
