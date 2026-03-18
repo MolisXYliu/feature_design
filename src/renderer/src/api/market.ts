@@ -357,7 +357,9 @@ export const marketApi = {
     formData.append("resource_type", resourceType)
     formData.append("name", name)
     formData.append("description", description)
-    formData.append("file", file)
+    if(file){
+      formData.append("file", file)
+    }
     formData.append("category", category)
     formData.append("version", currentVersion) // Add auto-incremented version
     if (guidance) {

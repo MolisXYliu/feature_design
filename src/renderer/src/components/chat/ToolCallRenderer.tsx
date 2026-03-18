@@ -877,6 +877,7 @@ export function ToolCallRenderer({
               changedFiles={changedFiles}
               operation="git_workflow"
               operationId={toolCall.id}
+              threadId={threadId}
               onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
             />
           </div>

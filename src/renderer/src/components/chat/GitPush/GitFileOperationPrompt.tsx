@@ -11,8 +11,8 @@ interface GitFileOperationPromptProps {
   onSkip?: () => void
   operationId?: string // 新增：操作ID，用于唯一标识本次操作
   threadId: string // 新增：线程ID，用于上报提交数据
-  oldValue:string
-  newValue:string
+  oldValue?:string
+  newValue?:string
 }
 
 export function GitFileOperationPrompt({

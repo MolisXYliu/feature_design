@@ -18,7 +18,7 @@ interface UniversalUploadDialogProps {
   onSuccess: () => void
   resourceType: "skill" | "mcp" | "plugin"
   onUpload: (
-    file: File,
+    file: File | null,
     name: string,
     description: string,
     category: string,
@@ -139,8 +139,9 @@ export function UniversalUploadDialog({
   }
 
   const handleUpload = async () => {
-    if (!file || !name.trim()) {
-      setError("请选择文件并填写名称")
+    // For updates, file is optional; for new uploads, file is required
+    if ((!isUpdate && !file) || !name.trim()) {
+      setError(isUpdate ? "请填写名称" : "请选择文件并填写名称")
       return
     }
 
@@ -307,7 +308,10 @@ export function UniversalUploadDialog({
               <>
                 <Upload className="size-10 mx-auto text-muted-foreground mb-2" />
                 <p className="text-sm text-muted-foreground">拖拽文件到此处，或点击选择</p>
-                <p className="text-xs text-muted-foreground mt-1">支持: {getAcceptedTypes()}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  支持: {getAcceptedTypes()}
+                  {isUpdate && <span className="block mt-1">更新时文件为可选项</span>}
+                </p>
               </>
             )}
           </div>
@@ -478,9 +482,9 @@ export function UniversalUploadDialog({
           </Button>
           <Button
             onClick={handleUpload}
-            disabled={uploading || !file || !name.trim()}
+            disabled={uploading || (!isUpdate && !file) || !name.trim()}
           >
-            {uploading ? "上传中..." : "上传"}
+            {uploading ? (isUpdate ? "更新中..." : "上传中...") : (isUpdate ? "更新" : "上传")}
           </Button>
         </DialogFooter>
       </DialogContent>
