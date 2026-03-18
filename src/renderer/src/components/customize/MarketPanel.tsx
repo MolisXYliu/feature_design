@@ -307,7 +307,7 @@ export function MarketPanel(): React.JSX.Element {
     }
   }
 
-  // 在组件加载时获取已安装的skills、MCPs和Plugins列表
+  // 在组件��载时获取已安装的skills、MCPs和Plugins列表
   useEffect(() => {
     loadInstalledSkills()
     loadInstalledMcps()
@@ -660,15 +660,16 @@ export function MarketPanel(): React.JSX.Element {
     userId?: string
   ) => {
     try {
-      if (!file) {
-        return {
-          success: false,
-          error: "文件不能为空"
-        }
-      }
+      // 更新时允许文件为空，这样可以只更新元数据
+      // if (!file) {
+      //   return {
+      //     success: false,
+      //     error: "文件不能为空"
+      //   }
+      // }
 
       const result = await marketApi.updateItem(
-        file,
+        file, // 允许传递null
         activeTab,
         name,
         description,

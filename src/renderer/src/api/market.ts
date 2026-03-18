@@ -339,7 +339,7 @@ export const marketApi = {
     }
   },
 
-  async updateItem(file: File, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
+  async updateItem(file: File | null, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
     console.log(`Updating ${resourceType} item: ${name} category:${category}`)
 
     // First, get the current item to retrieve its version
