@@ -115,6 +115,18 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [])
 
 
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    ipcRenderer.on('ip', (ver: any) => {
+      console.log('local ip：', ver)
+      if(ver){
+        localStorage.setItem('localIp', ver)
+      }
+    })
+  }, [])
+
+
   const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
 
   const goodSkillsRef= useRef([])

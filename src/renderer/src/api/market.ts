@@ -46,6 +46,7 @@ export interface MarketItem {
   type?: MarketItemType
   // Add field to track if user can delete this item
   canDelete?: boolean
+  ip?:string
 }
 
 export interface MarketUpdateResponse {

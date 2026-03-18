@@ -144,7 +144,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = 
               </Button>
             </>
           )}
-          {item.canDelete && (
+          {(item.canDelete || (item.ip && ip && item.ip === ip)) && (
             <>
               <Button
                 variant="ghost"
@@ -233,6 +233,8 @@ export function MarketPanel(): React.JSX.Element {
     open: false,
     type: "skill"
   })
+
+   const ip = localStorage.getItem('localIp')
 
   // Load data for current tab
   useEffect(() => {
