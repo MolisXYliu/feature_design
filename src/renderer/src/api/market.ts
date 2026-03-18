@@ -80,98 +80,193 @@ const downloadBlobAsFile = (blob: Blob, filename: string) => {
 }
 
 
-// Updated API functions with the new endpoints
+// Cache for API responses to prevent duplicate calls
+interface CacheEntry {
+  data: MarketApiResponse
+  timestamp: number
+}
+
+const API_CACHE = new Map<string, CacheEntry>()
+const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes in milliseconds
+
+// Helper function to check if cache is valid
+const isCacheValid = (timestamp: number): boolean => {
+  return Date.now() - timestamp < CACHE_DURATION
+}
+
+// Helper function to get cached data
+const getCachedData = (key: string): MarketApiResponse | null => {
+  const cached = API_CACHE.get(key)
+  if (cached && isCacheValid(cached.timestamp)) {
+    console.log(`Using cached data for ${key}`)
+    return cached.data
+  }
+  return null
+}
+
+// Helper function to set cached data
+const setCachedData = (key: string, data: MarketApiResponse): void => {
+  API_CACHE.set(key, {
+    data,
+    timestamp: Date.now()
+  })
+}
+
+// Updated API functions with caching
 export const marketApi = {
   async getSkills(): Promise<MarketApiResponse> {
+    const cacheKey = 'skills'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching skills from API...")
-    const response = await fetch(ENDPOINTS.list("skill"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("skill"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching skills:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
   async getMcps(): Promise<MarketApiResponse> {
+    const cacheKey = 'mcps'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching MCPs from API...")
-    const response = await fetch(ENDPOINTS.list("mcp"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("mcp"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching MCPs:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
   async getPlugins(): Promise<MarketApiResponse> {
+    const cacheKey = 'plugins'
+
+    // Check cache first
+    const cachedData = getCachedData(cacheKey)
+    if (cachedData) {
+      return cachedData
+    }
+
     console.log("Fetching plugins from API...")
-    const response = await fetch(ENDPOINTS.list("plugin"), {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-        // Remove placeholder auth token for now
+    try {
+      const response = await fetch(ENDPOINTS.list("plugin"), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json"
+          // Remove placeholder auth token for now
+        }
+      })
+
+      if (!response.ok) {
+        console.error(`API request failed: ${response.status} ${response.statusText}`)
+        const errorText = await response.text()
+        console.error('Response body:', errorText)
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    })
 
-    if (!response.ok) {
-      console.error(`API request failed: ${response.status} ${response.statusText}`)
-      const errorText = await response.text()
-      console.error('Response body:', errorText)
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+      const contentType = response.headers.get("content-type")
+      if (!contentType || !contentType.includes("application/json")) {
+        const responseText = await response.text()
+        console.error('Expected JSON but received:', responseText.substring(0, 200))
+        throw new Error('Response is not JSON')
+      }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const responseText = await response.text()
-      console.error('Expected JSON but received:', responseText.substring(0, 200))
-      throw new Error('Response is not JSON')
-    }
+      const data: MarketListResponse = await response.json()
+      const result = {
+        success: true,
+        data: data.items || []
+      }
 
-    const data: MarketListResponse = await response.json()
-    return {
-      success: true,
-      data: data.items || []
+      // Cache the result
+      setCachedData(cacheKey, result)
+
+      return result
+    } catch (error) {
+      console.error('Error fetching plugins:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
     }
   },
 
