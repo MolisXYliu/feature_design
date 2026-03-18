@@ -6,7 +6,7 @@ import { getChatXConfig } from "../storage"
 import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread, getAllThreads, getThread } from "../db/index"
 import { StreamConverter } from "../agent/stream-converter"
-import { notifyAlways } from "./notify"
+import { notifyAlways, stripThink } from "./notify"
 import type { ChatXRobotConfig } from "../types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -80,6 +80,8 @@ function findChatXThread(chatId: string, sender: string): string | null {
 const HTTP_TIMEOUT_MS = 30_000
 
 export async function sendChatXReply(robot: ChatXRobotConfig, content: string): Promise<void> {
+  const cleanContent = stripThink(content).trim()
+  if (!cleanContent) return
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS)
   try {
@@ -93,7 +95,7 @@ export async function sendChatXReply(robot: ChatXRobotConfig, content: string): 
         clientSecret: robot.clientSecret,
         channel: robot.channel,
         toUserList: robot.toUserList,
-        content
+        content: cleanContent
       })
     })
     if (!res.ok) {
@@ -229,8 +231,11 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
       for (const evt of events) {
         broadcastToChannel(channel, evt)
         if (evt.type === "full-messages") {
-          const assistantMsgs = evt.messages.filter((m) => m.role === "assistant")
-          const last = assistantMsgs[assistantMsgs.length - 1]
+          // 只取最后一条没有 tool_calls 的 assistant 消息（即最终回复，不含中间工具推理）
+          const finalMsgs = evt.messages.filter(
+            (m) => m.role === "assistant" && (!m.tool_calls || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0)
+          )
+          const last = finalMsgs[finalMsgs.length - 1]
           if (last?.content?.trim()) lastAssistantText = last.content.trim()
         }
       }
