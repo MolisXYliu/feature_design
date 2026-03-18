@@ -12,9 +12,12 @@ import {
   Zap,
   Tag,
   Star,
-  Shield,
+  GitBranch,
   User,
-  Edit
+  Edit,
+  Calendar,
+  FileText,
+  Lightbulb
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -114,30 +117,33 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
 
   const ip = localStorage.getItem('localIp')
 
-
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
+      {/* Header: name + badges + actions */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-medium text-sm line-clamp-1">{item.name}</h3>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+            <h3 className="font-semibold text-sm">{item.name}</h3>
+            {item.chinese_name && (
+              <span className="text-xs text-muted-foreground">（{item.chinese_name}）</span>
+            )}
             {isInstalled && (
-              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
                 <CheckCircle className="size-3" />
                 已安装
               </span>
             )}
           </div>
           {item.category && (
-            <div className="flex items-center gap-1 mb-1">
-              <Tag className="size-3 text-muted-foreground" />
+            <div className="flex items-center gap-1 mt-1">
+              <Tag className="size-3 text-muted-foreground shrink-0" />
               <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
                 {item.category}
               </span>
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1 ml-2">
+        <div className="flex items-center gap-1 ml-2 shrink-0">
           {isDownloading || isUpdating ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
           ) : (
@@ -169,7 +175,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
                 className="h-7 w-auto px-2 gap-1"
                 onClick={handleLocalDownload}
               >
-                <HardDrive className="size-3 mr-2" />
+                <HardDrive className="size-3 mr-1" />
                 下载
               </Button>
             </>
@@ -199,37 +205,50 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{item.description}</p>
+      {/* Description */}
+      <p className="text-xs text-muted-foreground mb-2 leading-relaxed">{item.description}</p>
 
-      {/* Display guidance if available */}
+      {/* Guidance — supports line breaks and whitespace formatting */}
       {item.guidance && (
-        <p className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded mb-2">
-          💡 {item.guidance}
-        </p>
+        <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2 mb-3">
+          <div className="flex items-start gap-1.5">
+            <Lightbulb className="size-3.5 mt-0.5 shrink-0 text-blue-500" />
+            <div>
+              <span className="font-medium text-blue-600 block mb-0.5">使用指引</span>
+              <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
+            </div>
+          </div>
+        </div>
       )}
 
-      <div className="text-xs text-muted-foreground">
-        {item.filename} • Created {new Date(item.created_at).toLocaleDateString()}
-      </div>
-
-      {/* New icons for featured, version, and user_id */}
-      <div className="flex flex-wrap gap-2 mt-2">
-        {item.featured && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Star className="size-4" />
-            <span>{item.featured}</span>
+      {/* Metadata row */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground border-t border-border pt-2 mt-1">
+        {item.filename && (
+          <div className="flex items-center gap-1" title="文件名">
+            <FileText className="size-3 shrink-0" />
+            <span>{item.filename}</span>
           </div>
         )}
+        <div className="flex items-center gap-1" title="创建时间">
+          <Calendar className="size-3 shrink-0" />
+          <span>{new Date(item.created_at).toLocaleDateString("zh-CN")}</span>
+        </div>
         {item.version && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Shield className="size-4" />
-            <span>{item.version}</span>
+          <div className="flex items-center gap-1" title="版本">
+            <GitBranch className="size-3 shrink-0" />
+            <span>v{item.version}</span>
+          </div>
+        )}
+        {item.featured && (
+          <div className="flex items-center gap-1" title="推荐标签">
+            <Star className="size-3 shrink-0 text-yellow-500" />
+            <span className="text-yellow-600">{item.featured}</span>
           </div>
         )}
         {item.user_id && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <User className="size-4" />
-            <span>{item.user_id}</span>
+          <div className="flex items-center gap-1" title="上传用户">
+            <User className="size-3 shrink-0" />
+            <span>用户 {item.user_id}</span>
           </div>
         )}
       </div>
@@ -416,11 +435,16 @@ export function MarketPanel(): React.JSX.Element {
               response = await marketApi.getSkills()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
-                const dataWithFlags = response.data.map(item => ({
-                  ...item,
-                  canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
-                  installed: installedSkills.includes(item.name)  // 添加已安装状态
-                }))
+
+                const dataWithFlags = response.data.map(item => {
+                  let installTarget =  installedSkills.includes(item.name) ||
+                    installedSkills.some(str => item.name === str || item.filename?.includes(str))
+                  return {
+                    ...item,
+                    canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
+                    installed: installTarget // 添加已安装状态
+                  }
+                })
                 setSkillsData(dataWithFlags)
               }
             }
