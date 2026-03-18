@@ -45,8 +45,8 @@ export interface LocalSandboxOptions {
   maxOutputBytes?: number
   /** Environment variables to pass to commands (default: process.env) */
   env?: Record<string, string>
-  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'none' runs directly (default: 'none') */
-  windowsSandbox?: "none" | "unelevated" | "readonly"
+  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'elevated' uses dedicated sandbox user + firewall, 'none' runs directly (default: 'none') */
+  windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"
   /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
   codexExePath?: string
 }
@@ -78,7 +78,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly maxOutputBytes: number
   private readonly env: Record<string, string>
   private readonly workingDir: string
-  private readonly windowsSandbox: "none" | "unelevated" | "readonly"
+  private readonly windowsSandbox: "none" | "unelevated" | "readonly" | "elevated"
   private readonly codexExePath: string
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
@@ -1067,6 +1067,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Execute a command inside the Codex Windows sandbox.
    * - unelevated: restricted token + NTFS ACL (workdir writable, network blocked)
    * - readonly: read-only for normal users; admin allows cwd write
+   * - elevated: dedicated sandbox user + firewall + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
   private async executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
@@ -1087,13 +1088,25 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         : command
 
     const isReadonly = this.windowsSandbox === "readonly"
+    const isElevatedSandbox = this.windowsSandbox === "elevated"
     const elevated = isReadonly && LocalSandbox.isElevated()
 
+    // elevated: dedicated sandbox user + firewall, codex.exe handles everything internally
     // readonly + admin: grant full read + cwd write so admin can work in workspace
     // readonly + non-admin: read only, all writes blocked
     // unelevated: workdir writable via --full-auto + ACL
-    const sandboxArgs = isReadonly
-      ? elevated
+    let sandboxArgs: string[]
+    if (isElevatedSandbox) {
+      // -c is a global flag and must come before the "sandbox" subcommand
+      sandboxArgs = [
+        "-c", 'windows.sandbox="elevated"',
+        "sandbox", "windows",
+        "--full-auto",
+        "--",
+        shell, ...shellFlags, effectiveCommand
+      ]
+    } else if (isReadonly) {
+      sandboxArgs = elevated
         ? [
             "sandbox", "windows",
             "-c", 'sandbox_permissions=["disk-full-read-access","disk-write-cwd"]',
@@ -1106,26 +1119,30 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
             "--",
             shell, ...shellFlags, effectiveCommand
           ]
-      : [
-          "sandbox", "windows",
-          "--full-auto",
-          "--",
-          shell, ...shellFlags, effectiveCommand
-        ]
+    } else {
+      sandboxArgs = [
+        "sandbox", "windows",
+        "--full-auto",
+        "--",
+        shell, ...shellFlags, effectiveCommand
+      ]
+    }
 
-    // ACL grant/revoke needed for unelevated mode and readonly+admin (restricted token still needs NTFS permission).
-    // Readonly non-admin also needs TEMP writable so commands (git, python, etc.) that write temp files don't fail.
+    // Elevated sandbox manages its own ACLs internally — skip manual icacls grants.
+    // For other modes: ACL grant/revoke needed for unelevated and readonly+admin.
     const aclDirs: string[] = []
-    if (!isReadonly || elevated) {
-      aclDirs.push(this.workingDir)
+    if (!isElevatedSandbox) {
+      if (!isReadonly || elevated) {
+        aclDirs.push(this.workingDir)
+      }
+      // Always grant TEMP write for non-elevated sandbox modes — even readonly non-admin
+      // needs it for commands that create temp files.
+      const tmpDir = process.env.TEMP || process.env.TMP
+      if (tmpDir && !aclDirs.includes(tmpDir)) {
+        aclDirs.push(tmpDir)
+      }
+      await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
     }
-    // Always grant TEMP write for all sandbox modes — even readonly non-admin
-    // needs it for commands that create temp files.
-    const tmpDir = process.env.TEMP || process.env.TMP
-    if (tmpDir && !aclDirs.includes(tmpDir)) {
-      aclDirs.push(tmpDir)
-    }
-    await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
 
     try {
     return await new Promise<ExecuteResponse>((resolve) => {

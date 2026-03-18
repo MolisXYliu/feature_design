@@ -1190,8 +1190,8 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly">(["none", "unelevated", "readonly"])
-type SandboxMode = "none" | "unelevated" | "readonly"
+const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly" | "elevated">(["none", "unelevated", "readonly", "elevated"])
+type SandboxMode = "none" | "unelevated" | "readonly" | "elevated"
 
 function readSandboxSettings(): { mode: SandboxMode; yolo: boolean } {
   if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "unelevated", yolo: false }

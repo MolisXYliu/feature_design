@@ -239,8 +239,10 @@ interface CustomAPI {
     getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
   sandbox: {
-    getMode: () => Promise<"none" | "unelevated">
-    setMode: (mode: "none" | "unelevated") => Promise<void>
+    getMode: () => Promise<"none" | "unelevated" | "readonly" | "elevated">
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated") => Promise<void>
+    checkElevatedSetup: () => Promise<{ setupComplete: boolean }>
+    runElevatedSetup: () => Promise<{ success: boolean; error?: string }>
     getYoloMode: () => Promise<boolean>
     setYoloMode: (yolo: boolean) => Promise<void>
     onChanged: (callback: () => void) => () => void

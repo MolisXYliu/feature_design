@@ -474,10 +474,14 @@ const api = {
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   },
   sandbox: {
-    getMode: (): Promise<"none" | "unelevated" | "readonly"> =>
-      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly">,
-    setMode: (mode: "none" | "unelevated" | "readonly"): Promise<void> =>
+    getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>
+      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly" | "elevated">,
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
+    checkElevatedSetup: (): Promise<{ setupComplete: boolean }> =>
+      ipcRenderer.invoke("sandbox:checkElevatedSetup") as Promise<{ setupComplete: boolean }>,
+    runElevatedSetup: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("sandbox:runElevatedSetup") as Promise<{ success: boolean; error?: string }>,
     getYoloMode: (): Promise<boolean> =>
       ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,
     setYoloMode: (yolo: boolean): Promise<void> =>

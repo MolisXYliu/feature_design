@@ -266,8 +266,8 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
-  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly")
+function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly" || windowsSandbox === "elevated")
   const resolved = isSandboxed
     ? LocalSandbox.resolvedWindowsSandboxShell()
     : LocalSandbox.resolvedShell()
@@ -298,7 +298,7 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly"): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
@@ -331,7 +331,7 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
-  const readonlySection = windowsSandbox === "readonly"
+  const sandboxSection = windowsSandbox === "readonly"
     ? `
 ### 只读沙箱模式
 
@@ -341,10 +341,20 @@ ${shellGuidance}
 - 此模式适用于安全审查、代码分析等只读场景。
 - 除非用户明确要求，否则避免执行写入操作，应以建议修改替代直接写入。
 `
+    : windowsSandbox === "elevated"
+    ? `
+### Elevated 沙箱模式
+
+**重要提示：** 你正在 Elevated 沙箱环境中运行。
+- 所有 shell 命令以独立沙箱用户身份执行，与当前用户完全隔离。
+- 出站网络访问被防火墙阻断。需要网络的命令（npm install、pip install、git clone 等）会失败。
+- 你可以读写工作目录内的文件，但无法访问用户的个人目录（如 .ssh、.aws）。
+- 如果命令因权限不足失败，不要反复重试，向用户说明限制即可。
+`
     : ""
 
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + readonlySection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache

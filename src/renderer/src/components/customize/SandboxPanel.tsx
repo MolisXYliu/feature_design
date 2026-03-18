@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Shield, ShieldOff, ShieldCheck, Zap, Info } from "lucide-react"
+import { Shield, ShieldOff, ShieldCheck, ShieldPlus, Zap, Info, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-type SandboxMode = "none" | "unelevated" | "readonly"
+type SandboxMode = "none" | "unelevated" | "readonly" | "elevated"
 
 const isWindows = navigator.userAgent.toLowerCase().includes("windows")
 
@@ -31,8 +31,16 @@ const MODE_OPTIONS: ModeOption[] = [
     label: "只读沙箱",
     description: "命令可读取所有文件，普通权限下禁止写入；以管理员身份运行时允许写入工作目录。适合安全审查、代码分析等场景。",
     icon: <ShieldCheck className="size-4" />
+  },
+  {
+    value: "elevated",
+    label: "Elevated 沙箱",
+    description: "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
+    icon: <ShieldPlus className="size-4" />
   }
 ]
+
+type ElevatedSetupStatus = "idle" | "checking" | "running" | "done" | "error"
 
 export function SandboxPanel(): React.JSX.Element {
   const [mode, setMode] = useState<SandboxMode>("none")
@@ -40,6 +48,8 @@ export function SandboxPanel(): React.JSX.Element {
   const [loading, setLoading] = useState(true)
   const [yoloPending, setYoloPending] = useState(false)
   const [modePending, setModePending] = useState(false)
+  const [elevatedSetupStatus, setElevatedSetupStatus] = useState<ElevatedSetupStatus>("idle")
+  const [elevatedSetupError, setElevatedSetupError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -78,7 +88,61 @@ export function SandboxPanel(): React.JSX.Element {
 
   const handleSelectMode = useCallback(async (newMode: SandboxMode) => {
     if (newMode === mode || modePending) return
+
+    // Elevated mode requires setup flow
+    if (newMode === "elevated") {
+      setModePending(true)
+      setElevatedSetupError(null)
+
+      try {
+        // Step 1: Check if setup is already complete
+        setElevatedSetupStatus("checking")
+        const { setupComplete } = await window.api.sandbox.checkElevatedSetup()
+
+        if (setupComplete) {
+          // Setup already done, just switch mode
+          await window.api.sandbox.setMode("elevated")
+          // BUG 3 fix: explicitly reload to ensure mode badge updates immediately
+          await loadSettings()
+          if (mountedRef.current) {
+            setElevatedSetupStatus("done")
+            // BUG 5 fix: auto-clear done status after 3 seconds
+            setTimeout(() => { if (mountedRef.current) setElevatedSetupStatus("idle") }, 3000)
+          }
+        } else {
+          // Step 2: Run setup with UAC
+          setElevatedSetupStatus("running")
+          const result = await window.api.sandbox.runElevatedSetup()
+
+          if (result.success) {
+            await window.api.sandbox.setMode("elevated")
+            await loadSettings()
+            if (mountedRef.current) {
+              setElevatedSetupStatus("done")
+              setTimeout(() => { if (mountedRef.current) setElevatedSetupStatus("idle") }, 3000)
+            }
+          } else {
+            if (mountedRef.current) {
+              setElevatedSetupError(result.error || "配置失败")
+              setElevatedSetupStatus("error")
+            }
+          }
+        }
+      } catch (e) {
+        if (mountedRef.current) {
+          setElevatedSetupError(String(e))
+          setElevatedSetupStatus("error")
+        }
+      } finally {
+        if (mountedRef.current) setModePending(false)
+      }
+      return
+    }
+
+    // Other modes: direct switch
     setModePending(true)
+    setElevatedSetupStatus("idle")
+    setElevatedSetupError(null)
     try {
       await window.api.sandbox.setMode(newMode)
     } catch (e) {
@@ -88,6 +152,22 @@ export function SandboxPanel(): React.JSX.Element {
       if (mountedRef.current) setModePending(false)
     }
   }, [mode, modePending, loadSettings])
+
+  const handleFallbackToUnelevated = useCallback(async () => {
+    if (modePending) return
+    setElevatedSetupStatus("idle")
+    setElevatedSetupError(null)
+    setModePending(true)
+    try {
+      await window.api.sandbox.setMode("unelevated")
+      await loadSettings()
+    } catch (e) {
+      console.error("[SandboxPanel] Failed to fallback:", e)
+      await loadSettings()
+    } finally {
+      if (mountedRef.current) setModePending(false)
+    }
+  }, [modePending, loadSettings])
 
   const handleToggleYolo = useCallback(async () => {
     if (yoloPending) return
@@ -214,6 +294,43 @@ export function SandboxPanel(): React.JSX.Element {
               </button>
             ))}
           </div>
+
+          {/* Elevated setup status */}
+          {elevatedSetupStatus === "checking" && (
+            <div className="flex items-center gap-2 max-w-lg rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
+              <Loader2 className="size-4 shrink-0 animate-spin" />
+              <p>正在检查沙箱配置状态...</p>
+            </div>
+          )}
+
+          {elevatedSetupStatus === "running" && (
+            <div className="flex items-center gap-2 max-w-lg rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
+              <Loader2 className="size-4 shrink-0 animate-spin" />
+              <p>正在进行一次性安全配置，请在 UAC 提示中确认管理员权限...</p>
+            </div>
+          )}
+
+          {elevatedSetupStatus === "done" && (
+            <div className="flex items-center gap-2 max-w-lg rounded-md border border-green-500/20 bg-green-500/5 p-3 text-sm text-green-600 dark:text-green-400">
+              <ShieldCheck className="size-4 shrink-0" />
+              <p>Elevated 沙箱配置完成，将在下一次对话中生效。</p>
+            </div>
+          )}
+
+          {elevatedSetupStatus === "error" && elevatedSetupError && (
+            <div className="flex flex-col gap-2 max-w-lg rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400">
+              <div className="flex items-start gap-2">
+                <Info className="size-4 mt-0.5 shrink-0" />
+                <p>{elevatedSetupError}</p>
+              </div>
+              <button
+                onClick={handleFallbackToUnelevated}
+                className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
+              >
+                回退到 Unelevated 沙箱
+              </button>
+            </div>
+          )}
         </div>
 
       </div>
