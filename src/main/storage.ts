@@ -1273,24 +1273,25 @@ export function saveChatXConfig(updates: Partial<import("./types").ChatXConfig>)
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly">(["none", "unelevated", "readonly"])
-type SandboxMode = "none" | "unelevated" | "readonly"
+const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly" | "elevated">(["none", "unelevated", "readonly", "elevated"])
+type SandboxMode = "none" | "unelevated" | "readonly" | "elevated"
 
-function readSandboxSettings(): { mode: SandboxMode; yolo: boolean } {
-  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "unelevated", yolo: false }
+function readSandboxSettings(): { mode: SandboxMode; yolo: boolean; nuxCompleted: boolean } {
+  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "unelevated", yolo: false, nuxCompleted: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
     return {
       mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "unelevated",
-      yolo: parsed.yolo === true
+      yolo: parsed.yolo === true,
+      nuxCompleted: parsed.nuxCompleted === true
     }
   } catch (err) {
     console.warn("[Storage] Failed to load sandbox settings:", err)
-    return { mode: "unelevated", yolo: false }
+    return { mode: "unelevated", yolo: false, nuxCompleted: false }
   }
 }
 
-function updateSandboxSettings(patch: Partial<{ mode: SandboxMode; yolo: boolean }>): void {
+function updateSandboxSettings(patch: Partial<{ mode: SandboxMode; yolo: boolean; nuxCompleted: boolean }>): void {
   getOpenworkDir()
   const current = readSandboxSettings()
   writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ ...current, ...patch }, null, 2))
@@ -1310,4 +1311,60 @@ export function getYoloMode(): boolean {
 
 export function setYoloMode(yolo: boolean): void {
   updateSandboxSettings({ yolo })
+}
+
+// ── Sandbox NUX (first-run setup) ────────────────────────────────────────────
+
+export function isSandboxNuxCompleted(): boolean {
+  return readSandboxSettings().nuxCompleted
+}
+
+export function setSandboxNuxCompleted(): void {
+  updateSandboxSettings({ nuxCompleted: true })
+}
+
+// ── Approval Rules (persistent) ──────────────────────────────────────────────
+
+const APPROVAL_RULES_FILE = join(OPENWORK_DIR, "approval-rules.json")
+
+interface ApprovalRuleRecord {
+  pattern: string
+  decision: string
+}
+
+export function getApprovalRules(): ApprovalRuleRecord[] {
+  getOpenworkDir()
+  if (!existsSync(APPROVAL_RULES_FILE)) return []
+  try {
+    const content = readFileSync(APPROVAL_RULES_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is ApprovalRuleRecord =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).pattern === "string" &&
+        typeof (item as Record<string, unknown>).decision === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function addApprovalRule(pattern: string, decision: string): void {
+  getOpenworkDir()
+  const rules = getApprovalRules()
+  const existing = rules.findIndex((r) => r.pattern === pattern)
+  if (existing >= 0) {
+    rules[existing] = { pattern, decision }
+  } else {
+    rules.push({ pattern, decision })
+  }
+  writeFileSync(APPROVAL_RULES_FILE, JSON.stringify(rules, null, 2))
+}
+
+export function removeApprovalRule(pattern: string): void {
+  getOpenworkDir()
+  const rules = getApprovalRules().filter((r) => r.pattern !== pattern)
+  writeFileSync(APPROVAL_RULES_FILE, JSON.stringify(rules, null, 2))
 }

@@ -492,14 +492,42 @@ const api = {
       ipcRenderer.invoke("chatx:restart") as Promise<void>
   },
   sandbox: {
-    getMode: (): Promise<"none" | "unelevated" | "readonly"> =>
-      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly">,
-    setMode: (mode: "none" | "unelevated" | "readonly"): Promise<void> =>
+    getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>
+      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly" | "elevated">,
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
+    checkElevatedSetup: (): Promise<{ setupComplete: boolean }> =>
+      ipcRenderer.invoke("sandbox:checkElevatedSetup") as Promise<{ setupComplete: boolean }>,
+    runElevatedSetup: (workspacePaths?: string[]): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("sandbox:runElevatedSetup", workspacePaths) as Promise<{ success: boolean; error?: string }>,
     getYoloMode: (): Promise<boolean> =>
       ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,
     setYoloMode: (yolo: boolean): Promise<void> =>
       ipcRenderer.invoke("sandbox:setYoloMode", yolo) as Promise<void>,
+    // NUX (first-run sandbox setup)
+    isNuxNeeded: (): Promise<boolean> =>
+      ipcRenderer.invoke("sandbox:isNuxNeeded") as Promise<boolean>,
+    completeNux: (mode: "elevated" | "unelevated" | "none"): Promise<void> =>
+      ipcRenderer.invoke("sandbox:completeNux", mode) as Promise<void>,
+    // Approval rules management
+    getApprovalRules: (): Promise<Array<{ pattern: string; decision: string }>> =>
+      ipcRenderer.invoke("sandbox:getApprovalRules") as Promise<Array<{ pattern: string; decision: string }>>,
+    deleteApprovalRule: (pattern: string): Promise<void> =>
+      ipcRenderer.invoke("sandbox:deleteApprovalRule", pattern) as Promise<void>,
+    // Approval decision from renderer → main
+    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }): void => {
+      ipcRenderer.send("sandbox:approvalDecision", decision)
+    },
+    // Listen for approval requests from main → renderer
+    onApprovalRequest: (
+      threadId: string,
+      callback: (request: unknown) => void
+    ): (() => void) => {
+      const channel = `approval:request:${threadId}`
+      const handler = (_: unknown, data: unknown): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
     onChanged: (callback: () => void): (() => void) => {
       const handler = (): void => { callback() }
       ipcRenderer.on("sandbox:changed", handler)

@@ -322,6 +322,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   })
 
   // Handle HITL interrupt response
+  // NOTE: With the orchestrator-based approval system, execute commands are no
+  // longer interrupted via HITL middleware. This handler remains for backward
+  // compatibility and non-execute tool interrupts.
   ipcMain.on("agent:interrupt", async (event, { threadId, decision }: AgentInterruptParams) => {
     const channel = `agent:stream:${threadId}`
     const window = BrowserWindow.fromWebContents(event.sender)

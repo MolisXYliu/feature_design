@@ -48,8 +48,8 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   toolResults?: Map<string, ToolResultInfo>
   pendingApproval?: HITLRequest | null
-  onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
-  threadId: string // Add threadId prop
+  onApprovalDecision?: (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit") => void
+  threadId: string
 }
 
 export function MessageBubble({

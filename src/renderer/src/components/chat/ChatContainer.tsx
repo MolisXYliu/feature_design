@@ -103,6 +103,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
+  // NUX (first-run sandbox setup)
+  const [showNux, setShowNux] = useState(false)
+  const [nuxLoading, setNuxLoading] = useState(false)
+  const [nuxError, setNuxError] = useState<string | null>(null)
+  const [nuxDevMode, setNuxDevMode] = useState(false)
+  const [nuxDevPassword, setNuxDevPassword] = useState("")
+  const [nuxUnlocked, setNuxUnlocked] = useState(false)
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
@@ -311,19 +318,41 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [threadId])
 
+  // Check if NUX (first-run sandbox setup) is needed
+  useEffect(() => {
+    window.api.sandbox.isNuxNeeded().then((needed) => {
+      if (needed) setShowNux(true)
+    }).catch((e) => console.warn("[NUX] Failed to check:", e))
+  }, [])
+
   useEffect(() => {
     uploadLoChatData(threadMessages)
   }, [threadMessages, uploadLoChatData])
 
   const handleApprovalDecision = useCallback(
-    async (decision: "approve" | "reject" | "edit"): Promise<void> => {
+    async (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"): Promise<void> => {
       if (!pendingApproval || !stream) return
 
+      // Check if this is an orchestrator-sourced approval (has requestId)
+      const approvalAny = pendingApproval as Record<string, unknown>
+      if (approvalAny._orchestratorRequestId) {
+        // Send decision to main process via the orchestrator's IPC channel
+        window.api.sandbox.sendApprovalDecision({
+          requestId: approvalAny._orchestratorRequestId as string,
+          type: decision === "edit" ? "reject" : decision,
+          tool_call_id: pendingApproval.tool_call?.id || ""
+        })
+        setPendingApproval(null)
+        return
+      }
+
+      // Legacy HITL approval path (non-execute tools)
       setPendingApproval(null)
 
       try {
+        const legacyDecision = (decision === "approve_session" || decision === "approve_permanent") ? "approve" : decision
         await stream.submit(null, {
-          command: { resume: { decision, pendingCount: pendingApproval.pendingCount } },
+          command: { resume: { decision: legacyDecision, pendingCount: pendingApproval.pendingCount } },
           config: { configurable: { thread_id: threadId, model_id: currentModel } }
         })
       } catch (err) {
@@ -334,6 +363,28 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   )
 
   const agentValues = stream?.values as AgentStreamValues | undefined
+
+  // Listen for orchestrator approval requests (fine-grained command approval)
+  useEffect(() => {
+    console.log(`[ChatContainer] Registering approval listener for threadId: ${threadId}`)
+    const cleanup = window.api.sandbox.onApprovalRequest(threadId, (request: unknown) => {
+      console.log("[ChatContainer] Received approval request:", request)
+      const req = request as Record<string, unknown>
+      // Convert the orchestrator approval request to the pendingApproval format
+      // with a marker so handleApprovalDecision can route it correctly.
+      setPendingApproval({
+        id: (req.id as string) || "",
+        tool_call: (req.tool_call as { id: string; name: string; args: Record<string, unknown> }) || { id: "", name: "execute", args: {} },
+        allowed_decisions: ["approve", "reject"],
+        command: req.command,
+        reason: req.reason,
+        _orchestratorRequestId: req.id,
+        _retryReason: req.retry_reason,
+        _approvalTypes: req.allowed_approval_types
+      } as any)
+    })
+    return cleanup
+  }, [threadId, setPendingApproval])
   const streamTodos = agentValues?.todos
   useEffect(() => {
     if (Array.isArray(streamTodos)) {
@@ -971,6 +1022,157 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+      {/* NUX: First-run sandbox setup dialog */}
+      {showNux && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+          <div className="bg-background border border-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 space-y-4">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="size-5 text-primary" />
+              <h2 className="text-lg font-bold">设置 Agent 沙箱环境</h2>
+            </div>
+
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              沙箱环境保护你的文件并控制网络访问，防止 Agent 意外修改系统或泄露数据。
+            </p>
+
+            {nuxError && (
+              <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400 space-y-2">
+                <p>管理员沙箱配置失败：{nuxError}</p>
+                <p>请重试，如仍无法配置请联系开发人员。</p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                    disabled={nuxLoading}
+                    onClick={() => setNuxError(null)}
+                  >
+                    重试
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!nuxError && (
+              <div className="flex flex-col gap-2">
+                <button
+                  className="flex items-center gap-3 rounded-lg border-2 border-primary bg-primary/5 p-4 text-left transition-colors hover:bg-primary/10 disabled:opacity-50"
+                  disabled={nuxLoading}
+                  onClick={async () => {
+                    setNuxLoading(true)
+                    setNuxError(null)
+                    try {
+                      const result = await window.api.sandbox.runElevatedSetup()
+                      if (result.success) {
+                        await window.api.sandbox.completeNux("elevated")
+                        setShowNux(false)
+                      } else {
+                        setNuxError(result.error || "配置失败")
+                      }
+                    } catch (e) {
+                      setNuxError(e instanceof Error ? e.message : String(e))
+                    } finally { setNuxLoading(false) }
+                  }}
+                >
+                  <ShieldCheck className="size-5 text-primary shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">默认沙箱 (需要管理员权限)</div>
+                    <div className="text-xs text-muted-foreground">推荐 — 独立用户 + 防火墙，最强隔离</div>
+                  </div>
+                </button>
+
+                <button
+                  className={`flex items-center gap-3 rounded-lg border-2 border-border p-4 text-left ${nuxUnlocked ? "transition-colors hover:border-primary/40 hover:bg-muted/40 disabled:opacity-50" : "opacity-50 cursor-not-allowed"}`}
+                  disabled={nuxUnlocked ? nuxLoading : true}
+                  onClick={nuxUnlocked ? async () => {
+                    setNuxLoading(true)
+                    try {
+                      await window.api.sandbox.completeNux("unelevated")
+                      setShowNux(false)
+                    } catch (e) { console.error(e) }
+                    finally { setNuxLoading(false) }
+                  } : undefined}
+                >
+                  <ShieldCheck className="size-5 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">非管理员沙箱 (风险较高)</div>
+                    <div className="text-xs text-muted-foreground">受限令牌隔离，无需管理员权限</div>
+                    {!nuxUnlocked && <div className="text-xs text-amber-500 mt-1">如需选择请联系开发人员</div>}
+                  </div>
+                </button>
+
+                <button
+                  className={`flex items-center gap-3 rounded-lg border-2 border-border p-4 text-left ${nuxUnlocked ? "transition-colors hover:border-primary/40 hover:bg-muted/40 disabled:opacity-50" : "opacity-50 cursor-not-allowed"}`}
+                  disabled={nuxUnlocked ? nuxLoading : true}
+                  onClick={nuxUnlocked ? async () => {
+                    setNuxLoading(true)
+                    try {
+                      await window.api.sandbox.completeNux("none")
+                      setShowNux(false)
+                    } catch (e) { console.error(e) }
+                    finally { setNuxLoading(false) }
+                  } : undefined}
+                >
+                  <X className="size-5 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">跳过</div>
+                    <div className="text-xs text-muted-foreground">不启用沙箱，可稍后在设置中配置</div>
+                    {!nuxUnlocked && <div className="text-xs text-amber-500 mt-1">如需选择请联系开发人员</div>}
+                  </div>
+                </button>
+
+                {/* Developer backdoor */}
+                {!nuxUnlocked && (
+                  <div className="pt-2 text-center">
+                    {!nuxDevMode ? (
+                      <button
+                        className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                        onClick={() => setNuxDevMode(true)}
+                      >
+                        开发人员通道
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-center gap-2">
+                        <input
+                          type="password"
+                          className="w-36 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+                          placeholder="请输入开发密码"
+                          value={nuxDevPassword}
+                          onChange={(e) => setNuxDevPassword(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && nuxDevPassword === "admin123456") {
+                              setNuxUnlocked(true)
+                              setNuxDevMode(false)
+                            }
+                          }}
+                          autoFocus
+                        />
+                        <button
+                          className="px-2 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                          onClick={() => {
+                            if (nuxDevPassword === "admin123456") {
+                              setNuxUnlocked(true)
+                              setNuxDevMode(false)
+                            }
+                          }}
+                        >
+                          确认
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {nuxLoading && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="size-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <span>正在配置...</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Copy notification */}
       {showCopyNotification && (
         <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
@@ -1265,6 +1467,77 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 />
               );
             })}
+            {/* Orchestrator approval request — shown as standalone bar when pending */}
+            {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
+              <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 text-amber-500" />
+                  <span className="text-sm font-medium">命令需要审批</span>
+                </div>
+                <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
+                  {(pendingApproval as Record<string, unknown>).command
+                    ? String((pendingApproval as Record<string, unknown>).command)
+                    : pendingApproval.tool_call?.args?.command
+                      ? String(pendingApproval.tool_call.args.command)
+                      : "unknown command"}
+                </div>
+                {(pendingApproval as Record<string, unknown>)._retryReason && (
+                  <div className="text-xs text-amber-600 dark:text-amber-400">
+                    {String((pendingApproval as Record<string, unknown>)._retryReason)}
+                  </div>
+                )}
+                {(pendingApproval as Record<string, unknown>).reason && (
+                  <div className="text-xs text-muted-foreground">
+                    原因：{String((pendingApproval as Record<string, unknown>).reason)}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {(pendingApproval as Record<string, unknown>)._retryReason ? (
+                    <>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
+                        onClick={() => handleApprovalDecision("approve")}
+                      >
+                        无沙箱重试
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                        onClick={() => handleApprovalDecision("reject")}
+                      >
+                        拒绝
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                        onClick={() => handleApprovalDecision("approve")}
+                      >
+                        运行
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                        onClick={() => handleApprovalDecision("approve_session")}
+                      >
+                        本会话允许
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                        onClick={() => handleApprovalDecision("approve_permanent")}
+                      >
+                        始终允许
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                        onClick={() => handleApprovalDecision("reject")}
+                      >
+                        拒绝
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">

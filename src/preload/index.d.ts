@@ -242,10 +242,18 @@ interface CustomAPI {
     getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
   sandbox: {
-    getMode: () => Promise<"none" | "unelevated">
-    setMode: (mode: "none" | "unelevated") => Promise<void>
+    getMode: () => Promise<"none" | "unelevated" | "readonly" | "elevated">
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated") => Promise<void>
+    checkElevatedSetup: () => Promise<{ setupComplete: boolean }>
+    runElevatedSetup: (workspacePaths?: string[]) => Promise<{ success: boolean; error?: string }>
     getYoloMode: () => Promise<boolean>
     setYoloMode: (yolo: boolean) => Promise<void>
+    isNuxNeeded: () => Promise<boolean>
+    completeNux: (mode: "elevated" | "unelevated" | "none") => Promise<void>
+    getApprovalRules: () => Promise<Array<{ pattern: string; decision: string }>>
+    deleteApprovalRule: (pattern: string) => Promise<void>
+    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
+    onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
 }
