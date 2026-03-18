@@ -185,7 +185,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
     const timeTag = `${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`
     dbCreateThread(threadId, {
       workspacePath,
-      title: `[机器人] ${msg.fromId} · ${timeTag}`,
+      title: `[远端机器人] ${robot.chatId} · ${timeTag}`,
       chatxChatId: msg.chatId,
       chatxSender: msg.fromId,
       chatxRobotChatId: msg.chatId
@@ -194,7 +194,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
     notifyRenderer("threads:changed")
   }
 
-  const channel = `chatx:stream:${threadId}`
+  const channel = `agent:stream:${threadId}`
   let hasStreamedContent = false
 
   try {

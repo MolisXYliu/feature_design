@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio } from "lucide-react"
 import type { ChatXRobotConfig } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -123,6 +123,11 @@ function ThreadListItem({
                     <>
                       <span className="shrink-0 text-[10px] px-1 py-px rounded bg-primary/15 text-primary font-medium">定时</span>
                       <span className="truncate">{thread.title.slice(5)}</span>
+                    </>
+                  ) : thread.title?.startsWith("[远端机器人] ") ? (
+                    <>
+                      <Radio className="size-3 shrink-0 text-green-400" />
+                      <span className="truncate">(远端) {thread.title.slice(8)}</span>
                     </>
                   ) : thread.title?.startsWith("[机器人] ") ? (
                     <>
