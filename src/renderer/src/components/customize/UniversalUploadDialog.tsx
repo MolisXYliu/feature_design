@@ -352,7 +352,7 @@ export function UniversalUploadDialog({
             </label>
             <Input
               id="user-id"
-              placeholder="输入用户ID（可选）"
+              placeholder="输入用户id"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               disabled={uploading}

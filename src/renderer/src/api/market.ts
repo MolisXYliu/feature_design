@@ -370,7 +370,7 @@ export const marketApi = {
       formData.append("user_id", userId)
     }
     const ip = localStorage.getItem('localIp')
-    formData.append('ip', ip )
+    formData.append('ip', ip)
 
     console.log(`Auto-incrementing version to: ${currentVersion}`)
 
