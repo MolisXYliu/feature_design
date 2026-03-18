@@ -22,11 +22,11 @@ function ThreadStatusIcon({ threadId }: { threadId: string }): React.JSX.Element
   if (isLoading || scheduledTaskLoading) {
     return <Loader2 className="size-4 shrink-0 text-status-info animate-spin" />
   }
-  
+
   if (pendingApproval) {
     return <AlertCircle className="size-4 shrink-0 text-status-warning" />
   }
-  
+
   return <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
 }
 
@@ -246,6 +246,17 @@ export function ThreadSidebar(): React.JSX.Element {
     await createThread({ title: `Thread ${new Date().toLocaleDateString()}` })
   }
 
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    ipcRenderer.on('version', (ver: any) => {
+      console.log('版本：', ver)
+      setVersion(ver)
+    })
+  }, [])
+
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-sidebar overflow-hidden">
       {/* New Thread Button - with dynamic safe area padding when zoomed out */}
@@ -346,7 +357,7 @@ export function ThreadSidebar(): React.JSX.Element {
         <div className="flex items-baseline">
           <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Rajdhani', sans-serif" }}>CMBDev</span>
           <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Claw</span>
-          <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">{__APP_VERSION__}</span>
+          <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">{version || __APP_VERSION__}</span>
         </div>
       </div>
     </aside>
