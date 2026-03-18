@@ -1224,16 +1224,16 @@ const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly">(["none", "unel
 type SandboxMode = "none" | "unelevated" | "readonly"
 
 function readSandboxSettings(): { mode: SandboxMode; yolo: boolean } {
-  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "none", yolo: false }
+  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "unelevated", yolo: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
     return {
-      mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "none",
+      mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "unelevated",
       yolo: parsed.yolo === true
     }
   } catch (err) {
     console.warn("[Storage] Failed to load sandbox settings:", err)
-    return { mode: "none", yolo: false }
+    return { mode: "unelevated", yolo: false }
   }
 }
 

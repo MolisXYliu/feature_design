@@ -881,20 +881,58 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Cached result of admin elevation check. */
   private static _isElevated: boolean | null = null
 
-  /** Check if the current process is running with administrator privileges (Windows only). Cached after first call. */
+  /**
+   * Check if the current process is running with administrator privileges (Windows only).
+   * Cached after first call.
+   *
+   * IMPORTANT: In packaged Electron apps, process.cwd() may point to an
+   * invalid or ASAR-internal path, causing execSync to fail even when the
+   * process IS elevated. We explicitly set cwd to %SYSTEMROOT% and add
+   * windowsHide to prevent spurious failures.
+   *
+   * Uses two detection methods:
+   * 1. `net session` — classic, depends on LanmanServer service
+   * 2. `whoami /groups` + High Mandatory Level SID (S-1-16-12288) — most reliable,
+   *    queries the process token directly, no service dependency
+   *
+   * NOTE: Do NOT use `fsutil dirty query` — it succeeds without admin on Windows 11.
+   */
   static isElevated(): boolean {
     if (LocalSandbox._isElevated !== null) return LocalSandbox._isElevated
     if (process.platform !== "win32") {
       LocalSandbox._isElevated = false
       return false
     }
+    // Use a known-good cwd to avoid failures in packaged Electron apps
+    // where process.cwd() may point inside app.asar or a non-existent directory.
+    const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
+
+    // Method 1: net session (requires admin, depends on LanmanServer service)
     try {
-      execSync("net session", { stdio: "ignore" })
+      execSync("net session", { stdio: "ignore", windowsHide: true, cwd: safeCwd })
       LocalSandbox._isElevated = true
-    } catch {
-      LocalSandbox._isElevated = false
+      console.log("[LocalSandbox] isElevated=true (net session)")
+      return true
+    } catch (e) {
+      console.log("[LocalSandbox] net session failed:", (e as Error).message?.slice(0, 120))
     }
-    return LocalSandbox._isElevated
+    // Method 2: whoami /groups — check for High Mandatory Level SID (S-1-16-12288)
+    // This queries the process token directly, independent of any service.
+    // High = admin elevated, Medium (S-1-16-8192) = normal user or non-elevated admin.
+    try {
+      const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
+      if (output.includes("S-1-16-12288")) {
+        LocalSandbox._isElevated = true
+        console.log("[LocalSandbox] isElevated=true (whoami /groups)")
+        return true
+      }
+      console.log("[LocalSandbox] whoami: no High Mandatory Level SID found")
+    } catch (e) {
+      console.log("[LocalSandbox] whoami failed:", (e as Error).message?.slice(0, 120))
+    }
+    LocalSandbox._isElevated = false
+    console.log("[LocalSandbox] isElevated=false")
+    return false
   }
 
   /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done. */
