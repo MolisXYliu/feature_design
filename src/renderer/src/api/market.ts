@@ -316,6 +316,8 @@ export const marketApi = {
     if (userId) {
       formData.append("user_id", userId)
     }
+    const ip = localStorage.getItem('localIp')
+    formData.append('ip',ip )
 
     const response = await fetch(ENDPOINTS.upload, {
       method: "POST",
@@ -367,6 +369,8 @@ export const marketApi = {
     if (userId) {
       formData.append("user_id", userId)
     }
+    const ip = localStorage.getItem('localIp')
+    formData.append('ip', ip )
 
     console.log(`Auto-incrementing version to: ${currentVersion}`)
 

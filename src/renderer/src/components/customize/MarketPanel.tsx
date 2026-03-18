@@ -104,6 +104,8 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = 
   const handleLocalDownload = () => {
     onDownload(item, true) // Download to local file system
   }
+  const ip = localStorage.getItem('localIp')
+
 
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
@@ -233,8 +235,6 @@ export function MarketPanel(): React.JSX.Element {
     open: false,
     type: "skill"
   })
-
-   const ip = localStorage.getItem('localIp')
 
   // Load data for current tab
   useEffect(() => {
