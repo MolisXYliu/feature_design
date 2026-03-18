@@ -416,11 +416,21 @@ export function MarketPanel(): React.JSX.Element {
               response = await marketApi.getSkills()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
-                const dataWithFlags = response.data.map(item => ({
-                  ...item,
-                  canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
-                  installed: installedSkills.includes(item.name)  // 添加已安装状态
-                }))
+
+                const dataWithFlags = response.data.map(item => {
+                  // todo encrypt-password暂时写死
+                  const EncryptPasswordLabel = 'encrypt-password'
+                  const isEncryptPassword = (item.name===EncryptPasswordLabel || item.filename?.includes(EncryptPasswordLabel))
+                  let installTarget =  installedSkills.includes(item.name)
+                  if (isEncryptPassword){
+                    installTarget =   installedSkills.includes(EncryptPasswordLabel)
+                  }
+                  return {
+                    ...item,
+                    canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
+                    installed: installTarget // 添加已安装状态
+                  }
+                })
                 setSkillsData(dataWithFlags)
               }
             }
