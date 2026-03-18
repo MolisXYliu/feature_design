@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react"
-import { Cpu, FolderOpen, Plus, Trash2, Pencil } from "lucide-react"
+import { Cpu, FolderOpen, Plus, Trash2, Pencil, Radio } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -88,7 +88,7 @@ function RobotEditDialog(props: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editRobot ? "编辑机器人" : "添加机器人"}</DialogTitle>
           <DialogDescription>配置机器人的连接参数。所有字段均为必填。</DialogDescription>
@@ -180,8 +180,37 @@ function RobotDetail(props: {
 
   if (!robot) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-        选择左侧机器人查看详情
+      <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+        <div className="max-w-md space-y-6">
+          <div className="text-center space-y-3">
+            <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+              <Radio className="size-7 text-muted-foreground/60" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/80">机器人管理</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              通过 WebSocket 接收远端消息，自动调用 AI 处理后将结果通过 HTTP 回复。支持配置多个独立的机器人，每个机器人拥有独立的会话、模型和工作目录。
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">如何使用？</p>
+              <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>填写全局 WebSocket 地址和用户 IP，开启服务</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>点击 <span className="font-medium text-foreground/60">+</span> 添加机器人，配置会话 ID、HTTP 回复地址等参数</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>远端消息通过 WS 推送到本地，AI 自动处理并通过 HTTP 回复</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>也可在侧边栏主动创建机器人对话，回复同样发送到远端</li>
+              </ul>
+            </div>
+
+            <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+              <p className="text-sm font-medium text-foreground/70">适用场景</p>
+              <p className="text-[13px] text-muted-foreground leading-relaxed">
+                企业微信、飞书、钉钉等即时通讯平台的消息自动回复，客服机器人，远程任务执行与通知。每个机器人配置独立，互不影响。
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
