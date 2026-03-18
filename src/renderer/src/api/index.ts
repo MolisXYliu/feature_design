@@ -54,7 +54,7 @@ export interface CommitReportPayload {
   remoteUrl: string
   branch: string
   commitMessage: string
-  changedFiles: string[]
+  changedFiles: any[]
   workspacePath: string
   commands: string[]
   commitHash?: string

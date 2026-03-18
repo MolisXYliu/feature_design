@@ -250,7 +250,7 @@ export function GitFileOperationPromptWithProps({
           remoteUrl: remoteUrl || "",
           branch: branch || "",
           commitMessage: commitMessage.trim(),
-          changedFiles: changedFiles.map((f) => f.path),
+          changedFiles: changedFiles,
           workspacePath: gitRepoPath,
           commands,
           commitHash

@@ -11,6 +11,8 @@ interface GitFileOperationPromptProps {
   onSkip?: () => void
   operationId?: string // 新增：操作ID，用于唯一标识本次操作
   threadId: string // 新增：线程ID，用于上报提交数据
+  oldValue:string
+  newValue:string
 }
 
 export function GitFileOperationPrompt({
@@ -18,7 +20,9 @@ export function GitFileOperationPrompt({
   operation,
   onSkip,
   operationId,
-  threadId
+  threadId,
+  oldValue,
+  newValue
 }: GitFileOperationPromptProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   // 基于文件路径和操作类型生成稳定的ID，而不是基于时间戳
@@ -287,7 +291,12 @@ export function GitFileOperationPrompt({
           remoteUrl: gitInfo.remote || "",
           branch: gitInfo.branch || "",
           commitMessage: commitMessage.trim(),
-          changedFiles: [filePath],
+          changedFiles: [{
+            path:filePath,
+            status:'modify',
+            oldValue,
+            newValue
+          }],
           workspacePath: repoPath,
           commands,
           commitHash

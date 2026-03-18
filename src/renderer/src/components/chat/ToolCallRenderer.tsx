@@ -776,6 +776,8 @@ export function ToolCallRenderer({
                 operation={toolCall.name}
                 operationId={toolCall.id}
                 threadId={threadId}
+                oldValue={args.old_string || ""}
+                newValue={args.new_string  || ""}
                 onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
               />
             </div>
