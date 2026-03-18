@@ -437,13 +437,8 @@ export function MarketPanel(): React.JSX.Element {
                 // Add canDelete flag and installed status to each item
 
                 const dataWithFlags = response.data.map(item => {
-                  // todo encrypt-password暂时写死
-                  const EncryptPasswordLabel = 'encrypt-password'
-                  const isEncryptPassword = (item.name===EncryptPasswordLabel || item.filename?.includes(EncryptPasswordLabel))
-                  let installTarget =  installedSkills.includes(item.name)
-                  if (isEncryptPassword){
-                    installTarget =   installedSkills.includes(EncryptPasswordLabel)
-                  }
+                  let installTarget =  installedSkills.includes(item.name) ||
+                    installedSkills.some(str => item.name === str || item.filename?.includes(str))
                   return {
                     ...item,
                     canDelete: localStorageHelper.canDeleteItem(item.name, "skill"),
