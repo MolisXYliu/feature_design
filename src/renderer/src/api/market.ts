@@ -1,4 +1,3 @@
-
 export type MarketItemType = "skill" | "mcp" | "plugin"
 
 
@@ -38,8 +37,10 @@ export interface MarketItem {
   created_at: string
   category?: string // Add category field
   featured?: string // eg:官方推荐；精品；热门；个人；
-  version?:string // eg:1.0.1
+  version?: string // eg:1.0.1
   user_id?: string // 110
+  guidance?: string // Usage guidance for the skill/item
+  chinese_name?: string // Chinese name for the skill/item
   // Only keep essential UI fields for compatibility
   id?: string
   type?: MarketItemType
@@ -47,11 +48,19 @@ export interface MarketItem {
   canDelete?: boolean
 }
 
+export interface MarketUpdateResponse {
+  type: string
+  name: string
+  message: string
+  s3_path: string
+}
+
 // Updated API endpoints to match exact specification
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
+  update: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`,
   download: (resourceType: string, name: string) => `${API_BASE_URL}/download/${resourceType}/${name}`,
   delete: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`
 }
@@ -287,7 +296,7 @@ export const marketApi = {
     return { success: true }
   },
 
-  async uploadFile(file: File, resourceType: string, name: string, description: string, category:string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
+  async uploadFile(file: File, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
     console.log(`Uploading ${resourceType} file: ${file.name} category:${category}`)
 
     const formData = new FormData()
@@ -296,6 +305,16 @@ export const marketApi = {
     formData.append("description", description)
     formData.append("file", file)
     formData.append("category", category)
+    formData.append("version", "1.0.0") // Set default version to 1.0.0 for first upload
+    if (guidance) {
+      formData.append("guidance", guidance)
+    }
+    if (chineseName) {
+      formData.append("chinese_name", chineseName)
+    }
+    if (userId) {
+      formData.append("user_id", userId)
+    }
 
     const response = await fetch(ENDPOINTS.upload, {
       method: "POST",
@@ -313,6 +332,91 @@ export const marketApi = {
     return {
       success: true,
       data
+    }
+  },
+
+  async updateItem(file: File, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
+    console.log(`Updating ${resourceType} item: ${name} category:${category}`)
+
+    // First, get the current item to retrieve its version
+    let currentVersion = "1.0.1" // Start from 1.0.1 for first update
+    try {
+      const currentItems = await this.getItemsByType(resourceType)
+      const currentItem = currentItems.data?.find(item => item.name === name)
+      if (currentItem && currentItem.version) {
+        currentVersion = this.incrementVersion(currentItem.version)
+      }
+    } catch (error) {
+      console.warn("Could not retrieve current version, using default increment:", error)
+    }
+
+    const formData = new FormData()
+    formData.append("resource_type", resourceType)
+    formData.append("name", name)
+    formData.append("description", description)
+    formData.append("file", file)
+    formData.append("category", category)
+    formData.append("version", currentVersion) // Add auto-incremented version
+    if (guidance) {
+      formData.append("guidance", guidance)
+    }
+    if (chineseName) {
+      formData.append("chinese_name", chineseName)
+    }
+    if (userId) {
+      formData.append("user_id", userId)
+    }
+
+    console.log(`Auto-incrementing version to: ${currentVersion}`)
+
+    const response = await fetch(ENDPOINTS.update(resourceType, name), {
+      method: "PUT",
+      headers: {
+        Authorization: "Bearer your-api-token"
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const data: MarketUpdateResponse = await response.json()
+    return {
+      success: true,
+      data
+    }
+  },
+
+  // Helper method to increment version number
+  incrementVersion(version: string): string {
+    const versionParts = version.split('.')
+    if (versionParts.length !== 3) {
+      // Invalid version format, return default increment
+      return "1.0.1"
+    }
+
+    const [major, minor, patch] = versionParts.map(part => parseInt(part, 10))
+
+    if (isNaN(major) || isNaN(minor) || isNaN(patch)) {
+      return "1.0.1"
+    }
+
+    // Increment patch version by 1
+    return `${major}.${minor}.${patch + 1}`
+  },
+
+  // Helper method to get items by type (reusing existing logic)
+  async getItemsByType(resourceType: string): Promise<MarketApiResponse> {
+    switch (resourceType) {
+      case "skill":
+        return this.getSkills()
+      case "mcp":
+        return this.getMcps()
+      case "plugin":
+        return this.getPlugins()
+      default:
+        throw new Error(`Unknown resource type: ${resourceType}`)
     }
   }
 }

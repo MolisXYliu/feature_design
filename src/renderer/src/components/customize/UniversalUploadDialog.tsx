@@ -1,4 +1,4 @@
-import { useState } from "react"
+import React, { useState } from "react"
 import { Upload, Copy, Check, ChevronDown, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -21,8 +21,13 @@ interface UniversalUploadDialogProps {
     file: File,
     name: string,
     description: string,
-    category: string
+    category: string,
+    guidance?: string,
+    chineseName?: string,
+    userId?: string
   ) => Promise<{ success: boolean; error?: string }>
+  isUpdate?: boolean
+  existingItem?: { name: string; description: string; category: string; guidance?: string; chinese_name?: string; user_id?: string }
 }
 
 export function UniversalUploadDialog({
@@ -30,7 +35,9 @@ export function UniversalUploadDialog({
   onOpenChange,
   onSuccess,
   resourceType,
-  onUpload
+  onUpload,
+  isUpdate,
+  existingItem
 }: UniversalUploadDialogProps): React.JSX.Element {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -39,6 +46,29 @@ export function UniversalUploadDialog({
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [category, setCategory] = useState<"研发场景" | "通用场景">("研发场景")
+  const [guidance, setGuidance] = useState("")
+  const [chineseName, setChineseName] = useState("")
+  const [userId, setUserId] = useState("")
+
+  // Initialize form with existing data for update mode
+  React.useEffect(() => {
+    if (isUpdate && existingItem && open) {
+      setName(existingItem.name || "")
+      setDescription(existingItem.description || "")
+      setCategory(existingItem.category as "研发场景" | "通用场景" || "研发场景")
+      setGuidance(existingItem.guidance || "")
+      setChineseName(existingItem.chinese_name || "")
+      setUserId(existingItem.user_id || "")
+    } else if (!isUpdate && open) {
+      // Reset form for new upload
+      setName("")
+      setDescription("")
+      setCategory("研发场景")
+      setGuidance("")
+      setChineseName("")
+      setUserId("")
+    }
+  }, [isUpdate, existingItem, open])
 
   const getAcceptedTypes = () => {
     switch (resourceType) {
@@ -118,7 +148,7 @@ export function UniversalUploadDialog({
     setUploading(true)
 
     try {
-      const result = await onUpload(file, name.trim(), description.trim(), category)
+      const result = await onUpload(file, name.trim(), description.trim(), category, guidance, chineseName.trim() || undefined, userId.trim() || undefined)
 
       if (result.success) {
         onSuccess()
@@ -127,6 +157,9 @@ export function UniversalUploadDialog({
         setFile(null)
         setName("")
         setDescription("")
+        setGuidance("")
+        setChineseName("")
+        setUserId("")
       } else {
         setError(result.error || "Upload failed")
       }
@@ -172,15 +205,28 @@ export function UniversalUploadDialog({
   }
 
   const getTitle = () => {
-    switch (resourceType) {
-      case "skill":
-        return "上传技能到市场"
-      case "mcp":
-        return "上传MCP连接器到市场"
-      case "plugin":
-        return "上传插件到市场"
-      default:
-        return "上传到市场"
+    if (isUpdate) {
+      switch (resourceType) {
+        case "skill":
+          return "更新技能"
+        case "mcp":
+          return "更新MCP连接器"
+        case "plugin":
+          return "更新插件"
+        default:
+          return "更新资源"
+      }
+    } else {
+      switch (resourceType) {
+        case "skill":
+          return "上传技能到市场"
+        case "mcp":
+          return "上传MCP连接器到市场"
+        case "plugin":
+          return "上传插件到市场"
+        default:
+          return "上传到市场"
+      }
     }
   }
 
@@ -230,7 +276,7 @@ export function UniversalUploadDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[50vh] overflow-auto">
           {/* File Upload Area */}
           <div
             className={cn(
@@ -269,13 +315,46 @@ export function UniversalUploadDialog({
           {/* Name Input */}
           <div className="space-y-2">
             <label htmlFor="name" className="block text-sm font-medium">
-              名称 *
+              英文名称 *
             </label>
             <Input
               id="name"
               placeholder="输入资源名称"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              disabled={uploading || isUpdate}
+              className={isUpdate ? "bg-muted" : ""}
+            />
+            {isUpdate && (
+              <p className="text-xs text-muted-foreground">更新时名称不可修改</p>
+            )}
+          </div>
+
+
+          {/* Chinese Name Input */}
+          <div className="space-y-2">
+            <label htmlFor="chinese-name" className="block text-sm font-medium">
+              中文名称
+            </label>
+            <Input
+              id="chinese-name"
+              placeholder="输入中文名称（可选）"
+              value={chineseName}
+              onChange={(e) => setChineseName(e.target.value)}
+              disabled={uploading}
+            />
+          </div>
+
+          {/* User ID Input */}
+          <div className="space-y-2">
+            <label htmlFor="user-id" className="block text-sm font-medium">
+              用户ID
+            </label>
+            <Input
+              id="user-id"
+              placeholder="输入用户ID（可选）"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
               disabled={uploading}
             />
           </div>
@@ -312,6 +391,23 @@ export function UniversalUploadDialog({
               <option value="通用场景">通用场景</option>
             </select>
           </div>
+
+          {/* Guidance Input - Available for all modes */}
+          <div className="space-y-2">
+            <label htmlFor="guidance" className="block text-sm font-medium">
+              使用指引
+            </label>
+            <textarea
+              id="guidance"
+              placeholder="输入使用指引（可选）- 帮助其他用户了解如何使用这个资源"
+              value={guidance}
+              onChange={(e) => setGuidance(e.target.value)}
+              disabled={uploading}
+              rows={3}
+              className="w-full p-2 text-sm border rounded-md focus:ring-1 focus:ring-primary focus:outline-none disabled:opacity-50"
+            />
+          </div>
+
 
           {/* JSON Template for MCP */}
           {resourceType === "mcp" && (

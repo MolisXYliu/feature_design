@@ -13,7 +13,8 @@ import {
   Tag,
   Star,
   Shield,
-  User
+  User,
+  Edit
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -90,11 +91,12 @@ const localStorageHelper = {
 interface MarketItemCardProps {
   item: MarketItem
   onDelete: (item: MarketItem) => void
+  onUpdate: (item: MarketItem) => void
   onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
   isDownloading?: boolean
 }
 
-function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: MarketItemCardProps) {
+function MarketItemCard({ item, onDelete, onUpdate, onDownload, isDownloading = false }: MarketItemCardProps) {
   const handleInstallDownload = () => {
     onDownload(item, false) // Install to application
   }
@@ -143,19 +145,38 @@ function MarketItemCard({ item, onDelete, onDownload, isDownloading = false }: M
             </>
           )}
           {item.canDelete && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-              onClick={() => onDelete(item)}
-            >
-              <Trash2 className="size-3" />
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700"
+                onClick={() => onUpdate(item)}
+                title="更新"
+              >
+                <Edit className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                onClick={() => onDelete(item)}
+                title="删除"
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </>
           )}
         </div>
       </div>
 
       <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{item.description}</p>
+
+      {/* Display guidance if available */}
+      {item.guidance && (
+        <p className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded mb-2">
+          💡 {item.guidance}
+        </p>
+      )}
 
       <div className="text-xs text-muted-foreground">
         {item.filename} • Created {new Date(item.created_at).toLocaleDateString()}
@@ -204,6 +225,10 @@ export function MarketPanel(): React.JSX.Element {
     itemName: ""
   })
   const [uploadDialog, setUploadDialog] = useState(false)
+  const [updateDialog, setUpdateDialog] = useState<{ open: boolean; item: MarketItem | null }>({
+    open: false,
+    item: null
+  })
   const [uploadSuccess, setUploadSuccess] = useState<{ open: boolean; type: MarketItemType }>({
     open: false,
     type: "skill"
@@ -402,9 +427,13 @@ export function MarketPanel(): React.JSX.Element {
     setUploadDialog(true)
   }
 
-  const handleUniversalUpload = async (file: File, name: string, description: string, category:string) => {
+  const handleUpdate = (item: MarketItem) => {
+    setUpdateDialog({ open: true, item })
+  }
+
+  const handleUniversalUpload = async (file: File, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string) => {
     try {
-      const result = await marketApi.uploadFile(file, activeTab, name, description, category)
+      const result = await marketApi.uploadFile(file, activeTab, name, description, category, guidance, chineseName, userId)
 
       // If upload is successful, record it in localStorage
       if (result.success) {
@@ -419,6 +448,39 @@ export function MarketPanel(): React.JSX.Element {
         success: false,
         error: error instanceof Error ? error.message : "上传失败"
       }
+    }
+  }
+
+  const handleUniversalUpdate = async (file: File, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string) => {
+    try {
+      const result = await marketApi.updateItem(file, activeTab, name, description, category, guidance, chineseName, userId)
+
+      // Update is successful, no need to update localStorage since item already exists
+      return result
+    } catch (error) {
+      console.error("Failed to update file:", error)
+      setError(error instanceof Error ? error.message : "更新失败")
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "更新失败"
+      }
+    }
+  }
+
+  const handleUpdateSuccess = () => {
+    setUploadSuccess({ open: true, type: activeTab })
+    setUpdateDialog({ open: false, item: null })
+    // Reload the current tab data
+    switch (activeTab) {
+      case "skill":
+        setSkillsData([])
+        break
+      case "mcp":
+        setMcpsData([])
+        break
+      case "plugin":
+        setPluginsData([])
+        break
     }
   }
 
@@ -513,6 +575,7 @@ export function MarketPanel(): React.JSX.Element {
                       key={item.id}
                       item={item}
                       onDelete={handleDelete}
+                      onUpdate={handleUpdate}
                       onDownload={handleDownload}
                       isDownloading={downloadingItems.has(item.id || item.name)}
                     />
@@ -599,6 +662,24 @@ export function MarketPanel(): React.JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Update dialog using UniversalUploadDialog component */}
+      <UniversalUploadDialog
+        open={updateDialog.open}
+        onOpenChange={(open) => setUpdateDialog({ open, item: null })}
+        onSuccess={handleUpdateSuccess}
+        resourceType={activeTab}
+        onUpload={handleUniversalUpdate}
+        isUpdate={true}
+        existingItem={updateDialog.item ? {
+          name: updateDialog.item.name,
+          description: updateDialog.item.description,
+          category: updateDialog.item.category || "研发场景",
+          guidance: updateDialog.item.guidance,
+          chinese_name: updateDialog.item.chinese_name,
+          user_id: updateDialog.item.user_id
+        } : undefined}
+      />
     </div>
   )
 }
