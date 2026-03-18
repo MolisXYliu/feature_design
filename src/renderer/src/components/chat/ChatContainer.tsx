@@ -325,6 +325,34 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }).catch((e) => console.warn("[NUX] Failed to check:", e))
   }, [])
 
+  // Thinking messages: loading 时轮换提示语
+  useEffect(() => {
+    const currentMessageCount = streamData.messages.length
+
+    if (!isLoading) {
+      wasLoadingRef.current = false
+      loadingMessageCountRef.current = 0
+      return
+    }
+
+    // First entering loading for this turn.
+    if (!wasLoadingRef.current) {
+      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
+      setThinkingMessageIndex(thinkingCycleRef.current)
+      loadingMessageCountRef.current = currentMessageCount
+      wasLoadingRef.current = true
+      return
+    }
+
+    // During the same turn, if new streamed messages arrive (e.g. tool round-trip),
+    // switch to next slogan once to mimic "stage changed" feedback.
+    if (currentMessageCount > loadingMessageCountRef.current) {
+      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
+      setThinkingMessageIndex(thinkingCycleRef.current)
+      loadingMessageCountRef.current = currentMessageCount
+    }
+  }, [isLoading, streamData.messages.length])
+
   useEffect(() => {
     uploadLoChatData(threadMessages)
   }, [threadMessages, uploadLoChatData])
@@ -397,6 +425,17 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       )
     }
   }, [streamTodos, setTodos])
+
+  // Apple Intelligence glow: loading 时显示，淡出由 CSS animation + onAnimationEnd 控制
+  useEffect(() => {
+    if (isLoading) {
+      setGlowVisible(true)
+      return
+    }
+    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
+    const timer = setTimeout(() => setGlowVisible(false), 3000)
+    return () => clearTimeout(timer)
+  }, [isLoading])
 
   const prevLoadingRef = useRef(false)
   useEffect(() => {
@@ -1183,7 +1222,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               </div>
-              <span>已复制目标链���到剪切板，请在浏览器中打开查看</span>
+              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
             </div>
           </div>
         </div>
@@ -1604,7 +1643,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   className={cn(
                     "relative z-[1] flex-1 resize-none rounded-xl border border-border",
                     "px-4 py-3 text-sm placeholder:text-muted-foreground",
-                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 shadow-sm",
+                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-70 shadow-sm",
                     "transition-colors duration-300",
                     glowVisible ? "bg-white/80" : "bg-white"
                   )}
