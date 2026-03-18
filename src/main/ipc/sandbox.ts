@@ -94,6 +94,11 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
       const tmpDir = process.env.TEMP || process.env.TMP || join(home, "AppData", "Local", "Temp")
       const userProfile = process.env.USERPROFILE || home
 
+      const realUser = process.env.USERNAME
+      if (!realUser) {
+        return { success: false, error: "无法获取当前用户名（USERNAME 环境变量缺失）" }
+      }
+
       const payload = {
         version: SETUP_VERSION,
         offline_username: "CodexSandboxOffline",
@@ -102,7 +107,7 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
         command_cwd: home,
         read_roots: [userProfile],
         write_roots: [tmpDir],
-        real_user: process.env.USERNAME || "Administrators",
+        real_user: realUser,
         refresh_only: false
       }
       const b64 = Buffer.from(JSON.stringify(payload)).toString("base64")

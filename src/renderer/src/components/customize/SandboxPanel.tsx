@@ -323,12 +323,22 @@ export function SandboxPanel(): React.JSX.Element {
                 <Info className="size-4 mt-0.5 shrink-0" />
                 <p>{elevatedSetupError}</p>
               </div>
-              <button
-                onClick={handleFallbackToUnelevated}
-                className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
-              >
-                回退到 Unelevated 沙箱
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleSelectMode("elevated")}
+                  disabled={modePending}
+                  className="rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
+                >
+                  重试
+                </button>
+                <button
+                  onClick={handleFallbackToUnelevated}
+                  disabled={modePending}
+                  className="rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
+                >
+                  回退到 Unelevated 沙箱
+                </button>
+              </div>
             </div>
           )}
         </div>
