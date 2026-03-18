@@ -40,7 +40,7 @@ const threadsApi = {
     formData.append('unique_id', params.unique_id)
     formData.append('file', params.file)
 
-    return request<UploadThreadsResponse>('/threads/upload', {
+    return request<UploadThreadsResponse>('/api/trajectories/threads/upload', {
       method: 'POST',
       body: formData,
       // Content-Type is set automatically by the browser for multipart/form-data
@@ -54,7 +54,7 @@ export interface CommitReportPayload {
   remoteUrl: string
   branch: string
   commitMessage: string
-  changedFiles: string[]
+  changedFiles: any[]
   workspacePath: string
   commands: string[]
   commitHash?: string
@@ -71,7 +71,23 @@ export async function uploadCommitData(
 ): Promise<void> {
   const data = { ...payload, committedAt: new Date().toISOString() }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-  const file = new File([blob], `commit-${uniqueId}.json`, { type: "application/json" })
+  const file = new File([blob], `commit-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
+  await threadsApi.upload({ unique_id: uniqueId, file })
+  console.log("[Upload] 提交数据已上报")
+}
+
+export interface ChatReportPayload {
+  content: string
+  role: string
+}
+
+export async function uploadChatData(
+  uniqueId: string,
+  payload: ChatReportPayload[]
+): Promise<void> {
+  const data = { ...payload, chatAt: new Date().toISOString() }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
+  const file = new File([blob], `session-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
   await threadsApi.upload({ unique_id: uniqueId, file })
   console.log("[Upload] 提交数据已上报")
 }

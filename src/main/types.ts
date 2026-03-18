@@ -198,6 +198,7 @@ export interface McpConnectorConfig {
   url: string
   enabled: boolean
   advanced?: McpConnectorAdvanced
+  lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
   createdAt: string
   updatedAt: string
 }
@@ -207,6 +208,7 @@ export interface McpConnectorUpsert {
   url: string
   enabled?: boolean
   advanced?: McpConnectorAdvanced
+  lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
 }
 
 // Scheduled Task types
@@ -219,6 +221,7 @@ export interface ScheduledTask {
   prompt: string
   modelId: string | null
   workDir: string | null
+  chatxRobotChatId: string | null // 关联的机器人会话ID，执行完后 HTTP 回复
   frequency: ScheduledTaskFrequency
   runAt: string | null            // ISO 时间戳，仅 once 类型使用
   runAtTime: string | null       // "HH:mm" 格式，如 "09:00"
@@ -238,6 +241,7 @@ export interface ScheduledTaskUpsert {
   prompt: string
   modelId: string | null
   workDir: string | null
+  chatxRobotChatId?: string | null
   frequency: ScheduledTaskFrequency
   runAt?: string | null
   runAtTime?: string | null
@@ -331,6 +335,26 @@ export type ApprovalDecisionType = "approve" | "approve_session" | "approve_perm
 export interface ApprovalDecision {
   type: ApprovalDecisionType
   tool_call_id: string
+}
+
+// ChatX types
+export interface ChatXRobotConfig {
+  chatId: string
+  httpUrl: string
+  fromId: string
+  clientId: string
+  clientSecret: string
+  channel: string
+  toUserList: string[]
+  modelId: string | null
+  workDir: string | null
+}
+
+export interface ChatXConfig {
+  enabled: boolean
+  wsUrl: string
+  userIp: string
+  robots: ChatXRobotConfig[]
 }
 
 // Skills types

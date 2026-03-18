@@ -38,6 +38,7 @@ interface ToolCallRendererProps {
   retryReason?: string
   /** Which approval button types to show */
   approvalTypes?: ("approve" | "approve_session" | "approve_permanent" | "reject")[]
+  threadId: string
 }
 
 const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -503,7 +504,8 @@ export function ToolCallRenderer({
   showApprovalButtons = true,
   onApprovalDecision,
   retryReason,
-  approvalTypes = ["approve", "approve_session", "approve_permanent", "reject"]
+  approvalTypes = ["approve", "approve_session", "approve_permanent", "reject"],
+  threadId
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
@@ -709,7 +711,7 @@ export function ToolCallRenderer({
         // Collapsed view - show output preview
         if (output.trim()) {
           return (
-            <div className="space-y-2">
+            <pre className="space-y-2">
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
                 <span>Command completed</span>
@@ -718,7 +720,7 @@ export function ToolCallRenderer({
                 {output.slice(0, 500)}
                 {output.length > 500 && "..."}
               </pre>
-            </div>
+            </pre>
           )
         }
         return (
@@ -780,6 +782,9 @@ export function ToolCallRenderer({
                 filePath={path}
                 operation={toolCall.name}
                 operationId={toolCall.id}
+                threadId={threadId}
+                oldValue={args.old_string || ""}
+                newValue={args.new_string  || ""}
                 onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
               />
             </div>
@@ -879,6 +884,7 @@ export function ToolCallRenderer({
               changedFiles={changedFiles}
               operation="git_workflow"
               operationId={toolCall.id}
+              threadId={threadId}
               onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
             />
           </div>
@@ -994,39 +1000,42 @@ export function ToolCallRenderer({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2 flex-wrap">
-                {approvalTypes.includes("reject") && (
-                  <button
-                    className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
-                    onClick={handleReject}
-                  >
-                    拒绝
-                  </button>
-                )}
-                {approvalTypes.includes("approve") && (
-                  <button
-                    className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
-                  >
-                    {retryReason ? "无沙箱重试" : "运行"}
-                  </button>
-                )}
-                {!retryReason && approvalTypes.includes("approve_session") && (
-                  <button
-                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-sm hover:bg-blue-700 transition-colors"
-                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_session") }}
-                  >
-                    本会话允许
-                  </button>
-                )}
-                {!retryReason && approvalTypes.includes("approve_permanent") && (
-                  <button
-                    className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-sm hover:bg-purple-700 transition-colors"
-                    onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_permanent") }}
-                  >
-                    始终允许
-                  </button>
-                )}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-status-warning bg-status-warning/10 px-2 py-1 rounded-sm">💡 启用 YOLO 模式可跳过审批</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {approvalTypes.includes("reject") && (
+                    <button
+                      className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"
+                      onClick={handleReject}
+                    >
+                      拒绝
+                    </button>
+                  )}
+                  {approvalTypes.includes("approve") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
+                    >
+                      {retryReason ? "无沙箱重试" : "运行"}
+                    </button>
+                  )}
+                  {!retryReason && approvalTypes.includes("approve_session") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-sm hover:bg-blue-700 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_session") }}
+                    >
+                      本会话允许
+                    </button>
+                  )}
+                  {!retryReason && approvalTypes.includes("approve_permanent") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-sm hover:bg-purple-700 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_permanent") }}
+                    >
+                      始终允许
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}

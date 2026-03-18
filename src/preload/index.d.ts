@@ -13,6 +13,7 @@ import type {
   PluginMetadata,
   PluginManifest
 } from "../main/types"
+import {UserInfoConfig} from '../main/storage'
 
 interface ElectronAPI {
   ipcRenderer: {
@@ -104,6 +105,8 @@ interface CustomAPI {
       apiKey?: string
       maxTokens?: number
     }) => Promise<{ id: string }>
+    upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
+    getUserInfo: () => Promise<UserInfoConfig | null>
     deleteCustomConfig: (id: string) => Promise<void>
   }
   workspace: {

@@ -347,6 +347,17 @@ export interface CustomModelConfig {
   maxTokens?: number
 }
 
+export interface UserInfoConfig {
+  sapId?: string//8
+  ystId?: string//6
+  userName?: string
+  originOrgId?: string
+  orgName?: string
+  ystRefreshToken?: string
+  ystCode?: string
+  ystAccessToken?: string
+}
+
 export const DEFAULT_MAX_TOKENS = 128_000
 export const MIN_MAX_TOKENS = 32_000
 export const MAX_MAX_TOKENS = 128_000
@@ -370,6 +381,7 @@ interface StoredCustomModelRecord {
 
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
 const CUSTOM_MODELS_FILE = join(OPENWORK_DIR, "custom-models.json")
+const USERINFO_MODELS_FILE = join(OPENWORK_DIR, "userinfo-models.json")
 
 function normalizeMaxTokens(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -489,6 +501,10 @@ function writeCustomModelsRaw(items: StoredCustomModelRecord[]): void {
   writeFileSync(CUSTOM_MODELS_FILE, JSON.stringify(items, null, 2))
 }
 
+function writeUserInfoModelsRaw(items: UserInfoConfig): void {
+  writeFileSync(USERINFO_MODELS_FILE, JSON.stringify(items, null, 2))
+}
+
 function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -567,6 +583,13 @@ export function getCustomModelConfigById(id: string): CustomModelConfig | null {
   }
 }
 
+export function getUserInfo(): UserInfoConfig | null {
+  if (!existsSync(USERINFO_MODELS_FILE)) return null
+  const content = readFileSync(USERINFO_MODELS_FILE, "utf-8")
+  const userInfo = JSON.parse(content) as UserInfoConfig
+  return userInfo
+}
+
 export function upsertCustomModelConfig(
   config: Omit<CustomModelConfig, "id"> & { id?: string }
 ): string {
@@ -625,6 +648,13 @@ export function upsertCustomModelConfig(
   }
 
   return targetId
+}
+
+export function upsertUserInfoConfig(
+  config: Omit<UserInfoConfig, "id"> & { id?: string }
+): string {
+  writeUserInfoModelsRaw(config)
+  return config.userName || '';
 }
 
 export function getCustomModelPublicConfig(): CustomModelPublicConfig | null {
@@ -717,6 +747,7 @@ export function upsertMcpConnector(
     url: config.url.trim(),
     enabled: config.enabled ?? true,
     advanced: config.advanced,
+    lazyLoad: config.lazyLoad ?? false,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -846,6 +877,7 @@ export function upsertScheduledTask(
     prompt: config.prompt.trim(),
     modelId: config.modelId,
     workDir: config.workDir,
+    chatxRobotChatId: config.chatxRobotChatId ?? existing?.chatxRobotChatId ?? null,
     frequency: config.frequency,
     runAt: config.runAt ?? existing?.runAt ?? null,
     runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
@@ -1184,6 +1216,57 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
     console.warn(`[Plugins] Failed to parse .mcp.json at ${filePath}`)
     return null
   }
+}
+
+// ── ChatX ──────────────────────────────────────────────────────────────────────
+
+const CHATX_CONFIG_FILE = join(OPENWORK_DIR, "chatx-config.json")
+
+function defaultChatXConfig(): import("./types").ChatXConfig {
+  return {
+    enabled: false,
+    wsUrl: "",
+    userIp: "",
+    robots: []
+  }
+}
+
+export function getChatXConfig(): import("./types").ChatXConfig {
+  getOpenworkDir()
+  if (!existsSync(CHATX_CONFIG_FILE)) return defaultChatXConfig()
+  try {
+    const content = readFileSync(CHATX_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultChatXConfig()
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      wsUrl: typeof parsed.wsUrl === "string" ? parsed.wsUrl : defaults.wsUrl,
+      userIp: typeof parsed.userIp === "string" ? parsed.userIp : defaults.userIp,
+      robots: Array.isArray(parsed.robots)
+        ? (parsed.robots as unknown[]).filter(
+            (item): item is import("./types").ChatXRobotConfig =>
+              item != null &&
+              typeof item === "object" &&
+              typeof (item as Record<string, unknown>).chatId === "string" &&
+              typeof (item as Record<string, unknown>).httpUrl === "string" &&
+              typeof (item as Record<string, unknown>).fromId === "string" &&
+              typeof (item as Record<string, unknown>).clientId === "string" &&
+              typeof (item as Record<string, unknown>).clientSecret === "string" &&
+              typeof (item as Record<string, unknown>).channel === "string" &&
+              Array.isArray((item as Record<string, unknown>).toUserList)
+          )
+        : defaults.robots
+    }
+  } catch {
+    return defaultChatXConfig()
+  }
+}
+
+export function saveChatXConfig(updates: Partial<import("./types").ChatXConfig>): void {
+  getOpenworkDir()
+  const current = getChatXConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(CHATX_CONFIG_FILE, JSON.stringify(merged, null, 2))
 }
 
 // ── Sandbox Settings ──────────────────────────────────────────────────────────

@@ -12,14 +12,18 @@ import type {
   ScheduledTaskUpsert,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig
 } from "../main/types"
+import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {
+
+
       ipcRenderer.on(channel, (_event, ...args) => listener(...args))
       return () => ipcRenderer.removeListener(channel, listener)
     },
@@ -223,6 +227,12 @@ const api = {
       maxTokens?: number
     }): Promise<{ id: string }> => {
       return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
+    },
+    upsertUserInfo: (config: UserInfoConfig): Promise<{ id: string }> => {
+      return ipcRenderer.invoke("models:upsertUserInfo", config) as Promise<{ id: string }>
+    },
+    getUserInfo: (): Promise<UserInfoConfig | null> => {
+      return ipcRenderer.invoke("models:getUserInfo") as Promise<UserInfoConfig | null>
     },
     deleteCustomConfig: (id: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>
@@ -472,6 +482,14 @@ const api = {
       ipcRenderer.invoke("plugins:setEnabled", { id, enabled }) as Promise<void>,
     getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+  },
+  chatx: {
+    getConfig: (): Promise<ChatXConfig> =>
+      ipcRenderer.invoke("chatx:get-config") as Promise<ChatXConfig>,
+    saveConfig: (updates: Partial<ChatXConfig>): Promise<void> =>
+      ipcRenderer.invoke("chatx:save-config", updates) as Promise<void>,
+    restart: (): Promise<void> =>
+      ipcRenderer.invoke("chatx:restart") as Promise<void>
   },
   sandbox: {
     getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>

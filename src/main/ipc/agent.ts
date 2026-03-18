@@ -7,7 +7,8 @@ import { summarizeAndSave } from "../memory/summarizer"
 import { getMemoryStore } from "../memory/store"
 import { ChatOpenAI } from "@langchain/openai"
 import { getCustomModelConfigs, isMemoryEnabled } from "../storage"
-import { notifyIfBackground } from "../services/notify"
+import { notifyIfBackground, stripThink } from "../services/notify"
+import { trySendChatXReply } from "../services/chatx"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -105,6 +106,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       )
 
       let assistantText = ""
+      let lastFinalText = ""  // 最终回复（不含中间工具推理），用于 ChatX HTTP 回复
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
 
@@ -131,6 +133,33 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
         const serialized = JSON.parse(JSON.stringify(data))
 
+        if (mode === "values") {
+          try {
+            const state = serialized as { messages?: Array<{ kwargs?: Record<string, unknown>; id?: string[] }> }
+            if (state?.messages) {
+              const finalMsgs = state.messages.filter((m) => {
+                const cn = Array.isArray(m.id) ? m.id[m.id.length - 1] || "" : ""
+                const kw = m.kwargs || {}
+                return cn.includes("AI") && (!kw.tool_calls || !Array.isArray(kw.tool_calls) || kw.tool_calls.length === 0)
+              })
+              const last = finalMsgs[finalMsgs.length - 1]
+              if (last) {
+                const kw = last.kwargs || {}
+                const content = kw.content
+                let text = ""
+                if (typeof content === "string") text = content
+                else if (Array.isArray(content)) {
+                  text = (content as Array<{ type: string; text?: string }>)
+                    .filter((b) => b.type === "text" && typeof b.text === "string")
+                    .map((b) => b.text!)
+                    .join("")
+                }
+                if (text.trim()) lastFinalText = text.trim()
+              }
+            }
+          } catch { /* best-effort */ }
+        }
+
         window.webContents.send(channel, {
           type: "stream",
           mode,
@@ -141,6 +170,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       if (!abortController.signal.aborted) {
         window.webContents.send(channel, { type: "done" })
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
+
+        // If this is a ChatX-linked thread, also send reply via HTTP (only final answer, no tool reasoning)
+        const chatxReply = lastFinalText || stripThink(assistantText).trim()
+        if (metadata.chatxRobotChatId && chatxReply) {
+          trySendChatXReply(metadata.chatxRobotChatId as string, chatxReply)
+        }
 
         const conversation = assistantText.trim()
           ? `User: ${message}\n\nAssistant: ${assistantText}`

@@ -18,8 +18,13 @@ import {
   ShieldCheck,
   Database,
   Layers,
-  Clock, Notebook, Megaphone, Zap, Wrench
-} from "lucide-react";
+  Clock,
+  Notebook,
+  Megaphone,
+  Zap,
+  Wrench,
+  CircleAlert
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -30,7 +35,9 @@ import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble } from "./MessageBubble"
+import { uploadChatData, ChatReportPayload } from "@/api"
+import { marketApi, MarketItem } from "../../api/market"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -106,9 +113,131 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
-  const [latestVersion, setLatestVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState("")
 
-  const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
+  const [version, setVersion] = useState("")
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    ipcRenderer.on("version", (ver: string) => {
+      console.log("版本：", ver)
+      setVersion(ver)
+    })
+  }, [])
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    ipcRenderer.on("ip", (ver: string) => {
+      console.log("local ip：", ver)
+      if (ver) {
+        localStorage.setItem("localIp", ver)
+      }
+    })
+  }, [])
+
+  const {
+    threads,
+    models,
+    loadThreads,
+    generateTitleForFirstMessage,
+    setShowCustomizeView
+  } = useAppStore()
+
+  const goodSkillsRef = useRef<MarketItem[]>([])
+  const [goodSkillsData, setGoodSkillsData] = useState<MarketItem[]>([])
+
+  // Define loadSkills function at component level so it can be accessed everywhere
+  const loadSkills = useCallback(async (): Promise<void> => {
+    try {
+      const [loadedSkills, disabledList] = await Promise.all([
+        window.api.skills.list(),
+        window.api.skills.getDisabled()
+      ])
+      const disabledSet = new Set(disabledList)
+      // Include both built-in (project) and custom (user) skills
+      const availableSkills = loadedSkills.filter(
+        (s) => (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
+      )
+      setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+    } catch (error) {
+      console.error("[ChatContainer] Failed to load skills:", error)
+      setSkills([])
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
+  const queryRemoteSkills = useCallback(async () => {
+    try {
+      const res = await marketApi.getSkills()
+      const goodSkills = res?.data?.filter((it) => it.featured === "精品")
+      console.log("Found good skills:", goodSkills)
+      goodSkillsRef.current = goodSkills || []
+      setGoodSkillsData(goodSkills || [])
+
+      // 自动安装所有精品技能
+      if (goodSkills && goodSkills.length > 0) {
+        await installAllGoodSkills(goodSkills)
+        // 安装完成后重新加载技能列表
+        await loadSkills()
+      }
+    } catch (error) {
+      console.error("Failed to query remote skills:", error)
+    }
+  }, [loadSkills])
+
+  const getTargetRemoteSkill = useCallback((name: string) => {
+    const target = goodSkillsRef.current?.find((it) => it.name === name)
+    return target?.guidance || ""
+  }, [])
+
+  const installAllGoodSkills = async (goodSkills: MarketItem[]) => {
+    console.log("Starting automatic installation of good skills...")
+
+    for (const skill of goodSkills) {
+      try {
+        const skillName = skill.name || skill.id || ""
+
+        if (!skillName) {
+          console.error("Skill name is required for installation:", skill)
+          continue
+        }
+
+        console.log(`Installing skill: ${skillName}`)
+
+        // 删除已存在的技能（如果有的话）
+        try {
+          const skillsMetadata = await window.api.skills.list()
+          const existingSkill = skillsMetadata.find((s) => s.name === skillName)
+
+          if (existingSkill) {
+            console.log(`Deleting existing skill: ${existingSkill.path}`)
+            await window.api.skills.delete(existingSkill.path)
+          }
+        } catch (deleteError) {
+          console.warn(
+            `Failed to delete existing skill ${skillName}, continuing with install:`,
+            deleteError
+          )
+        }
+
+        // 下载并安装技能
+        const response = await marketApi.downloadItem(skillName, "skill", false)
+
+        if (response.success) {
+          console.log(`Successfully installed skill: ${skillName}`)
+        } else {
+          console.error(`Failed to install skill ${skillName}:`, response.error)
+        }
+      } catch (error) {
+        console.error(`Failed to install skill ${skill.name}:`, error)
+      }
+    }
+
+    console.log("Finished automatic installation of good skills")
+  }
 
   // Get persisted thread state and actions from context
   const {
@@ -135,35 +264,59 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
-  const queryLatestVersion = async ()=>{
-   try {
-     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/cmbdevclaw/versions/list',{
-       method: "GET",
-       headers: {
-         "Content-Type": "application/json"
-         // Remove placeholder auth token for now
-       }
-     })
-     const data = await response.json()
-     setLatestVersion(data?.current?.version)
-   }catch (e){
-     console.log(e)
-   }
-  }
+  const queryLatestVersion = useCallback(async () => {
+    try {
+      const response = await fetch(
+        import.meta.env.VITE_API_BASE_URL + "/api/trajectories/cmbdevclaw/versions/list",
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json"
+            // Remove placeholder auth token for now
+          }
+        }
+      )
+      const data = await response.json()
+      setLatestVersion(data?.current?.version)
+    } catch (e) {
+      console.log(e)
+    }
+  }, [])
 
-  const needUpdateVersion=useMemo(()=>{
-    return  latestVersion !== __APP_VERSION__
-    // return false
-  },[latestVersion])
+  const needUpdateVersion = useMemo(() => {
+    return latestVersion !== version
+  }, [latestVersion, version])
 
   useEffect(() => {
+    queryRemoteSkills()
     queryLatestVersion()
     const fetchYoloMode = (): void => {
-      window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
+      window.api.sandbox
+        .getYoloMode()
+        .then(setYoloMode)
+        .catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
     }
     fetchYoloMode()
     return window.api.sandbox.onChanged(fetchYoloMode)
-  }, [])
+  }, []) // 移除queryRemoteSkills依赖，只在组件挂载时执行一次
+
+  const uploadLoChatData = useCallback(async (msgs: Message[]) => {
+    const lastMsg = msgs[msgs.length - 1]
+    if (lastMsg) {
+      if (lastMsg.role !== "user") {
+        let lUidx = -1
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "user") {
+            lUidx = i
+            break
+          }
+        }
+        if (lUidx !== -1) {
+          await uploadChatData(threadId, msgs.slice(lUidx) as ChatReportPayload[])
+        }
+      }
+    }
+  }, [threadId])
 
   // Check if NUX (first-run sandbox setup) is needed
   useEffect(() => {
@@ -173,42 +326,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [])
 
   useEffect(() => {
-    const currentMessageCount = streamData.messages.length
-
-    if (!isLoading) {
-      wasLoadingRef.current = false
-      loadingMessageCountRef.current = 0
-      return
-    }
-
-    // First entering loading for this turn.
-    if (!wasLoadingRef.current) {
-      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
-      setThinkingMessageIndex(thinkingCycleRef.current)
-      loadingMessageCountRef.current = currentMessageCount
-      wasLoadingRef.current = true
-      return
-    }
-
-    // During the same turn, if new streamed messages arrive (e.g. tool round-trip),
-    // switch to next slogan once to mimic "stage changed" feedback.
-    if (currentMessageCount > loadingMessageCountRef.current) {
-      thinkingCycleRef.current = (thinkingCycleRef.current + 1) % THINKING_MESSAGES.length
-      setThinkingMessageIndex(thinkingCycleRef.current)
-      loadingMessageCountRef.current = currentMessageCount
-    }
-  }, [isLoading, streamData.messages.length])
-
-  // Apple Intelligence glow: loading 时显示，淡出由 CSS transition + onTransitionEnd 控制
-  useEffect(() => {
-    if (isLoading) {
-      setGlowVisible(true)
-      return
-    }
-    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
-    const timer = setTimeout(() => setGlowVisible(false), 3000)
-    return () => clearTimeout(timer)
-  }, [isLoading])
+    uploadLoChatData(threadMessages)
+  }, [threadMessages, uploadLoChatData])
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"): Promise<void> => {
@@ -514,26 +633,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     let mounted = true
 
-    const loadSkills = async (): Promise<void> => {
-      try {
-        const [loadedSkills, disabledList] = await Promise.all([
-          window.api.skills.list(),
-          window.api.skills.getDisabled()
-        ])
-        if (!mounted) return
-        const disabledSet = new Set(disabledList)
-        // Include both built-in (project) and custom (user) skills
-        const availableSkills = loadedSkills.filter((s) =>
-          (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
-        )
-        setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
-      } catch (error) {
-        console.error("[ChatContainer] Failed to load skills:", error)
-        if (mounted) setSkills([])
-      } finally {
-        if (mounted) setSkillsLoading(false)
-      }
-    }
 
     void loadSkills()
 
@@ -543,7 +642,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [])
 
   const getSkillId = useCallback((skill: SkillMetadata): string => {
-    const fromPath = skill.path.split("/").slice(-2, -1)[0]
+    const fromPath = skill?.path?.split("/").slice(-2, -1)[0]
     return (fromPath || skill.name || "").toLowerCase()
   }, [])
 
@@ -831,47 +930,75 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     const general = builtInSkills.filter((skill) => !isProgrammingSkill(skill))
     const programming = builtInSkills.filter(isProgrammingSkill)
 
+    // 精品技能名称集合，从「我安装的技能」中剔除
+    const goodSkillNames = new Set(goodSkillsData.map((g) => g.name))
+    const pureCustomSkills = userSkills.filter((s) => !goodSkillNames.has(s.name)
+    && s.name !== 'encrypt-password'
+    )
+    // todo  s.name !== 'encrypt-password' 这个逻辑在代码暂时写死，后面排查
+
     return {
       generalSkills: general,
       programmingSkills: programming,
-      customSkills: userSkills
+      customSkills: pureCustomSkills,
     }
-  }, [skills, isProgrammingSkill])
+  }, [skills, isProgrammingSkill, goodSkillsData])
+
+  // 精品技能：按 category 分组，匹配本地已安装的 SkillMetadata
+  const goodSkillsByCategory = useMemo(() => {
+    const localSkillMap = new Map(
+      skills.filter((s) => s.source === "user").map((s) => [s.name, s])
+    )
+    const groups = new Map<
+      string,
+      Array<{ skill: SkillMetadata; label: string; marketItem: MarketItem }>
+    >()
+    for (const item of goodSkillsData) {
+      const localSkill = localSkillMap.get(item.name)
+      // if (!localSkill) continue
+      const category = item.category || "精品技能"
+      if (!groups.has(category)) groups.set(category, [])
+      groups.get(category)!.push({
+        skill: localSkill || {},
+        label: item.chinese_name || item.name,
+        marketItem: item,
+      })
+    }
+    return groups
+  }, [goodSkillsData, skills])
 
   const visibleGeneralSkillCards = useMemo(() => {
     const source = showAllGeneralSkills ? generalSkills : generalSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllGeneralSkills, generalSkills, getSkillSummary, getSkillIcon])
 
   const programmingSkillCards = useMemo(() => {
     const source = showAllProgrammingSkills ? programmingSkills : programmingSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllProgrammingSkills, programmingSkills, getSkillSummary, getSkillIcon])
 
   const customSkillCards = useMemo(() => {
     const source = showAllCustomSkills ? customSkills : customSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
-    (skill: SkillMetadata): void => {
+    (skill: SkillMetadata, label?: string): void => {
+      const custPrompt = label ? getTargetRemoteSkill(label) : ""
       const prompt = buildSkillPrompt(skill)
-      setInput(prompt)
+      setInput(custPrompt || prompt)
       requestAnimationFrame(() => {
         const textarea = inputRef.current
         if (!textarea) return
@@ -880,7 +1007,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         textarea.setSelectionRange(cursor, cursor)
       })
     },
-    [buildSkillPrompt, setInput]
+    [buildSkillPrompt, setInput, getTargetRemoteSkill]
   )
 
   const handleCopyToClipboard = (text: string) => {
@@ -1056,7 +1183,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               </div>
-              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
+              <span>已复制目标链���到剪切板，请在浏览器中打开查看</span>
             </div>
           </div>
         </div>
@@ -1085,7 +1212,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           {programmingSkillCards.map(({ skill, label, icon }) => (
                             <button
-                              key={skill.path}
+                              key={label+skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
                               className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
@@ -1129,7 +1256,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           {visibleGeneralSkillCards.map(({ skill, label, icon }) => (
                             <button
-                              key={skill.path}
+                              key={label+skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
                               className=" group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
@@ -1165,51 +1292,68 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </button>
                     )}
-                    {customSkillCards.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="text-xs text-muted-foreground font-medium tracking-wider">
-                          <span>我安装的技能</span>
-                          <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          {customSkillCards.map(({ skill, label, icon }) => (
-                            <button
-                              key={skill.path}
-                              type="button"
-                              onClick={() => handleUseSkillPrompt(skill)}
-                              className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
-                                  <Wrench className={'size-4'}/>
+                    {/* 精品技能：按 category 分组展示 */}
+                    {goodSkillsByCategory.size > 0 &&
+                      Array.from(goodSkillsByCategory.entries()).map(([category, items]) => (
+                        <div key={category} className="space-y-2">
+                          <div className="text-xs text-muted-foreground font-medium tracking-wider flex items-center gap-1">
+                            <Zap className="size-3 text-amber-500" />
+                            <span>{category}</span>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {items.map(({ skill, label }) => (
+                              <button
+                                key={label+skill.path}
+                                type="button"
+                                onClick={() => handleUseSkillPrompt(skill, label)}
+                                className="group w-full rounded-xl border border-amber-200/70 bg-amber-50/60 px-3 py-2 text-left hover:bg-amber-100/70 hover:border-amber-300 transition-colors"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="rounded-md border border-amber-200/80 p-1.5 text-amber-500 group-hover:text-amber-600 transition-colors">
+                                    <Zap className="size-4" />
+                                  </div>
+                                  <div className="text-xs text-foreground leading-5">{label}</div>
                                 </div>
-                                <div className="text-xs text-foreground leading-5">{label}</div>
-                              </div>
-                            </button>
-                          ))}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        {customSkills.length > 8 && (
+                      ))}
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground font-medium tracking-wider">
+                        <span>我安装的技能</span>
+                        <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        {customSkillCards?.length ? customSkillCards.map(({ skill, label }) => (
+                          <button
+                            key={label+skill.path}
+                            type="button"
+                            onClick={() => handleUseSkillPrompt(skill, label)}
+                            className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <Wrench className={"size-4"} />
+                              </div>
+                              <div className="text-xs text-foreground leading-5">{label}</div>
+                            </div>
+                          </button>
+                        )) : (
                           <button
                             type="button"
-                            onClick={() => setShowAllCustomSkills((prev) => !prev)}
-                            className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                            className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                           >
-                            {showAllCustomSkills ? (
-                              <>
-                                <ChevronUp className="size-3.5" />
-                                <span>收起</span>
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="size-3.5" />
-                                <span>展开更多（+{customSkills.length - 8}）</span>
-                              </>
-                            )}
+                            <div className="flex items-center gap-3">
+                              <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <CircleAlert className={"size-4"} />
+                              </div>
+                              <div className="text-xs text-foreground leading-5">暂无</div>
+                            </div>
                           </button>
                         )}
                       </div>
-                    )}
+                    </div>
 
                     <div className="space-y-2">
                       <div className="text-xs text-muted-foreground font-medium tracking-wider">
@@ -1319,6 +1463,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  threadId={threadId}
                 />
               );
             })}

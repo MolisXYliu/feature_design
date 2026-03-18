@@ -2,10 +2,11 @@ import { v4 as uuid } from "uuid"
 import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
 import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord } from "../storage"
+import { trySendChatXReply } from "./chatx"
 import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread } from "../db"
 import { StreamConverter } from "../agent/stream-converter"
-import { notifyAlways } from "./notify"
+import { notifyAlways, stripThink } from "./notify"
 
 const TICK_INTERVAL_MS = 60_000
 const ONCE_EXPIRE_MS = 30 * 60_000 // once tasks older than 30 min are auto-disabled instead of executed
@@ -34,7 +35,7 @@ function notifyRenderer(channel: string): void {
 function showTaskNotification(taskName: string, status: "ok" | "error", body?: string): void {
   const title = status === "ok" ? `✅ ${taskName}` : `❌ ${taskName}`
   const text = status === "ok"
-    ? (body || "任务已完成")
+    ? stripThink(body || "任务已完成").trim() || "任务已完成"
     : (body || "任务执行失败")
   notifyAlways(title, text)
 }
@@ -162,8 +163,11 @@ async function executeTask(taskId: string): Promise<void> {
         broadcastToChannel(channel, evt)
         // Capture last assistant text for notification
         if (evt.type === "full-messages") {
-          const assistantMsgs = evt.messages.filter((m) => m.role === "assistant")
-          const last = assistantMsgs[assistantMsgs.length - 1]
+          // 只取最后一条没有 tool_calls 的 assistant 消息（最终回复）
+          const finalMsgs = evt.messages.filter(
+            (m) => m.role === "assistant" && (!m.tool_calls || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0)
+          )
+          const last = finalMsgs[finalMsgs.length - 1]
           if (last?.content?.trim()) lastAssistantText = last.content.trim()
         }
       }
@@ -179,6 +183,10 @@ async function executeTask(taskId: string): Promise<void> {
         console.log(`[Scheduler] Once task auto-disabled: ${task.name}`)
       }
       showTaskNotification(task.name, "ok", lastAssistantText)
+      // If task is linked to a ChatX robot, send reply via HTTP
+      if (task.chatxRobotChatId && lastAssistantText) {
+        trySendChatXReply(task.chatxRobotChatId, lastAssistantText)
+      }
       console.log(`[Scheduler] Task completed: ${task.name}`)
     } else {
       broadcastToChannel(channel, { type: "done" })

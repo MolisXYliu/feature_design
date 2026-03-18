@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -11,8 +11,9 @@ import { HeartbeatPanel } from "./HeartbeatPanel"
 import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
+import { ChatXPanel } from "./ChatXPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView, customizeInitialTab } = useAppStore()
@@ -138,6 +139,18 @@ export function CustomizeView(): React.JSX.Element {
             沙盒环境
             <span className="ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "chatx"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("chatx")}
+          >
+            <Cpu className="size-4 shrink-0" />
+            机器人管理
+          </button>
         </nav>
       </div>
 
@@ -155,6 +168,8 @@ export function CustomizeView(): React.JSX.Element {
         <MemoryPanel />
       ) : activeTab === "market" ? (
         <MarketPanel />
+      ) : activeTab === "chatx" ? (
+        <ChatXPanel />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
       ) : null}

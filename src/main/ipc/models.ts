@@ -69,6 +69,8 @@ import {
   setCustomModelConfig,
   upsertCustomModelConfig,
   deleteCustomModelConfig,
+  upsertUserInfoConfig,
+  getUserInfo,
   DEFAULT_MAX_TOKENS,
   MIN_MAX_TOKENS,
   MAX_MAX_TOKENS
@@ -127,6 +129,22 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     async (_event, config: Omit<CustomModelConfig, "id"> & { id?: string }) => {
       const id = upsertCustomModelConfig(config)
       return { id }
+    }
+  )
+
+  ipcMain.handle(
+    "models:upsertUserInfo",
+    async (_event, config: Omit<CustomModelConfig, "id"> & { id?: string }) => {
+      const id = upsertUserInfoConfig(config)
+      return { id }
+    }
+  )
+
+  ipcMain.handle(
+    "models:getUserInfo",
+    async () => {
+      const userInfo = getUserInfo()
+      return userInfo
     }
   )
 

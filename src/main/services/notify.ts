@@ -24,7 +24,7 @@ export function notifyAlways(title: string, body: string): void {
   sendNotification(title, body)
 }
 
-function stripThink(s: string): string {
+export function stripThink(s: string): string {
   return s.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/^[\s\S]*?<\/think>\s*/g, "")
 }
 
