@@ -320,6 +320,7 @@ export function UniversalUploadDialog({
           <div className="space-y-2">
             <label htmlFor="name" className="block text-sm font-medium">
               英文名称 *
+              <span>（英文名称 = zip文件名 = md里的name）</span>
             </label>
             <Input
               id="name"
@@ -329,9 +330,13 @@ export function UniversalUploadDialog({
               disabled={uploading || isUpdate}
               className={isUpdate ? "bg-muted" : ""}
             />
-            {isUpdate && (
+            {isUpdate ? (
               <p className="text-xs text-muted-foreground">更新时名称不可修改</p>
-            )}
+            ) : resourceType === "skill" ? (
+              <p className="text-xs text-muted-foreground">
+                名称需与 .zip 文件名或 .md 文件中 frontmatter 的 <code className="bg-muted px-1 rounded">name</code> 字段保持一致
+              </p>
+            ) : null}
           </div>
 
 
