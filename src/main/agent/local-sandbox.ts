@@ -147,6 +147,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const localAppData = path.win32.join(profileRoot, "AppData", "Local")
     const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
     const tempDir = path.win32.join(localAppData, "Temp")
+    const mavenRepoLocal = path.win32.join(tempDir, "m2-repo")
     const envOverrides: Array<[string, string]> = [
       ["USERPROFILE", profileRoot],
       ["HOME", profileRoot],
@@ -161,15 +162,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     ]
 
     if (shellBase === "cmd") {
-      return envOverrides
+      const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
+      return `${base} & set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
-      return envOverrides
+      const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
+      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${powershellSingleQuote(mavenRepoLocal)}"`
     }
 
     return ""
