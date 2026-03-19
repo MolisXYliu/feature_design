@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron"
+import { contextBridge, ipcRenderer,shell } from "electron"
 import type {
   Thread,
   ModelConfig,
@@ -19,6 +19,7 @@ import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
+  openExternal: (url: string) => shell.openExternal(url),
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {

@@ -341,35 +341,6 @@ export function ThreadSidebar(): React.JSX.Element {
           </div>
           <span className="text-muted-foreground">新任务</span>
         </Button>
-        {robots.length > 0 && (
-          <div className="relative" ref={robotPickerRef}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start gap-2 text-sm font-semibold"
-              onClick={() => setShowRobotPicker(!showRobotPicker)}
-            >
-              <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
-                <Cpu className="size-3" />
-              </div>
-              <span className="text-muted-foreground">机器人对话</span>
-            </Button>
-            {showRobotPicker && (
-              <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-1 shadow-md">
-                {robots.map((robot, i) => (
-                  <button
-                    key={i}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted transition-colors"
-                    onClick={() => handleNewRobotThread(robot)}
-                  >
-                    <Cpu className="size-3 shrink-0 text-blue-400" />
-                    <span className="truncate">{robot.chatId || `机器人 ${i + 1}`}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
         <Button
           variant="ghost"
           size="sm"
@@ -398,6 +369,35 @@ export function ThreadSidebar(): React.JSX.Element {
           </div>
           <span className="text-muted-foreground">看板视图</span>
         </Button>
+        {robots.length > 0 && (
+          <div className="relative" ref={robotPickerRef}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-sm font-semibold"
+              onClick={() => setShowRobotPicker(!showRobotPicker)}
+            >
+              <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+                <Cpu className="size-3" />
+              </div>
+              <span className="text-muted-foreground">机器人</span>
+            </Button>
+            {showRobotPicker && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border bg-popover p-1 shadow-md">
+                {robots.map((robot, i) => (
+                  <button
+                    key={i}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted transition-colors"
+                    onClick={() => handleNewRobotThread(robot)}
+                  >
+                    <Cpu className="size-3 shrink-0 text-blue-400" />
+                    <span className="truncate">{robot.chatId || `机器人 ${i + 1}`}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Thread List */}

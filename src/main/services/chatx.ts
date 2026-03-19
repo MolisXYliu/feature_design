@@ -125,7 +125,7 @@ export function trySendChatXReply(chatId: string, content: string): void {
   }
   sendChatXReply(robot, content).catch((err) => {
     console.error("[ChatX] trySendChatXReply error:", err)
-    notifyAlways("[机器人] 回复发送失败", err instanceof Error ? err.message : String(err))
+    notifyAlways("🤖 机器人回复发送失败", err instanceof Error ? err.message : String(err))
   })
 }
 
@@ -248,7 +248,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
       if (lastAssistantText) {
         await sendChatXReply(robot, lastAssistantText)
       }
-      notifyAlways(`[ChatX] ${msg.fromId}`, lastAssistantText || "处理完成")
+      notifyAlways(`🤖 ${msg.fromId} 回复完成`, lastAssistantText || "处理完成")
       console.log(`[ChatX] Message processed: ${msg.msgId}`)
     } else {
       broadcastToChannel(channel, { type: "done" })
@@ -264,7 +264,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
       broadcastToChannel(channel, { type: "done" })
     } else {
       broadcastToChannel(channel, { type: "error", error: errMsg })
-      notifyAlways(`[ChatX] 错误`, errMsg)
+      notifyAlways("🤖 机器人处理失败", errMsg)
       console.error(`[ChatX] Error processing message:`, errMsg)
     }
 

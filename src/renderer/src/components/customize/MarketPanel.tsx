@@ -136,8 +136,8 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
           </div>
           {item.category && (
             <div className="flex items-center gap-1 mt-1">
-              <Tag className="size-3 text-muted-foreground shrink-0" />
-              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+              <Tag className="size-3 text-primary shrink-0" />
+              <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
                 {item.category}
               </span>
             </div>
@@ -210,13 +210,10 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
 
       {/* Guidance — supports line breaks and whitespace formatting */}
       {item.guidance && (
-        <div className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2 mb-3">
+        <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 mb-3">
           <div className="flex items-start gap-1.5">
-            <Lightbulb className="size-3.5 mt-0.5 shrink-0 text-blue-500" />
-            <div>
-              <span className="font-medium text-blue-600 block mb-0.5">使用指引</span>
-              <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
-            </div>
+            <Lightbulb className="size-3 mt-0.5 shrink-0" />
+            <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
           </div>
         </div>
       )}

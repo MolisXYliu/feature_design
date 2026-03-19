@@ -49,6 +49,7 @@ export function UniversalUploadDialog({
   const [guidance, setGuidance] = useState("")
   const [chineseName, setChineseName] = useState("")
   const [userId, setUserId] = useState("")
+  const [nameFromFile, setNameFromFile] = useState(false)  // name 是否来自文件解析（锁定）
 
   // Initialize form with existing data for update mode
   React.useEffect(() => {
@@ -59,6 +60,7 @@ export function UniversalUploadDialog({
       setGuidance(existingItem.guidance || "")
       setChineseName(existingItem.chinese_name || "")
       setUserId(existingItem.user_id || "")
+      setNameFromFile(false)
     } else if (!isUpdate && open) {
       // Reset form for new upload
       setName("")
@@ -67,6 +69,7 @@ export function UniversalUploadDialog({
       setGuidance("")
       setChineseName("")
       setUserId("")
+      setNameFromFile(false)
     }
   }, [isUpdate, existingItem, open])
 
@@ -121,7 +124,7 @@ export function UniversalUploadDialog({
     return null
   }
 
-  const handleFile = (selectedFile: File) => {
+  const handleFile = async (selectedFile: File) => {
     const validationError = validateFile(selectedFile)
     if (validationError) {
       setError(validationError)
@@ -130,8 +133,33 @@ export function UniversalUploadDialog({
 
     setFile(selectedFile)
     setError(null)
+    setNameFromFile(false)
 
-    // Auto-fill name from filename if not already set
+    // 对 skill 的 .md / .zip 文件，尝试从文件内容中提取 name
+    if (resourceType === "skill") {
+      const ext = selectedFile.name.toLowerCase().slice(selectedFile.name.lastIndexOf("."))
+      if (ext === ".md" || ext === ".zip") {
+        try {
+          const buffer = await selectedFile.arrayBuffer()
+          const result = await window.electron.ipcRenderer.invoke("skills:parseNameFromFile", {
+            buffer,
+            fileName: selectedFile.name
+          }) as { success: boolean; name?: string; error?: string }
+
+          if (result.success && result.name) {
+            setName(result.name)
+            setNameFromFile(true)
+            return
+          } else {
+            setError(result.error || "无法从文件中提取 name，请手动填写")
+          }
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "解析文件失败，请手动填写名称")
+        }
+      }
+    }
+
+    // 其他类型或解析失败时，用文件名兜底（仅在 name 为空时）
     if (!name) {
       const baseName = selectedFile.name.replace(/\.(md|zip|json)$/i, "")
       setName(baseName)
@@ -201,6 +229,7 @@ export function UniversalUploadDialog({
         setDescription("")
         setError(null)
         setShowJsonTemplate(false)
+        setNameFromFile(false)
       }
     }
   }
@@ -320,18 +349,25 @@ export function UniversalUploadDialog({
           <div className="space-y-2">
             <label htmlFor="name" className="block text-sm font-medium">
               英文名称 *
+              <span>（英文名称 = zip文件名 = md里的name）</span>
             </label>
             <Input
               id="name"
               placeholder="输入资源名称"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              disabled={uploading || isUpdate}
-              className={isUpdate ? "bg-muted" : ""}
+              disabled={uploading || isUpdate || nameFromFile}
+              className={(isUpdate || nameFromFile) ? "bg-muted" : ""}
             />
-            {isUpdate && (
+            {isUpdate ? (
               <p className="text-xs text-muted-foreground">更新时名称不可修改</p>
-            )}
+            ) : nameFromFile ? (
+              <p className="text-xs text-muted-foreground">名称已从文件中自动提取，不可修改</p>
+            ) : resourceType === "skill" ? (
+              <p className="text-xs text-muted-foreground">
+                名称需与 .zip 文件名或 .md 文件中 frontmatter 的 <code className="bg-muted px-1 rounded">name</code> 字段保持一致
+              </p>
+            ) : null}
           </div>
 
 
