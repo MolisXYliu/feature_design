@@ -114,6 +114,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
   const [latestVersion, setLatestVersion] = useState("")
+  const [modelContextLimit, setModelContextLimit] = useState<number | undefined>(undefined)
 
   const [version, setVersion] = useState("")
 
@@ -263,6 +264,27 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
+
+  // 从模型配置中获取用户设置的上下文窗口大小
+  useEffect(() => {
+    if (!currentModel || !currentModel.startsWith("custom:")) {
+      setModelContextLimit(undefined)
+      return
+    }
+    let ignore = false
+    const id = currentModel.replace("custom:", "")
+    window.api.models
+      .getCustomConfigs()
+      .then((configs) => {
+        if (ignore) return
+        const match = configs.find((c) => c.id === id)
+        setModelContextLimit(match?.maxTokens)
+      })
+      .catch(() => {
+        if (!ignore) setModelContextLimit(undefined)
+      })
+    return () => { ignore = true }
+  }, [currentModel])
 
   const queryLatestVersion = useCallback(async () => {
     try {
@@ -1697,7 +1719,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 )}
               </div>
               {tokenUsage && (
-                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} />
+                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} contextLimit={modelContextLimit} />
               )}
             </div>
           </div>
