@@ -147,6 +147,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   } = useAppStore()
 
   const goodSkillsRef = useRef<MarketItem[]>([])
+  const allSkillsRef = useRef<MarketItem[]>([])
   const [goodSkillsData, setGoodSkillsData] = useState<MarketItem[]>([])
 
   // Define loadSkills function at component level so it can be accessed everywhere
@@ -176,6 +177,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       const goodSkills = res?.data?.filter((it) => it.featured === "精品")
       console.log("Found good skills:", goodSkills)
       goodSkillsRef.current = goodSkills || []
+      allSkillsRef.current = res?.data || []
       setGoodSkillsData(goodSkills || [])
 
       // 自动安装所有精品技能
@@ -189,8 +191,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [loadSkills])
 
+  const getSkillShowLabel=(name)=>{
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
+    return target?.chinese_name || name || ""
+  }
+
   const getTargetRemoteSkill = useCallback((name: string) => {
-    const target = goodSkillsRef.current?.find((it) => it.name === name)
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
     return target?.guidance || ""
   }, [])
 
@@ -1373,7 +1380,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                                   <div className="rounded-md border border-amber-200/80 p-1.5 text-amber-500 group-hover:text-amber-600 transition-colors">
                                     <Zap className="size-4" />
                                   </div>
-                                  <div className="text-xs text-foreground leading-5">{label}</div>
+                                  <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
                                 </div>
                               </button>
                             ))}
@@ -1397,7 +1404,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
                                 <Wrench className={"size-4"} />
                               </div>
-                              <div className="text-xs text-foreground leading-5">{label}</div>
+                              <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
                             </div>
                           </button>
                         )) : (
