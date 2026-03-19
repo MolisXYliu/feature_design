@@ -50,6 +50,7 @@ export function GitFileOperationPrompt({
     output?: string
   } | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
+  const [executingCommands, setExecutingCommands] = useState<string[]>([])
   const [gitInfo, setGitInfo] = useState<{
     branch?: string
     remote?: string
@@ -238,6 +239,9 @@ export function GitFileOperationPrompt({
       `git -C "${repoPath}" commit -m "${cardNumber.trim()} #comment fix: ${commitMessage.trim()} #CMBDevClaw"`,
       gitInfo.hasRemote ? `git -C "${repoPath}" push` : null
     ].filter(Boolean) as string[]
+
+    // 保存实际执行的命令列表，供步骤显示使用
+    setExecutingCommands(commands)
 
     try {
       let commitHash = ""
@@ -479,13 +483,13 @@ export function GitFileOperationPrompt({
               {
                 step: 0,
                 label: "添加文件到暂存区",
-                command: `git add "${filePath}"`,
+                command: executingCommands[0] ?? `git add "${filePath}"`,
                 info: `将 ${filePath.split("/").pop()} 添加到暂存区`
               },
               {
                 step: 1,
                 label: "提交更改",
-                command: `git commit -m "${commitMessage.trim()}"`,
+                command: executingCommands[1] ?? `git commit -m "..."`,
                 info: `分支: ${gitInfo.branch || "unknown"} | 信息: ${commitMessage.trim()}`
               },
               ...(gitInfo.hasRemote
@@ -493,7 +497,7 @@ export function GitFileOperationPrompt({
                     {
                       step: 2,
                       label: "推送到远程仓库",
-                      command: "git push",
+                      command: executingCommands[2] ?? `git push`,
                       info: `推送到 ${
                         gitInfo.remote
                           ? gitInfo.remote.split("/").pop()?.replace(".git", "")
