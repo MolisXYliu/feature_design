@@ -415,7 +415,7 @@ export function GitFileOperationPromptWithProps({
                 <ChevronRight className="size-4" />
               )}
               <FileText className="size-4" />
-              修改的文件 ({changedFiles.length})
+              本目录下修改的文件 ({changedFiles.length})
             </button>
 
             {showChangedFiles && (
