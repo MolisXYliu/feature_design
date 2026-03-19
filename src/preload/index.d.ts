@@ -16,6 +16,7 @@ import type {
 import {UserInfoConfig} from '../main/storage'
 
 interface ElectronAPI {
+  openExternal: Promise
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void

@@ -39,6 +39,17 @@ function App(): React.JSX.Element {
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
   const [zoomLevel, setZoomLevel] = useState(1)
 
+  useEffect(() => {
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const link = target.closest('a'); // 找到点击的<a>标签
+      if (link && link.href) {
+        e.preventDefault(); // 阻止默认跳转
+        window.electron.openExternal(link.href);
+      }
+    });
+  }, []);
+
   // Track drag start widths
   const dragStartWidths = useRef<{ left: number; right: number } | null>(null)
 
