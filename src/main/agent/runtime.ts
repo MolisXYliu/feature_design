@@ -589,7 +589,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
-    timeout: 120_000,
+    timeout: 60_000,
     maxOutputBytes,
     windowsSandbox,
     codexExePath: codexExists ? codexExePath : undefined

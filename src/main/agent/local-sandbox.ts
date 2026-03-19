@@ -197,7 +197,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     })
 
     this.id = `local-sandbox-${randomUUID().slice(0, 8)}`
-    this.timeout = options.timeout ?? 120_000 // 2 minutes default
+    this.timeout = options.timeout ?? 60_000 // 1 minute default
     this.maxOutputBytes = options.maxOutputBytes ?? 100_000 // ~100KB default
     const baseEnv = options.env ?? ({ ...process.env } as Record<string, string>)
     // Ensure UTF-8 locale for spawned shells (Git Bash via pipe defaults to
@@ -1507,7 +1507,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({
             output: metadata + existingOutput,
-            exitCode: null,
+            exitCode: 124,
             truncated
           })
         }
@@ -1725,7 +1725,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({
             output: metadata + existingOutput,
-            exitCode: null,
+            exitCode: 124,
             truncated
           })
         }
