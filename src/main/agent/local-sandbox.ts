@@ -118,6 +118,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly _virtualMode: boolean
   private readonly _cwd: string
   private readonly _maxFileSizeBytes: number
+  /** Per-file Promise chain lock to serialize concurrent read-write operations */
+  private readonly _fileLocks = new Map<string, Promise<void>>()
+  /** mtime recorded after each successful read/write, for external-modification detection */
+  private readonly _fileReadTimes = new Map<string, number>()
 
   constructor(options: LocalSandboxOptions = {}) {
     super({
@@ -553,6 +557,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const ext = path.extname(resolvedPath).toLowerCase()
       const encoding = this.detectEncoding(buffer, ext)
       const content = iconv.decode(buffer, encoding)
+      await this.recordReadTime(resolvedPath)
 
       if (!content || content.trim() === "") return "System reminder: File exists but has empty contents"
 
@@ -604,6 +609,51 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     return { buffer, resolvedPath }
+  }
+
+  // ── File safety helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Serialize concurrent operations on the same resolved file path.
+   * Different file paths run in parallel; same path is FIFO-queued.
+   */
+  private async withFileLock<T>(resolvedPath: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this._fileLocks.get(resolvedPath) ?? Promise.resolve()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => { release = r })
+    const tail = prev.then(() => gate)
+    this._fileLocks.set(resolvedPath, tail)
+    try {
+      await prev
+      return await fn()
+    } finally {
+      release()
+      if (this._fileLocks.get(resolvedPath) === tail) {
+        this._fileLocks.delete(resolvedPath)
+      }
+    }
+  }
+
+  /** Record the file's mtime after a successful read or write. */
+  private async recordReadTime(resolvedPath: string): Promise<void> {
+    const stat = await fs.stat(resolvedPath)
+    this._fileReadTimes.set(resolvedPath, stat.mtimeMs)
+  }
+
+  /**
+   * Assert that a file has not been modified externally since the last read.
+   * Compares file mtime against the recorded mtime — same clock source, no drift.
+   */
+  private async assertNotModifiedSinceRead(resolvedPath: string): Promise<void> {
+    const recordedMtime = this._fileReadTimes.get(resolvedPath)
+    if (recordedMtime === undefined) return // first edit without a prior read() — allow it
+    const stat = await fs.stat(resolvedPath)
+    // 50ms tolerance for filesystem timestamp granularity (NTFS async flush, HFS+ 1s resolution)
+    if (stat.mtimeMs > recordedMtime + 50) {
+      throw new Error(
+        `File has been modified externally since last read. Please read the file again before editing.`
+      )
+    }
   }
 
   /**
@@ -683,7 +733,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "写入") }
     }
-    return super.write(filePath, content)
+    const resolvedPath = this._resolvePath(filePath)
+    return this.withFileLock(resolvedPath, async () => {
+      const result = await super.write(filePath, content)
+      if (!result.error) {
+        await this.recordReadTime(resolvedPath)
+      }
+      return result
+    })
   }
 
   /**
@@ -726,6 +783,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * 2. Use OpenCode's 9-layer progressive string replacement for better
    *    tolerance of LLM-generated oldString variations (whitespace, indent, escapes)
    * 3. Write back in the original encoding to avoid corrupting non-UTF-8 files
+   * 4. File lock to prevent concurrent writes to the same file
+   * 5. Timestamp check to detect external modifications since last read
    */
   async edit(
     filePath: string,
@@ -740,21 +799,32 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       return { error: this.readonlyBlockedError(filePath, "编辑") }
     }
     try {
-      const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
-      const ext = path.extname(resolvedPath).toLowerCase()
-      const encoding = this.detectEncoding(buffer, ext)
-      const content = iconv.decode(buffer, encoding)
+      const resolvedPath = this._resolvePath(filePath)
+      return await this.withFileLock(resolvedPath, async () => {
+        const { buffer } = await this.readFileBuffer(filePath)
+        const ext = path.extname(resolvedPath).toLowerCase()
+        const encoding = this.detectEncoding(buffer, ext)
+        const content = iconv.decode(buffer, encoding)
 
-      if (content === "" && oldString === "") {
-        await this.writeFileEncoded(resolvedPath, newString, encoding)
-        return { path: filePath, filesUpdate: null, occurrences: 0 }
-      }
+        // Check file hasn't been modified externally since last read
+        await this.assertNotModifiedSinceRead(resolvedPath)
 
-      const { newContent, occurrences } = replace(content, oldString, newString, replaceAll)
+        let expectedContent: string
+        let occurrences: number
 
-      await this.writeFileEncoded(resolvedPath, newContent, encoding)
+        if (content === "" && oldString === "") {
+          expectedContent = newString
+          occurrences = 0
+        } else {
+          const result = replace(content, oldString, newString, replaceAll)
+          expectedContent = result.newContent
+          occurrences = result.occurrences
+        }
 
-      return { path: filePath, filesUpdate: null, occurrences }
+        await this.writeFileEncoded(resolvedPath, expectedContent, encoding)
+        await this.recordReadTime(resolvedPath)
+        return { path: filePath, filesUpdate: null, occurrences }
+      })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       return { error: `Error editing file '${filePath}': ${msg}` }
