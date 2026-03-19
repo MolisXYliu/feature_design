@@ -1,6 +1,6 @@
 import { app, BrowserWindow, IpcMain } from "electron"
 import { existsSync, readFileSync, mkdirSync, readdirSync, statSync } from "fs"
-import { execFile } from "child_process"
+import { execFile, execSync } from "child_process"
 import { homedir } from "os"
 import { join, resolve } from "path"
 import {
@@ -83,6 +83,26 @@ export function isElevatedSetupComplete(): boolean {
 /** Escape single quotes for PowerShell single-quoted strings. */
 function psEscape(s: string): string {
   return s.replace(/'/g, "''")
+}
+
+function isCurrentProcessElevated(): boolean {
+  if (process.platform !== "win32") return false
+
+  const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
+
+  try {
+    execSync("net session", { stdio: "ignore", windowsHide: true, cwd: safeCwd })
+    return true
+  } catch {
+    // fall through
+  }
+
+  try {
+    const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
+    return output.includes("S-1-16-12288")
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -196,43 +216,39 @@ export async function runElevatedSetupForPaths(
   const b64 = Buffer.from(JSON.stringify(payload)).toString("base64")
 
   try {
-    // Build icacls commands to DENY sandbox group access to sensitive directories.
-    // These run as admin (inside the same elevated PowerShell) after the setup binary.
-    const sensitiveIcaclsCmds: string[] = []
-    const sandboxGroup = "CodexSandboxUsers"
-    for (const excluded of USERPROFILE_READ_ROOT_EXCLUSIONS) {
-      const dirPath = join(userProfile, excluded)
-      if (existsSync(dirPath)) {
-        // Deny read access for the sandbox group on each sensitive directory
-        sensitiveIcaclsCmds.push(
-          `icacls '${psEscape(dirPath)}' /deny '${sandboxGroup}:(OI)(CI)(R)' /T /C /Q`
-        )
-      }
-    }
-
-    const setupCmd = `& '${psEscape(setupExe)}' '${psEscape(b64)}'`
-    const allCmds = sensitiveIcaclsCmds.length > 0
-      ? [setupCmd, ...sensitiveIcaclsCmds].join("; ")
-      : setupCmd
-
-    const psCommand = [
-      "Start-Process",
-      "-FilePath 'powershell'",
-      `-ArgumentList '-NoProfile -Command ${psEscape(allCmds)}'`,
-      "-Verb RunAs",
-      "-Wait",
-      "-WindowStyle Hidden"
-    ].join(" ")
-
-    await new Promise<void>((resolve, reject) => {
-      execFile("powershell", ["-NoProfile", "-Command", psCommand], {
-        timeout: 120_000,
-        windowsHide: false
-      }, (err) => {
-        if (err) reject(err)
-        else resolve()
+    if (isCurrentProcessElevated()) {
+      await new Promise<void>((resolve, reject) => {
+        execFile(setupExe, [b64], {
+          timeout: 120_000,
+          windowsHide: true
+        }, (err) => {
+          if (err) reject(err)
+          else resolve()
+        })
       })
-    })
+    } else {
+      // Use array-based arguments to avoid PowerShell parsing issues with special characters
+      const psScript = `
+        $p = Start-Process -FilePath "${setupExe.replace(/"/g, '`"')}" \`
+          -ArgumentList "${b64.replace(/"/g, '`"')}" \`
+          -Verb RunAs \`
+          -Wait \`
+          -PassThru \`
+          -WindowStyle Hidden
+        if ($null -eq $p) { exit 1 }
+        exit $p.ExitCode
+      `.trim()
+
+      await new Promise<void>((resolve, reject) => {
+        execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command", psScript], {
+          timeout: 120_000,
+          windowsHide: false
+        }, (err) => {
+          if (err) reject(err)
+          else resolve()
+        })
+      })
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes("1223") || msg.includes("canceled") || msg.includes("cancelled")) {

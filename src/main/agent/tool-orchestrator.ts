@@ -11,7 +11,7 @@
 
 import { randomUUID } from "crypto"
 import { ApprovalStore } from "./approval-store"
-import { assessCommandSafety } from "./exec-policy"
+import { assessCommandSafety, derivePermanentApprovalPattern } from "./exec-policy"
 import type {
   ApprovalRequest,
   ApprovalDecision,
@@ -45,7 +45,9 @@ export class ToolOrchestrator {
     console.log(`[Orchestrator] execute: "${command}" cwd=${cwd} sandbox=${sandboxMode} yolo=${this.yoloMode}`)
 
     // 1. Assess command safety — always check, even in YOLO mode
-    const safety = assessCommandSafety(command, cwd)
+    const safety = assessCommandSafety(command, cwd, {
+      windowsShell: process.platform === "win32" && sandboxMode !== "none" ? "powershell" : "unknown"
+    })
     console.log(`[Orchestrator] safety: ${safety.level}${safety.reason ? ` (${safety.reason})` : ""}`)
 
     // 2. Forbidden commands → reject immediately, regardless of YOLO mode
@@ -70,7 +72,8 @@ export class ToolOrchestrator {
 
     // 5. Needs approval → check cache, then ask user
     const key = this.approvalStore.makeKey(command, cwd, sandboxMode)
-    const patternKey = this.approvalStore.makePatternKey(command)
+    const patternKey = derivePermanentApprovalPattern(command) ?? this.approvalStore.makePatternKey(command)
+    const allowPermanentApproval = patternKey !== this.approvalStore.makePatternKey(command)
 
     console.log("[Orchestrator] needs_approval → requesting user approval...")
 
@@ -86,9 +89,16 @@ export class ToolOrchestrator {
           cwd,
           reason: safety.reason,
           allowed_decisions: ["approve", "reject"],
-          allowed_approval_types: ["approve", "approve_session", "approve_permanent", "reject"]
+          allowed_approval_types: allowPermanentApproval
+            ? ["approve", "approve_session", "approve_permanent", "reject"]
+            : ["approve", "approve_session", "reject"]
         })
         return this.mapDecisionToReview(approval.type)
+      },
+      {
+        allowPermanentMatch: allowPermanentApproval,
+        allowPermanentStore: allowPermanentApproval,
+        commandForPatternMatch: command
       }
     )
 
@@ -102,30 +112,19 @@ export class ToolOrchestrator {
 
     // 5. Execute (with sandbox)
     try {
-      return await this.rawExecute(command, sandboxMode)
+      const result = await this.rawExecute(command, sandboxMode)
+      if (sandboxMode !== "none" && this.isSandboxDeniedResponse(result)) {
+        return this.handleSandboxRetry(command, cwd, result.output)
+      }
+      return result
     } catch (err) {
       // 6. Sandbox denial → offer unsandboxed retry
       if (sandboxMode !== "none" && this.isSandboxDenialError(err)) {
-        const retryApproval = await this.requestApproval({
-          id: randomUUID(),
-          tool_call: { id: randomUUID(), name: "execute", args: { command } },
-          safety_level: "needs_approval",
+        return this.handleSandboxRetry(
           command,
           cwd,
-          retry_reason: `沙箱阻止了此操作: ${err instanceof Error ? err.message : String(err)}`,
-          allowed_decisions: ["approve", "reject"],
-          allowed_approval_types: ["approve", "reject"]
-        })
-
-        if (retryApproval.type === "approve") {
-          return this.rawExecute(command, "none")
-        }
-
-        return {
-          output: "Sandbox retry rejected by user.",
-          exitCode: 1,
-          truncated: false
-        }
+          `沙箱阻止了此操作: ${err instanceof Error ? err.message : String(err)}`
+        )
       }
       throw err
     }
@@ -152,5 +151,46 @@ export class ToolOrchestrator {
       msg.includes("operation not permitted") ||
       msg.includes("sandbox")
     )
+  }
+
+  private isSandboxDeniedResponse(result: ExecuteResponse): boolean {
+    if (result.exitCode === 0) return false
+    const msg = (result.output ?? "").toLowerCase()
+    return (
+      msg.includes("access is denied") ||
+      msg.includes("permission denied") ||
+      msg.includes("operation not permitted") ||
+      msg.includes("blocked by policy") ||
+      msg.includes("setup refresh failed") ||
+      msg.includes("沙箱") ||
+      msg.includes("sandbox")
+    )
+  }
+
+  private async handleSandboxRetry(
+    command: string,
+    cwd: string,
+    retryReason: string
+  ): Promise<ExecuteResponse> {
+    const retryApproval = await this.requestApproval({
+      id: randomUUID(),
+      tool_call: { id: randomUUID(), name: "execute", args: { command } },
+      safety_level: "needs_approval",
+      command,
+      cwd,
+      retry_reason: retryReason,
+      allowed_decisions: ["approve", "reject"],
+      allowed_approval_types: ["approve", "reject"]
+    })
+
+    if (retryApproval.type === "approve") {
+      return this.rawExecute(command, "none")
+    }
+
+    return {
+      output: "Sandbox retry rejected by user.",
+      exitCode: 1,
+      truncated: false
+    }
   }
 }

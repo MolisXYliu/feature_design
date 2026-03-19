@@ -8,6 +8,7 @@
 import { createHash } from "crypto"
 import type { ReviewDecision } from "../types"
 import { getApprovalRules, addApprovalRule } from "../storage"
+import { matchesApprovalPattern } from "./exec-policy"
 
 export class ApprovalStore {
   /** Session-level cache (cleared when the process restarts) */
@@ -41,9 +42,8 @@ export class ApprovalStore {
 
   /** Check permanent rules by pattern (command text match). */
   getByPattern(command: string): ReviewDecision | null {
-    const pattern = this.makePatternKey(command)
     for (const [rulePattern, decision] of this.permanentRules) {
-      if (rulePattern === pattern) return decision
+      if (matchesApprovalPattern(rulePattern, command)) return decision
     }
     return null
   }
@@ -65,8 +65,17 @@ export class ApprovalStore {
   async withCachedApproval(
     key: string,
     patternKey: string,
-    fetchApproval: () => Promise<ReviewDecision>
+    fetchApproval: () => Promise<ReviewDecision>,
+    options?: {
+      allowPermanentMatch?: boolean
+      allowPermanentStore?: boolean
+      commandForPatternMatch?: string
+    }
   ): Promise<ReviewDecision> {
+    const allowPermanentMatch = options?.allowPermanentMatch ?? true
+    const allowPermanentStore = options?.allowPermanentStore ?? true
+    const commandForPatternMatch = options?.commandForPatternMatch ?? patternKey
+
     // 1. Check session cache
     const sessionHit = this.sessionCache.get(key)
     if (sessionHit === "approved_session" || sessionHit === "approved") {
@@ -74,9 +83,14 @@ export class ApprovalStore {
     }
 
     // 2. Check permanent rules by pattern
-    for (const [rulePattern, decision] of this.permanentRules) {
-      if (rulePattern === patternKey && (decision === "approved_permanent" || decision === "approved")) {
-        return decision
+    if (allowPermanentMatch) {
+      for (const [rulePattern, decision] of this.permanentRules) {
+        if (
+          matchesApprovalPattern(rulePattern, commandForPatternMatch) &&
+          (decision === "approved_permanent" || decision === "approved")
+        ) {
+          return decision
+        }
       }
     }
 
@@ -86,7 +100,7 @@ export class ApprovalStore {
     // 4. Cache the result
     if (decision === "approved_session") {
       this.sessionCache.set(key, decision)
-    } else if (decision === "approved_permanent") {
+    } else if (decision === "approved_permanent" && allowPermanentStore) {
       this.permanentRules.set(patternKey, decision)
       // Persist to disk
       addApprovalRule(patternKey, decision)
