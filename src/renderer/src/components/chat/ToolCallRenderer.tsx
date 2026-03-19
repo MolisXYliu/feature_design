@@ -865,12 +865,12 @@ export function ToolCallRenderer({
         const error = gitResult.error || ""
         const message = gitResult.message || ""
 
-        if (error && message?.includes('Not a git repository')){
-          return <div className="text-sm text-status-critical space-y-3 my-4">
-            <div>当前工作台地址为：{workspacePath}</div>
-            <div>你需要：选择要git提交的仓库文件夹作为工作台地址</div>
-          </div>
-        }
+        // if (error && message?.includes('Not a git repository')){
+        //   return <div className="text-sm text-status-critical space-y-3 my-4">
+        //     <div>当前工作台地址为：{workspacePath}</div>
+        //     <div>你需要：选择要git提交的仓库文件夹作为工作台地址</div>
+        //   </div>
+        // }
 
         // console.log('Git workflow - changedFiles:', changedFiles.length, 'files')
 
@@ -1016,7 +1016,7 @@ export function ToolCallRenderer({
                       className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
                       onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
                     >
-                      {retryReason ? "无沙箱重试" : "运行"}
+                      运行
                     </button>
                   )}
                   {!retryReason && approvalTypes.includes("approve_session") && (

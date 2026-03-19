@@ -83,8 +83,10 @@ function Convert-PipelineElement {
     param($element)
 
     if ($element -is [System.Management.Automation.Language.CommandAst]) {
-        if ($element.Redirections.Count -gt 0) {
-            return $null
+        foreach ($redir in $element.Redirections) {
+            if ($redir -isnot [System.Management.Automation.Language.MergingRedirectionAst]) {
+                return $null
+            }
         }
 
         if (
@@ -106,8 +108,10 @@ function Convert-PipelineElement {
     }
 
     if ($element -is [System.Management.Automation.Language.CommandExpressionAst]) {
-        if ($element.Redirections.Count -gt 0) {
-            return $null
+        foreach ($redir in $element.Redirections) {
+            if ($redir -isnot [System.Management.Automation.Language.MergingRedirectionAst]) {
+                return $null
+            }
         }
 
         if ($element.Expression -is [System.Management.Automation.Language.ParenExpressionAst]) {
@@ -215,10 +219,28 @@ const SAFE_POWERSHELL_COMMANDS = new Set([
   "select-string", "sls", "findstr",
   "measure-object", "measure",
   "get-location", "gl", "pwd",
+  "set-location", "sl", "cd", "chdir",
+  "push-location", "pushd",
+  "pop-location", "popd",
   "test-path", "tp",
   "resolve-path", "rvpa",
   "select-object", "select",
-  "get-item"
+  "where-object", "where", "?",
+  "foreach-object", "foreach", "%",
+  "format-table", "ft",
+  "format-list", "fl",
+  "sort-object", "sort",
+  "group-object", "group",
+  "out-string", "oss",
+  "out-null",
+  "get-item", "gi",
+  "get-itemproperty", "gp",
+  "get-member", "gm",
+  "get-process", "gps", "ps",
+  "get-command", "gcm",
+  "get-help", "help", "man",
+  "get-alias", "gal",
+  "get-variable", "gv"
 ])
 const SIDE_EFFECTING_POWERSHELL_CMDLETS = new Set([
   "set-content", "add-content", "out-file", "new-item", "remove-item", "move-item",
@@ -382,6 +404,35 @@ function isSafePowerShellCommand(words: string[]): boolean {
       return isSafeGitCommand(words)
     case "rg":
       return isSafeRipgrep(words)
+    case "mvn":
+    case "mvn.cmd":
+    case "mvnw":
+    case "mvnw.cmd":
+      return isSafeMvnCommand(words)
+    case "gradle":
+    case "gradle.bat":
+    case "gradlew":
+    case "gradlew.bat":
+      return isSafeGradleCommand(words)
+    case "npm":
+    case "npm.cmd":
+    case "pnpm":
+    case "pnpm.cmd":
+    case "yarn":
+    case "yarn.cmd":
+    case "bun":
+      return isSafeNpmCommand(words)
+    case "cargo":
+      return isSafeCargoCommand(words)
+    case "go":
+      return isSafeGoCommand(words)
+    case "make":
+    case "cmake":
+      return true
+    case "dotnet":
+      return isSafeDotnetCommand(words)
+    case "javac":
+      return true
     default:
       return false
   }
@@ -495,6 +546,66 @@ function gitBranchIsReadOnly(args: string[]): boolean {
   }
 
   return sawReadOnlyFlag
+}
+
+// ── Safe build tool checks ──────────────────────────────────────────────────
+
+const UNSAFE_MVN_GOALS = new Set(["deploy", "site-deploy"])
+const UNSAFE_MVN_GOAL_PREFIXES = ["exec:", "release:", "deploy:", "wagon:", "scm:"]
+
+function isSafeMvnCommand(words: string[]): boolean {
+  for (let i = 1; i < words.length; i++) {
+    const arg = words[i]
+    if (arg.startsWith("-")) continue
+    const lower = arg.toLowerCase()
+    if (UNSAFE_MVN_GOALS.has(lower)) return false
+    if (UNSAFE_MVN_GOAL_PREFIXES.some((p) => lower.startsWith(p))) return false
+  }
+  return true
+}
+
+const UNSAFE_GRADLE_TASKS = new Set(["publish", "publishtomavenlocal", "uploadarchives"])
+
+function isSafeGradleCommand(words: string[]): boolean {
+  for (let i = 1; i < words.length; i++) {
+    const arg = words[i]
+    if (arg.startsWith("-")) continue
+    if (UNSAFE_GRADLE_TASKS.has(arg.toLowerCase())) return false
+  }
+  return true
+}
+
+const UNSAFE_NPM_SUBCOMMANDS = new Set(["publish", "unpublish", "deprecate", "dist-tag", "access", "exec", "x"])
+
+function isSafeNpmCommand(words: string[]): boolean {
+  if (words.length < 2) return false
+  const sub = words[1].toLowerCase()
+  return !UNSAFE_NPM_SUBCOMMANDS.has(sub)
+}
+
+const UNSAFE_CARGO_SUBCOMMANDS = new Set(["publish", "yank", "login", "logout"])
+
+function isSafeCargoCommand(words: string[]): boolean {
+  if (words.length < 2) return false
+  const sub = words[1].toLowerCase()
+  return !UNSAFE_CARGO_SUBCOMMANDS.has(sub)
+}
+
+const SAFE_GO_SUBCOMMANDS = new Set([
+  "build", "clean", "doc", "env", "fmt", "generate", "get",
+  "install", "list", "mod", "run", "test", "tool", "version", "vet"
+])
+
+function isSafeGoCommand(words: string[]): boolean {
+  if (words.length < 2) return false
+  return SAFE_GO_SUBCOMMANDS.has(words[1].toLowerCase())
+}
+
+const UNSAFE_DOTNET_SUBCOMMANDS = new Set(["nuget", "publish"])
+
+function isSafeDotnetCommand(words: string[]): boolean {
+  if (words.length < 2) return false
+  return !UNSAFE_DOTNET_SUBCOMMANDS.has(words[1].toLowerCase())
 }
 
 function isPowerShellExecutable(executable: string): boolean {
@@ -624,7 +735,22 @@ function splitPowerShellScript(script: string): string[] | null {
     }
 
     if (depth === 0) {
-      if (char === ">" || char === "<") return null
+      if (char === "<") return null
+      // Allow stream-merge redirections like 2>&1; reject file redirections
+      if (char === ">") {
+        const prev = index > 0 ? script[index - 1] : ""
+        if (/\d/.test(prev) && next === "&") {
+          const afterAmp = script[index + 2] ?? ""
+          if (/\d/.test(afterAmp)) {
+            // N>&M pattern (e.g. 2>&1) — safe stream merge, skip it
+            current += char + next + afterAmp
+            index += 2
+            continue
+          }
+        }
+        return null
+      }
+      // Allow & only as part of && operator or inside N>&M (already consumed above)
       if (char === "&" && next !== "&") return null
 
       const doubleOperator = char + next

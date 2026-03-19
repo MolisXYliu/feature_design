@@ -18,6 +18,7 @@ import type { ApprovalDecision } from "../types"
 
 const CODEX_HOME = join(homedir(), ".codex")
 const SETUP_MARKER_PATH = join(CODEX_HOME, ".sandbox", "setup_marker.json")
+const SANDBOX_USERS_PATH = join(CODEX_HOME, ".sandbox-secrets", "sandbox_users.json")
 const SETUP_VERSION = 5
 
 /** Track which workspace directories have had elevated ACL setup done (session-level). */
@@ -71,10 +72,16 @@ function resolveCodexBinDir(): string {
 
 /** Check whether the elevated sandbox setup has been completed (marker exists with correct version). */
 export function isElevatedSetupComplete(): boolean {
-  if (!existsSync(SETUP_MARKER_PATH)) return false
+  if (!existsSync(SETUP_MARKER_PATH) || !existsSync(SANDBOX_USERS_PATH)) return false
   try {
     const marker = JSON.parse(readFileSync(SETUP_MARKER_PATH, "utf-8"))
+    const users = JSON.parse(readFileSync(SANDBOX_USERS_PATH, "utf-8"))
     return marker.version === SETUP_VERSION
+      && users.version === SETUP_VERSION
+      && typeof marker.offline_username === "string"
+      && typeof marker.online_username === "string"
+      && typeof users.offline?.username === "string"
+      && typeof users.online?.username === "string"
   } catch {
     return false
   }
@@ -328,7 +335,15 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(
     "sandbox:completeNux",
     async (_event, mode: "elevated" | "unelevated" | "none"): Promise<void> => {
-      if (mode === "elevated" || mode === "unelevated") {
+      if (mode === "elevated") {
+        if (!isElevatedSetupComplete()) {
+          const result = await runElevatedSetupForPaths()
+          if (!result.success) {
+            throw new Error(result.error || "管理员沙箱配置失败")
+          }
+        }
+        setWindowsSandboxMode(mode)
+      } else if (mode === "unelevated") {
         setWindowsSandboxMode(mode)
       } else {
         setWindowsSandboxMode("none")

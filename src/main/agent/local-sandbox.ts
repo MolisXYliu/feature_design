@@ -40,6 +40,9 @@ const SENSITIVE_DIR_NAMES = new Set([
   ".docker", ".config", ".npm", ".pki", ".terraform.d"
 ])
 
+const WINDOWS_SANDBOX_OFFLINE_USERNAME = "CodexSandboxOffline"
+const WINDOWS_SANDBOX_ONLINE_USERNAME = "CodexSandboxOnline"
+
 /**
  * Check if a path falls within a sensitive directory that should be blocked
  * when sandbox mode is elevated.
@@ -58,6 +61,14 @@ function isSensitivePath(filePath: string): boolean {
   const relative = normalized.slice(homeNorm.length + 1)
   const firstSegment = relative.split("/")[0]
   return SENSITIVE_DIR_NAMES.has(firstSegment.toLowerCase())
+}
+
+function powershellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function cmdSetLiteral(value: string): string {
+  return value.replace(/"/g, '""')
 }
 
 /**
@@ -122,6 +133,61 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly _fileLocks = new Map<string, Promise<void>>()
   /** mtime recorded after each successful read/write, for external-modification detection */
   private readonly _fileReadTimes = new Map<string, number>()
+
+  private static getElevatedSandboxUserProfileRoot(networkEnabled: boolean): string {
+    const username = networkEnabled ? WINDOWS_SANDBOX_ONLINE_USERNAME : WINDOWS_SANDBOX_OFFLINE_USERNAME
+    const systemDrive = process.env.SystemDrive || "C:"
+    return path.win32.join(systemDrive, "Users", username)
+  }
+
+  private static buildElevatedSandboxEnvPreamble(shellBase: string): string {
+    const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
+    const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
+    const homePath = profileRoot.slice(homeDrive.length) || "\\"
+    const localAppData = path.win32.join(profileRoot, "AppData", "Local")
+    const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
+    const tempDir = path.win32.join(localAppData, "Temp")
+    const mavenRepoLocal = path.win32.join(tempDir, "m2-repo")
+    const envOverrides: Array<[string, string]> = [
+      ["USERPROFILE", profileRoot],
+      ["HOME", profileRoot],
+      ["HOMEDRIVE", homeDrive],
+      ["HOMEPATH", homePath],
+      ["APPDATA", roamingAppData],
+      ["LOCALAPPDATA", localAppData],
+      ["TEMP", tempDir],
+      ["TMP", tempDir],
+      ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
+      ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
+    ]
+
+    if (shellBase === "cmd") {
+      const base = envOverrides
+        .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
+        .join(" & ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
+      return `${base} & set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
+    }
+
+    if (shellBase === "pwsh" || shellBase === "powershell") {
+      const base = envOverrides
+        .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
+        .join("; ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
+      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${powershellSingleQuote(mavenRepoLocal)}"`
+    }
+
+    return ""
+  }
+
+  private static shouldFallbackToUnelevatedForNetworkAuth(output: string): boolean {
+    const lower = output.toLowerCase()
+    return lower.includes("sec_e_no_credentials")
+      || lower.includes("no credentials are available in the security package")
+      || output.includes("安全包中没有凭据")
+      || (lower.includes("schannel") && lower.includes("credential"))
+      || (output.includes("Invoke-WebRequest") && output.includes("认证失败"))
+  }
 
   constructor(options: LocalSandboxOptions = {}) {
     super({
@@ -1319,6 +1385,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       : shellBase === "pwsh" || shellBase === "powershell"
         ? `${psUtf8Preamble}; ${command}`
         : command
+    const sandboxUserEnvPreamble = isElevatedSandbox
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase)
+      : ""
+    const commandWithSandboxEnv = sandboxUserEnvPreamble
+      ? shellBase === "cmd"
+        ? `${sandboxUserEnvPreamble} & ${effectiveCommand}`
+        : `${sandboxUserEnvPreamble}; ${effectiveCommand}`
+      : effectiveCommand
 
     const isReadonly = effectiveMode === "readonly"
     const elevated = isReadonly && LocalSandbox.isElevated()
@@ -1336,7 +1410,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         "sandbox", "windows",
         "--full-auto",
         "--",
-        shell, ...shellFlags, effectiveCommand
+        shell, ...shellFlags, commandWithSandboxEnv
       ]
     } else if (isReadonly) {
       sandboxArgs = elevated
@@ -1345,14 +1419,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
             "-c", 'sandbox_permissions=["disk-full-read-access","disk-write-cwd"]',
             "sandbox", "windows",
             "--",
-            shell, ...shellFlags, effectiveCommand
+            shell, ...shellFlags, commandWithSandboxEnv
           ]
         : [
             "-c", 'sandbox_policy={ type = "read-only", access = { type = "full-access" }, network_access = true }',
             "-c", 'sandbox_permissions=["disk-full-read-access"]',
             "sandbox", "windows",
             "--",
-            shell, ...shellFlags, effectiveCommand
+            shell, ...shellFlags, commandWithSandboxEnv
           ]
     } else {
       sandboxArgs = [
@@ -1360,7 +1434,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         "sandbox", "windows",
         "--full-auto",
         "--",
-        shell, ...shellFlags, effectiveCommand
+        shell, ...shellFlags, commandWithSandboxEnv
       ]
     }
 
@@ -1518,6 +1592,20 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
       return {
         output: `沙箱工作目录配置失败: ${setupResult.error || "未知错误"}。\n请在设置中切换沙箱模式或以管理员身份运行应用。`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
+    if (
+      isElevatedSandbox
+      && result.exitCode !== 0
+      && sandboxModeOverride !== "unelevated"
+      && LocalSandbox.shouldFallbackToUnelevatedForNetworkAuth(result.output)
+    ) {
+      console.warn("[LocalSandbox] elevated network auth failed; blocking instead of auto-fallback")
+      return {
+        output: `⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。\n\n如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
         exitCode: 1,
         truncated: false
       }

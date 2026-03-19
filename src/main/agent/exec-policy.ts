@@ -294,8 +294,70 @@ function isKnownSafeCommand(command: string): boolean {
   if (isSafeRipgrep(tokens)) return true
   if (isSafeGit(tokens)) return true
   if (isSafeSed(tokens)) return true
+  if (isSafeBuildTool(executable, tokens)) return true
 
   return false
+}
+
+// ── Safe build tool checks (mirrors windows-safe-commands.ts) ───────────────
+
+const UNSAFE_MVN_GOALS = new Set(["deploy", "site-deploy"])
+const UNSAFE_MVN_GOAL_PREFIXES = ["exec:", "release:", "deploy:", "wagon:", "scm:"]
+const UNSAFE_GRADLE_TASKS = new Set(["publish", "publishtomavenlocal", "uploadarchives"])
+const UNSAFE_NPM_SUBCOMMANDS = new Set(["publish", "unpublish", "deprecate", "dist-tag", "access", "exec", "x"])
+const UNSAFE_CARGO_SUBCOMMANDS = new Set(["publish", "yank", "login", "logout"])
+const SAFE_GO_SUBCOMMANDS = new Set([
+  "build", "clean", "doc", "env", "fmt", "generate", "get",
+  "install", "list", "mod", "run", "test", "tool", "version", "vet"
+])
+const UNSAFE_DOTNET_SUBCOMMANDS = new Set(["nuget", "publish"])
+
+function isSafeBuildTool(executable: string, tokens: string[]): boolean {
+  switch (executable) {
+    case "mvn":
+    case "mvnw":
+      return isSafeMvn(tokens)
+    case "gradle":
+    case "gradlew":
+      return isSafeGradle(tokens)
+    case "npm":
+    case "pnpm":
+    case "yarn":
+    case "bun":
+      return tokens.length >= 2 && !UNSAFE_NPM_SUBCOMMANDS.has(tokens[1].toLowerCase())
+    case "cargo":
+      return tokens.length >= 2 && !UNSAFE_CARGO_SUBCOMMANDS.has(tokens[1].toLowerCase())
+    case "go":
+      return tokens.length >= 2 && SAFE_GO_SUBCOMMANDS.has(tokens[1].toLowerCase())
+    case "dotnet":
+      return tokens.length >= 2 && !UNSAFE_DOTNET_SUBCOMMANDS.has(tokens[1].toLowerCase())
+    case "make":
+    case "cmake":
+    case "javac":
+      return true
+    default:
+      return false
+  }
+}
+
+function isSafeMvn(tokens: string[]): boolean {
+  for (let i = 1; i < tokens.length; i++) {
+    const arg = tokens[i]
+    if (arg.startsWith("-")) continue
+    const lower = arg.toLowerCase()
+    if (UNSAFE_MVN_GOALS.has(lower)) return false
+    if (UNSAFE_MVN_GOAL_PREFIXES.some((p) => lower.startsWith(p))) return false
+  }
+  return true
+}
+
+function isSafeGradle(tokens: string[]): boolean {
+  for (let i = 1; i < tokens.length; i++) {
+    const arg = tokens[i]
+    if (arg.startsWith("-")) continue
+    if (UNSAFE_GRADLE_TASKS.has(arg.toLowerCase())) return false
+  }
+  return true
 }
 
 function tokenizeCommand(command: string): string[] | null {
