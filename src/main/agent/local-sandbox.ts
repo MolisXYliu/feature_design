@@ -1487,10 +1487,28 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           LocalSandbox.activeProcesses.delete(proc)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
           killProc()
+          const stdoutBuf = Buffer.concat(stdoutChunks)
+          const stderrBuf = Buffer.concat(stderrChunks)
+          const enc = this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
+          let existingOutput = ""
+          if (stdoutBuf.length > 0) existingOutput += iconv.decode(stdoutBuf, enc)
+          if (stderrBuf.length > 0) {
+            const errText = iconv.decode(stderrBuf, enc)
+              .split("\n").filter((l) => l.length > 0)
+              .map((l) => `[stderr] ${l}`).join("\n")
+            if (errText) existingOutput += (existingOutput ? "\n" : "") + errText
+          }
+          let truncated = false
+          if (existingOutput.length > this.maxOutputBytes) {
+            existingOutput = existingOutput.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+            truncated = true
+          }
+          if (!existingOutput.trim()) existingOutput = "<no output>"
+          const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({
-            output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
+            output: metadata + existingOutput,
             exitCode: null,
-            truncated: false
+            truncated
           })
         }
       }, this.timeout)
@@ -1684,10 +1702,31 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           LocalSandbox.activeProcesses.delete(proc)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
           killProc()
+          const stdoutBuf = Buffer.concat(stdoutChunks)
+          const stderrBuf = Buffer.concat(stderrChunks)
+          const enc = isWindows
+            ? this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
+            : "utf-8"
+          let existingOutput = ""
+          if (stdoutBuf.length > 0) existingOutput += iconv.decode(stdoutBuf, enc)
+          if (stderrBuf.length > 0) {
+            const stderrText = iconv.decode(stderrBuf, enc)
+            const prefixed = stderrText
+              .split("\n").filter((l) => l.length > 0)
+              .map((l) => `[stderr] ${l}`).join("\n")
+            if (prefixed) existingOutput += (existingOutput ? "\n" : "") + prefixed + (stderrText.endsWith("\n") ? "\n" : "")
+          }
+          let truncated = false
+          if (existingOutput.length > this.maxOutputBytes) {
+            existingOutput = existingOutput.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+            truncated = true
+          }
+          if (!existingOutput.trim()) existingOutput = "<no output>"
+          const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({
-            output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
+            output: metadata + existingOutput,
             exitCode: null,
-            truncated: false
+            truncated
           })
         }
       }, this.timeout)
