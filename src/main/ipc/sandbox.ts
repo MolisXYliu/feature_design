@@ -227,22 +227,20 @@ export async function runElevatedSetupForPaths(
         })
       })
     } else {
-      // Align with Codex more closely: elevate the setup helper directly instead of
-      // elevating a nested PowerShell process that then shells out to the helper.
-      const psCommand = [
-        `$p = Start-Process -FilePath '${psEscape(setupExe)}'`,
-        `-ArgumentList '${psEscape(b64)}'`,
-        "-Verb RunAs",
-        "-Wait",
-        "-PassThru",
-        "-WindowStyle Hidden",
-        ";",
-        "if ($null -eq $p) { exit 1 }",
-        "exit $p.ExitCode"
-      ].join(" ")
+      // Use array-based arguments to avoid PowerShell parsing issues with special characters
+      const psScript = `
+        $p = Start-Process -FilePath "${setupExe.replace(/"/g, '`"')}" \`
+          -ArgumentList "${b64.replace(/"/g, '`"')}" \`
+          -Verb RunAs \`
+          -Wait \`
+          -PassThru \`
+          -WindowStyle Hidden
+        if ($null -eq $p) { exit 1 }
+        exit $p.ExitCode
+      `.trim()
 
       await new Promise<void>((resolve, reject) => {
-        execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command", psCommand], {
+        execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command", psScript], {
           timeout: 120_000,
           windowsHide: false
         }, (err) => {
