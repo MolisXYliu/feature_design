@@ -1,6 +1,6 @@
 # Elevated 沙箱模式安全策略说明
 
-> 文档版本：v1.2
+> 文档版本：v1.3
 > 更新日期：2026-03-19
 > 适用范围：CmbCoworkAgent Windows 客户端
 > 文档性质：安全策略与风险评估报告
@@ -75,10 +75,12 @@ uniq, wc, where, which, whoami, type, awk, comm, date, diff, env, printenv
 | **文件读取** | `cat`, `type`, `gc`, `Get-Content` |
 | **搜索** | `Select-String`, `sls`, `findstr` |
 | **度量** | `Measure-Object`, `measure` |
-| **路径操作** | `Get-Location`/`gl`/`pwd`, `Test-Path`/`tp`, `Resolve-Path`/`rvpa` |
-| **对象处理** | `Select-Object`/`select`, `Get-Item` |
+| **路径导航** | `Get-Location`/`gl`/`pwd`, `Set-Location`/`sl`/`cd`/`chdir`, `Push-Location`/`pushd`, `Pop-Location`/`popd`, `Test-Path`/`tp`, `Resolve-Path`/`rvpa` |
+| **对象/管道处理** | `Select-Object`/`select`, `Where-Object`/`where`/`?`, `ForEach-Object`/`foreach`/`%`, `Sort-Object`/`sort`, `Group-Object`/`group`, `Format-Table`/`ft`, `Format-List`/`fl`, `Out-String`/`oss`, `Out-Null` |
+| **信息查询** | `Get-Item`/`gi`, `Get-ItemProperty`/`gp`, `Get-Member`/`gm`, `Get-Process`/`gps`/`ps`, `Get-Command`/`gcm`, `Get-Help`/`help`/`man`, `Get-Alias`/`gal`, `Get-Variable`/`gv` |
 | **Git 只读** | `git status`, `git log`, `git show`, `git diff`, `git cat-file`, `git branch`（同上参数校验） |
 | **ripgrep** | `rg`（同上参数校验） |
+| **构建工具** | 见下方 §1.4 构建工具安全白名单 |
 
 **副作用 cmdlet 黑名单**（任何管道中出现即判定为不安全）：
 
@@ -89,7 +91,29 @@ Move-Item, Copy-Item, Rename-Item, Start-Process, Stop-Process
 
 **PowerShell 调用层解析**：当检测到 `powershell -Command "..."` 或 `pwsh -c "..."` 模式时，会递归解析内部脚本内容。支持的标志：`-NoLogo`, `-NoProfile`, `-NonInteractive`, `-MTA`, `-STA`。不安全的标志（直接判定需审批）：`-EncodedCommand`, `-File`, `-WindowStyle`, `-ExecutionPolicy`, `-WorkingDirectory`。
 
-#### 1.4 Shell 元字符防护
+**流合并重定向支持**：PowerShell AST 解析器和保守解析器均支持 `2>&1` 等流合并重定向（`MergingRedirectionAst`），不会将其误判为文件重定向。例如 `mvn compile 2>&1 | Select-Object -Last 50` 可以被正确解析为安全命令。文件重定向（如 `> file.txt`）仍然会触发审批。
+
+#### 1.4 构建工具安全白名单
+
+> 代码路径：`src/main/agent/exec-policy.ts`（`isSafeBuildTool`）
+> 代码路径：`src/main/agent/windows-safe-commands.ts`（`isSafeMvnCommand` 等）
+
+为提升开发体验，常见的编译、测试、打包命令被识别为安全命令，无需审批。但涉及**远程发布、部署、外部包执行**的子命令仍需审批。
+
+| 构建工具 | 自动放行（示例） | 需要审批（黑名单） |
+|----------|------------------|-------------------|
+| **Maven** (`mvn`/`mvnw`) | `clean`, `compile`, `test`, `package`, `install`, `verify`, `spring-boot:run` | `deploy`, `site-deploy`, `exec:*`, `release:*`, `deploy:*`, `wagon:*`, `scm:*` |
+| **Gradle** (`gradle`/`gradlew`) | `build`, `clean`, `test`, `assemble`, `run`, `classes` | `publish`, `publishToMavenLocal`, `uploadArchives` |
+| **npm/pnpm/yarn/bun** | `install`, `run`, `test`, `build`, `ci`, `start`, `dev` | `publish`, `unpublish`, `deprecate`, `dist-tag`, `access`, `exec`, `x` |
+| **Cargo** | `build`, `test`, `run`, `check`, `fmt`, `clippy` | `publish`, `yank`, `login`, `logout` |
+| **Go** | `build`, `run`, `test`, `fmt`, `vet`, `mod`, `generate`（白名单） | 其他所有子命令 |
+| **dotnet** | `build`, `run`, `test`, `restore`, `clean` | `nuget`, `publish` |
+| **make/cmake** | 所有目标（构建系统，由 Makefile 定义） | — |
+| **javac** | Java 编译器（仅编译，无执行能力） | — |
+
+> 注：`java`/`javaw` **不在安全白名单中**，因其可执行任意代码。执行 `java -jar xxx.jar` 仍需用户审批。
+
+#### 1.5 Shell 元字符防护
 
 当命令中包含以下 shell 元字符时，即使首个命令在安全白名单中，也**不会自动放行**，而是归类为"需要审批"：
 
@@ -146,14 +170,18 @@ Move-Item, Copy-Item, Rename-Item, Start-Process, Stop-Process
 **不在安全白名单中的所有其他命令**均默认归类为"需要审批"，提示："unknown command — requires review"。
 
 常见需要审批的命令示例：
-- `npm install`, `npm run build`, `npm test`
 - `git add`, `git commit`, `git push`, `git checkout`
 - `mkdir`, `touch`, `cp`, `mv`, `ln`
-- `pip install`, `cargo build`, `cargo run`
+- `pip install`
+- `java -jar xxx.jar`（可执行任意代码）
 - `docker build`, `docker run`
 - `curl` (GET)、`wget` (下载)
 - `sed` (非 `-n` 模式，即写入模式)
+- `npm publish`, `mvn deploy`, `gradle publish`（远程发布操作）
+- `npm exec`, `npx`（下载并运行外部包）
 - 任何自定义脚本、可执行文件
+
+> 注：`npm install`、`npm run build`、`mvn compile`、`cargo build` 等常见构建命令已移入安全白名单（见 §1.4），不再需要审批。
 
 ### 3. 禁止命令（直接拒绝，不可执行）
 
@@ -395,15 +423,44 @@ node, node -e, perl, perl -e, ruby, ruby -e, php, php -r, lua, lua -e
 
 ---
 
-## 七、沙箱失败升级重试
+## 七、沙箱失败处理策略
 
-当沙箱阻止某个操作时（如网络请求在 Offline 模式下被阻止、文件写入被 ACL 拒绝），编排器会：
+当沙箱阻止某个操作时（如文件写入被 ACL 拒绝、网络认证凭据缺失），系统采取**拦截并提示**策略，**不提供绕过沙箱的选项**：
 
-1. 捕获沙箱错误（Access is denied / Permission denied / Operation not permitted）
-2. 向用户弹出重试审批："沙箱阻止了此操作: {错误信息}"
-3. 用户选择：
-   - **无沙箱重试** → 以 `none` 模式重新执行（不使用沙箱用户）
-   - **拒绝** → 返回错误给 Agent
+### 7.1 命令执行被沙箱拒绝
+
+当命令在沙箱中执行失败（Access is denied / Permission denied / Operation not permitted / blocked by policy），编排器直接返回友好错误信息：
+
+```
+⚠️ 操作被沙箱拦截：{错误信息}
+此命令在 Elevated 沙箱模式下无法执行。如需执行此类操作，请在设置中切换到 Unelevated 沙箱模式后重试。
+```
+
+**不再提供"无沙箱重试"选项**。用户如需执行被拦截的操作，必须主动到 **自定义 → 沙箱环境** 面板切换沙箱模式。
+
+### 7.2 网络认证凭据缺失
+
+Elevated 沙箱用户（`CodexSandboxOffline`）可能缺少企业网络认证凭据（如 Kerberos/NTLM），导致内网资源访问失败（`SEC_E_NO_CREDENTIALS`）。
+
+**之前的策略**：自动静默回退到 Unelevated 模式重试（绕过 Elevated 隔离）。
+
+**当前策略**：拦截并提示用户切换模式，不自动降级：
+
+```
+⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。
+如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。
+```
+
+### 7.3 沙箱模式切换入口
+
+沙箱模式**仅允许在以下两个入口切换**：
+
+| 入口 | 时机 | 说明 |
+|------|------|------|
+| **NUX 首次引导** | 首次启动应用 | 默认仅允许 Elevated，其他模式需开发人员密码解锁 |
+| **自定义 → 沙箱环境** | 任意时刻 | 切换后在下一次对话中生效；非 Elevated 模式同样需要密码解锁 |
+
+其他任何地方（审批弹窗、错误提示等）均不提供切换沙箱模式的操作入口。
 
 ---
 
@@ -449,12 +506,9 @@ node, node -e, perl, perl -e, ruby, ruby -e, php, php -r, lua, lua -e
     ┌─ 执行成功? ─┐
     │ Yes         │ No (沙箱拒绝)
     ↓             ↓
- 返回结果     弹出重试审批
-                  ↓
-           ┌── 用户决定 ──┐
-           │ retry        │ reject
-           ↓              ↓
-      无沙箱重试       返回错误
+ 返回结果     返回友好错误提示
+              "请在设置中切换沙箱模式"
+              （不提供无沙箱重试选项）
 ```
 
 ---
@@ -609,6 +663,10 @@ Agent 可能通过以下方式间接执行危险操作：
 | Elevated Setup 路径注入 | 中 | ✅ 已修复 | `resolve()` 归一化 + UNC 拦截 + 目录验证 + 系统目录黑名单 |
 | PowerShell 路径转义问题 | 中 | ✅ 已修复 | 改用双引号+反引号转义，支持括号等特殊字符路径 |
 | 网络访问数据外泄风险 | 中 | ⚠️ 策略变更 | 不再由本地沙箱阻断网络；依赖公司网络策略 + 敏感目录 DENY ACE + 命令审批 |
+| 沙箱失败可绕过隔离执行 | 高 | ✅ 已修复 | 不再提供"无沙箱重试"选项；沙箱拒绝时直接返回错误提示切换模式 |
+| 网络认证失败自动降级 | 高 | ✅ 已修复 | 不再自动回退到 Unelevated 模式；拦截并提示用户手动切换 |
+| 构建工具编译需审批影响效率 | 低 | ✅ 已修复 | 常见构建命令(mvn/gradle/npm/cargo/go等)加入安全白名单；发布/部署类子命令仍拦截 |
+| PowerShell 2>&1 误拦截 | 低 | ✅ 已修复 | AST 解析器和保守解析器均支持流合并重定向（MergingRedirectionAst），不再误判为文件重定向 |
 | 无可执行文件白名单 | 低 | ⚠️ 已评估，接受 | 沙箱用户可运行任何可读目录中的可执行文件，但所有进程均继承受限令牌；白名单不现实（Agent 需调用多种工具） |
 | IPC 攻击面 | 低 | ⚠️ 已评估，接受 | 沙箱用户理论上可通过命名管道等 IPC 与其他进程通信；实际大多数服务的 IPC ACL 对低权限用户严格限制，攻击场景极为牵强 |
 | 进程枚举信息泄露 | 低 | ⚠️ 已评估，接受 | 沙箱用户可查看系统进程列表，但无法操控；Agent 本身已有工作区读取权限，进程列表信息价值更低 |
