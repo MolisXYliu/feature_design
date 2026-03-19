@@ -149,7 +149,9 @@ export class ToolOrchestrator {
       msg.includes("access is denied") ||
       msg.includes("permission denied") ||
       msg.includes("operation not permitted") ||
-      msg.includes("sandbox")
+      msg.includes("sandbox blocked") ||
+      msg.includes("sandbox denied") ||
+      msg.includes("sandbox policy")
     )
   }
 
@@ -157,13 +159,14 @@ export class ToolOrchestrator {
     if (result.exitCode === 0) return false
     const msg = (result.output ?? "").toLowerCase()
     return (
-      msg.includes("access is denied") ||
-      msg.includes("permission denied") ||
-      msg.includes("operation not permitted") ||
       msg.includes("blocked by policy") ||
       msg.includes("setup refresh failed") ||
-      msg.includes("沙箱") ||
-      msg.includes("sandbox")
+      msg.includes("sandbox blocked") ||
+      msg.includes("sandbox denied") ||
+      msg.includes("sandbox policy") ||
+      msg.includes("沙箱阻止") ||
+      msg.includes("沙箱拦截") ||
+      msg.includes("沙箱拒绝")
     )
   }
 
