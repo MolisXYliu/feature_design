@@ -76,7 +76,7 @@ export interface LocalSandboxOptions {
   maxOutputBytes?: number
   /** Environment variables to pass to commands (default: process.env) */
   env?: Record<string, string>
-  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'elevated' uses dedicated sandbox user + firewall, 'none' runs directly (default: 'none') */
+  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'elevated' uses dedicated sandbox user isolation, 'none' runs directly (default: 'none') */
   windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"
   /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
   codexExePath?: string
@@ -1225,9 +1225,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /**
    * Execute a command inside the Codex Windows sandbox.
-   * - unelevated: restricted token + NTFS ACL (workdir writable, network blocked)
-   * - readonly: read-only for normal users; admin allows cwd write
-   * - elevated: dedicated sandbox user + firewall + strong ACL isolation; codex.exe manages credentials and ACLs internally
+   * - unelevated: restricted token + NTFS ACL (workdir writable, network follows host policy)
+   * - readonly: read-only filesystem sandbox with outbound network allowed
+   * - elevated: dedicated sandbox user + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
   private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated"): Promise<ExecuteResponse> {
@@ -1253,7 +1253,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const isReadonly = effectiveMode === "readonly"
     const elevated = isReadonly && LocalSandbox.isElevated()
 
-    // elevated: dedicated sandbox user + firewall, codex.exe handles everything internally
+    // elevated: dedicated sandbox user, codex.exe handles the isolation internally
     // readonly + admin: grant full read + cwd write so admin can work in workspace
     // readonly + non-admin: read only, all writes blocked
     // unelevated: workdir writable via --full-auto + ACL
@@ -1262,6 +1262,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // -c is a global flag and must come before the "sandbox" subcommand
       sandboxArgs = [
         "-c", 'windows.sandbox="elevated"',
+        "-c", "sandbox_workspace_write.network_access=true",
         "sandbox", "windows",
         "--full-auto",
         "--",
@@ -1270,19 +1271,22 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     } else if (isReadonly) {
       sandboxArgs = elevated
         ? [
-            "sandbox", "windows",
+            "-c", 'sandbox_policy={ type = "read-only", access = { type = "full-access" }, network_access = true }',
             "-c", 'sandbox_permissions=["disk-full-read-access","disk-write-cwd"]',
+            "sandbox", "windows",
             "--",
             shell, ...shellFlags, effectiveCommand
           ]
         : [
-            "sandbox", "windows",
+            "-c", 'sandbox_policy={ type = "read-only", access = { type = "full-access" }, network_access = true }',
             "-c", 'sandbox_permissions=["disk-full-read-access"]',
+            "sandbox", "windows",
             "--",
             shell, ...shellFlags, effectiveCommand
           ]
     } else {
       sandboxArgs = [
+        "-c", "sandbox_workspace_write.network_access=true",
         "sandbox", "windows",
         "--full-auto",
         "--",
