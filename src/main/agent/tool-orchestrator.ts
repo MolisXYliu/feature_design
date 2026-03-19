@@ -6,7 +6,7 @@
  *   1. Command safety assessment
  *   2. Cached / interactive approval
  *   3. Sandbox execution
- *   4. Sandbox-denial → ask user → unsandboxed retry
+ *   4. Sandbox-denial → block and inform user to switch sandbox mode
  */
 
 import { randomUUID } from "crypto"
@@ -118,7 +118,7 @@ export class ToolOrchestrator {
       }
       return result
     } catch (err) {
-      // 6. Sandbox denial → offer unsandboxed retry
+      // 6. Sandbox denial → block and inform user
       if (sandboxMode !== "none" && this.isSandboxDenialError(err)) {
         return this.handleSandboxRetry(
           command,
@@ -168,27 +168,14 @@ export class ToolOrchestrator {
   }
 
   private async handleSandboxRetry(
-    command: string,
-    cwd: string,
+    _command: string,
+    _cwd: string,
     retryReason: string
   ): Promise<ExecuteResponse> {
-    const retryApproval = await this.requestApproval({
-      id: randomUUID(),
-      tool_call: { id: randomUUID(), name: "execute", args: { command } },
-      safety_level: "needs_approval",
-      command,
-      cwd,
-      retry_reason: retryReason,
-      allowed_decisions: ["approve", "reject"],
-      allowed_approval_types: ["approve", "reject"]
-    })
-
-    if (retryApproval.type === "approve") {
-      return this.rawExecute(command, "none")
-    }
-
+    // In elevated mode, do NOT offer unsandboxed retry — just block the command
+    // and tell the user to switch to unelevated mode if they need this operation.
     return {
-      output: "Sandbox retry rejected by user.",
+      output: `⚠️ 操作被沙箱拦截：${retryReason}\n\n此命令在 Elevated 沙箱模式下无法执行。如需执行此类操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
       exitCode: 1,
       truncated: false
     }

@@ -1528,11 +1528,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       && sandboxModeOverride !== "unelevated"
       && LocalSandbox.shouldFallbackToUnelevatedForNetworkAuth(result.output)
     ) {
-      console.warn("[LocalSandbox] elevated network auth failed; retrying in unelevated sandbox for current-user credentials")
-      const fallback = await this.executeInWindowsSandbox(command, attempt, "unelevated")
+      console.warn("[LocalSandbox] elevated network auth failed; blocking instead of auto-fallback")
       return {
-        ...fallback,
-        output: `[compat] Elevated 沙箱用户缺少企业网络认证凭据，已自动回退到同用户受限沙箱执行。\n${fallback.output}`
+        output: `⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。\n\n如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
+        exitCode: 1,
+        truncated: false
       }
     }
 

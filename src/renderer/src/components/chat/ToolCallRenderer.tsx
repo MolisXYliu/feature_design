@@ -1016,7 +1016,7 @@ export function ToolCallRenderer({
                       className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
                       onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
                     >
-                      {retryReason ? "无沙箱重试" : "运行"}
+                      运行
                     </button>
                   )}
                   {!retryReason && approvalTypes.includes("approve_session") && (
