@@ -1156,7 +1156,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     // Always check forbidden commands, even without orchestrator (YOLO mode safety net)
     const { assessCommandSafety } = await import("./exec-policy")
-    const safety = assessCommandSafety(command, this.workingDir)
+    const safety = assessCommandSafety(command, this.workingDir, {
+      windowsShell: process.platform === "win32" && this.windowsSandbox !== "none" ? "powershell" : "unknown"
+    })
     if (safety.level === "forbidden") {
       console.log(`[LocalSandbox] execute: FORBIDDEN — ${safety.reason}`)
       return {

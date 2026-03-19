@@ -6,41 +6,89 @@
  * and command_might_be_dangerous().
  */
 
+import path from "node:path"
 import type { ExecSafetyLevel } from "../types"
+import { isKnownSafeWindowsCommand, type WindowsShellKind } from "./windows-safe-commands"
 
 export interface SafetyAssessment {
   level: ExecSafetyLevel
   reason?: string
 }
 
-// ── Safe command patterns ────────────────────────────────────────────────────
-// These commands are read-only or produce no destructive side effects.
+const APPROVAL_PREFIX_RULE_PREFIX = "prefix:"
 
-const SAFE_PREFIXES: string[] = [
-  // filesystem read
-  "ls", "dir", "cat", "head", "tail", "wc", "file", "stat",
-  "tree", "find", "which", "where", "type",
-  // text processing (read-only)
-  "grep", "rg", "awk", "sed -n", "sort", "uniq", "cut", "tr",
-  "diff", "comm",
-  // info
-  "echo", "printf", "pwd", "cd", "date", "whoami", "hostname",
-  "uname", "env", "printenv", "id",
-  // git read
-  "git status", "git log", "git diff", "git branch", "git show",
-  "git remote", "git tag", "git rev-parse", "git ls-files",
-  "git blame", "git shortlog", "git stash list",
-  // package info
-  "npm list", "npm ls", "npm view", "npm info", "npm outdated",
-  "pip list", "pip show", "pip freeze",
-  "cargo --version", "rustc --version",
-  // build read
-  "make -n", "make --dry-run",
-  // PowerShell read-only
-  "get-childitem", "get-content", "get-item", "get-location",
-  "get-process", "get-service", "get-date", "get-host",
-  "test-path", "resolve-path", "select-string"
+const SAFE_EXECUTABLES = new Set([
+  "base64", "cat", "cd", "cut", "dir", "echo", "expr", "false", "file", "grep",
+  "head", "hostname", "id", "ls", "nl", "paste", "pwd", "printf",
+  "rev", "seq", "sort", "stat", "tail", "tr", "tree", "true", "uname",
+  "uniq", "wc", "where", "which", "whoami", "type", "awk", "comm",
+  "date", "diff", "env", "printenv"
+])
+
+const UNSAFE_FIND_OPTIONS = new Set([
+  "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"
+])
+
+const UNSAFE_RIPGREP_FLAGS = new Set(["--search-zip", "-z"])
+const UNSAFE_RIPGREP_FLAGS_WITH_VALUES = ["--pre", "--hostname-bin"]
+const UNSAFE_GIT_FLAGS = new Set(["--output", "--ext-diff", "--textconv", "--exec", "--paginate"])
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  "-c", "--config-env", "--exec-path", "--git-dir", "--namespace", "--super-prefix", "--work-tree"
+])
+
+const SIDE_EFFECTING_POWERSHELL_CMDLETS = new Set([
+  "set-content", "add-content", "out-file", "new-item", "remove-item", "move-item",
+  "copy-item", "rename-item", "start-process", "stop-process"
+])
+
+const BANNED_PERSISTENT_PREFIXES: string[][] = [
+  ["python3"],
+  ["python3", "-"],
+  ["python3", "-c"],
+  ["python"],
+  ["python", "-"],
+  ["python", "-c"],
+  ["py"],
+  ["py", "-3"],
+  ["pythonw"],
+  ["pyw"],
+  ["pypy"],
+  ["pypy3"],
+  ["git"],
+  ["bash"],
+  ["bash", "-lc"],
+  ["sh"],
+  ["sh", "-c"],
+  ["sh", "-lc"],
+  ["zsh"],
+  ["zsh", "-lc"],
+  ["pwsh"],
+  ["pwsh", "-command"],
+  ["pwsh", "-c"],
+  ["powershell"],
+  ["powershell", "-command"],
+  ["powershell", "-c"],
+  ["powershell.exe"],
+  ["powershell.exe", "-command"],
+  ["powershell.exe", "-c"],
+  ["env"],
+  ["sudo"],
+  ["node"],
+  ["node", "-e"],
+  ["perl"],
+  ["perl", "-e"],
+  ["ruby"],
+  ["ruby", "-e"],
+  ["php"],
+  ["php", "-r"],
+  ["lua"],
+  ["lua", "-e"]
 ]
+
+const PERSISTABLE_EXECUTABLES = new Set([
+  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "make",
+  "mvn", "npm", "pnpm", "poetry", "pytest", "uv", "yarn"
+])
 
 // ── Forbidden patterns ───────────────────────────────────────────────────────
 // These are extremely dangerous and should never be auto-approved.
@@ -138,11 +186,15 @@ const DANGEROUS_INDICATORS: DangerousIndicator[] = [
  *   1. Forbidden patterns (full string) — always checked first
  *   2. Dangerous indicators (full string) — checked before safe to prevent
  *      chained-command bypass (e.g. "echo ok && git push --force")
- *   3. Safe prefix — only if no chaining operators (&&, ||, ;) are present,
- *      to prevent "safe-prefix && dangerous-command" bypass
+ *   3. Provably read-only command — only if no control operators or redirection
+ *      are present, to prevent "safe-command && dangerous-command" bypass
  *   4. Default: needs_approval
  */
-export function assessCommandSafety(command: string, _cwd: string): SafetyAssessment {
+export function assessCommandSafety(
+  command: string,
+  _cwd: string,
+  options?: { windowsShell?: WindowsShellKind }
+): SafetyAssessment {
   const trimmed = command.trim()
   if (!trimmed) {
     return { level: "safe" }
@@ -163,21 +215,304 @@ export function assessCommandSafety(command: string, _cwd: string): SafetyAssess
     }
   }
 
-  // 3. Check if command matches a known-safe prefix
-  //    Skip if command contains chaining/piping/substitution operators —
-  //    "echo ok | npm install", "ls & rm -rf /", "echo `dangerous`" etc.
-  //    must not be auto-approved based on the first command alone.
-  const hasChaining = /&&|\|\||[|;&\n`]|\$\(/.test(trimmed)
-  if (!hasChaining) {
-    const normalized = trimmed.toLowerCase()
-    for (const prefix of SAFE_PREFIXES) {
-      // Match "ls", "ls -la", etc. but not "lsblk"
-      if (normalized === prefix || normalized.startsWith(prefix + " ") || normalized.startsWith(prefix + "\t")) {
-        return { level: "safe" }
-      }
-    }
+  const windowsSafe = process.platform === "win32"
+    && isKnownSafeWindowsCommand(trimmed, options?.windowsShell ?? "unknown")
+  if (windowsSafe) {
+    return { level: "safe" }
+  }
+
+  // 3. Check if command is provably read-only. Anything involving shell
+  //    control operators or redirection is reviewed instead of auto-approved.
+  const hasShellMetacharacters = /&&|\|\||[|;&`<>]|\$\(|\n/.test(trimmed)
+  if (!hasShellMetacharacters && isKnownSafeCommand(trimmed)) {
+    return { level: "safe" }
   }
 
   // 4. Default: needs approval (unknown commands are not auto-approved)
-  return { level: "needs_approval", reason: hasChaining ? "chained command — requires review" : "unknown command — requires review" }
+  return {
+    level: "needs_approval",
+    reason: hasShellMetacharacters ? "complex shell expression — requires review" : "unknown command — requires review"
+  }
+}
+
+export function derivePermanentApprovalPattern(command: string): string | null {
+  const trimmed = command.trim()
+  if (!trimmed) return null
+  if (/&&|\|\||[|;&`<>]|\$\(|\n/.test(trimmed)) return null
+  if (FORBIDDEN_PATTERNS.some(({ pattern }) => pattern.test(trimmed))) return null
+  if (DANGEROUS_INDICATORS.some(({ pattern }) => pattern.test(trimmed))) return null
+
+  const tokens = tokenizeCommand(trimmed)
+  if (!tokens || tokens.length === 0) return null
+  if (tokens.some((token) => token.includes("$(") || token.includes("${") || token.includes("@("))) {
+    return null
+  }
+  if (!PERSISTABLE_EXECUTABLES.has(normalizeExecutable(tokens[0]))) return null
+  if (isBannedPersistentPrefix(tokens)) return null
+
+  return `${APPROVAL_PREFIX_RULE_PREFIX}${JSON.stringify(tokens)}`
+}
+
+export function matchesApprovalPattern(pattern: string, command: string): boolean {
+  if (pattern.startsWith(APPROVAL_PREFIX_RULE_PREFIX)) {
+    const prefixTokens = parseApprovalPattern(pattern)
+    const commandTokens = tokenizeCommand(command.trim())
+    if (!prefixTokens || !commandTokens || commandTokens.length < prefixTokens.length) {
+      return false
+    }
+    return prefixTokens.every((token, index) => commandTokens[index] === token)
+  }
+
+  return pattern === command.trim()
+}
+
+function isKnownSafeCommand(command: string): boolean {
+  const tokens = tokenizeCommand(command)
+  if (!tokens || tokens.length === 0) return false
+
+  if (tokens.some((token) => token.includes("$(") || token.includes("${") || token.includes("@("))) {
+    return false
+  }
+
+  for (const token of tokens) {
+    const normalized = token
+      .trim()
+      .replace(/^[('"]+|[)'"]+$/g, "")
+      .replace(/^-+/, "")
+      .toLowerCase()
+    if (SIDE_EFFECTING_POWERSHELL_CMDLETS.has(normalized)) {
+      return false
+    }
+  }
+
+  const executable = normalizeExecutable(tokens[0])
+  if (!executable) return false
+
+  if (isSafeBase64(tokens)) return true
+  if (SAFE_EXECUTABLES.has(executable)) return true
+  if (isSafeFind(tokens)) return true
+  if (isSafeRipgrep(tokens)) return true
+  if (isSafeGit(tokens)) return true
+  if (isSafeSed(tokens)) return true
+
+  return false
+}
+
+function tokenizeCommand(command: string): string[] | null {
+  const tokens: string[] = []
+  let current = ""
+  let quote: "'" | '"' | null = null
+  let escaped = false
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+
+    if (escaped) {
+      current += ch
+      escaped = false
+      continue
+    }
+
+    if (ch === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+
+    if (quote) {
+      if (ch === quote) {
+        quote = null
+      } else {
+        current += ch
+      }
+      continue
+    }
+
+    if (ch === "'" || ch === "\"") {
+      quote = ch
+      continue
+    }
+
+    if (/\s/.test(ch)) {
+      if (current) {
+        tokens.push(current)
+        current = ""
+      }
+      continue
+    }
+
+    current += ch
+  }
+
+  if (escaped || quote) return null
+  if (current) tokens.push(current)
+  return tokens
+}
+
+function parseApprovalPattern(pattern: string): string[] | null {
+  if (!pattern.startsWith(APPROVAL_PREFIX_RULE_PREFIX)) return null
+  try {
+    const parsed = JSON.parse(pattern.slice(APPROVAL_PREFIX_RULE_PREFIX.length)) as unknown
+    if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((item) => typeof item !== "string")) {
+      return null
+    }
+    return parsed as string[]
+  } catch {
+    return null
+  }
+}
+
+function isBannedPersistentPrefix(tokens: string[]): boolean {
+  const normalized = tokens.map((token, index) => {
+    if (index === 0) return normalizeExecutable(token)
+    return token.toLowerCase()
+  })
+
+  return BANNED_PERSISTENT_PREFIXES.some((banned) => (
+    banned.length <= normalized.length &&
+    banned.every((token, index) => normalized[index] === token)
+  ))
+}
+
+function normalizeExecutable(raw: string): string {
+  const base = path.basename(raw).toLowerCase()
+  return base.replace(/\.(exe|cmd|bat|com)$/i, "")
+}
+
+function isSafeFind(tokens: string[]): boolean {
+  if (normalizeExecutable(tokens[0]) !== "find") return false
+  return !tokens.some((token) => UNSAFE_FIND_OPTIONS.has(token.toLowerCase()))
+}
+
+function isSafeRipgrep(tokens: string[]): boolean {
+  if (normalizeExecutable(tokens[0]) !== "rg") return false
+  return !tokens.some((token) => {
+    const lower = token.toLowerCase()
+    return (
+      UNSAFE_RIPGREP_FLAGS.has(lower) ||
+      UNSAFE_RIPGREP_FLAGS_WITH_VALUES.some((flag) => lower === flag || lower.startsWith(flag + "="))
+    )
+  })
+}
+
+function isSafeGit(tokens: string[]): boolean {
+  if (normalizeExecutable(tokens[0]) !== "git") return false
+  if (hasGitConfigOverride(tokens)) return false
+
+  const subcommandInfo = findGitSubcommand(tokens)
+  if (!subcommandInfo) return false
+
+  const { index, subcommand } = subcommandInfo
+  const args = tokens.slice(index + 1)
+  if (!gitArgsAreReadOnly(args)) return false
+
+  switch (subcommand) {
+    case "status":
+    case "log":
+    case "diff":
+    case "show":
+    case "cat-file":
+      return true
+    case "branch":
+      return gitBranchIsReadOnly(args)
+    default:
+      return false
+  }
+}
+
+function hasGitConfigOverride(tokens: string[]): boolean {
+  return tokens.some((token) => {
+    const lower = token.toLowerCase()
+    return lower === "-c" || lower === "--config-env" || lower.startsWith("-c") || lower.startsWith("--config-env=")
+  })
+}
+
+function findGitSubcommand(tokens: string[]): { index: number; subcommand: string } | null {
+  let skipNext = false
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i]
+    const lower = token.toLowerCase()
+
+    if (skipNext) {
+      skipNext = false
+      continue
+    }
+
+    if (
+      GIT_GLOBAL_OPTIONS_WITH_VALUE.has(lower)
+    ) {
+      skipNext = true
+      continue
+    }
+
+    if (
+      lower.startsWith("--config-env=") ||
+      lower.startsWith("--exec-path=") ||
+      lower.startsWith("--git-dir=") ||
+      lower.startsWith("--namespace=") ||
+      lower.startsWith("--super-prefix=") ||
+      lower.startsWith("--work-tree=") ||
+      (lower.startsWith("-c") && lower.length > 2)
+    ) {
+      continue
+    }
+
+    if (token === "--" || token.startsWith("-")) continue
+
+    return { index: i, subcommand: lower }
+  }
+
+  return null
+}
+
+function gitArgsAreReadOnly(args: string[]): boolean {
+  return !args.some((arg) => {
+    const lower = arg.toLowerCase()
+    return UNSAFE_GIT_FLAGS.has(lower) || lower.startsWith("--output=") || lower.startsWith("--exec=")
+  })
+}
+
+function gitBranchIsReadOnly(args: string[]): boolean {
+  if (args.length === 0) return true
+
+  let sawReadOnlyFlag = false
+  for (const arg of args) {
+    const lower = arg.toLowerCase()
+    switch (lower) {
+      case "--list":
+      case "-l":
+      case "--show-current":
+      case "-a":
+      case "--all":
+      case "-r":
+      case "--remotes":
+      case "-v":
+      case "-vv":
+      case "--verbose":
+        sawReadOnlyFlag = true
+        break
+      default:
+        if (lower.startsWith("--format=")) {
+          sawReadOnlyFlag = true
+          break
+        }
+        return false
+    }
+  }
+
+  return sawReadOnlyFlag
+}
+
+function isSafeSed(tokens: string[]): boolean {
+  if (normalizeExecutable(tokens[0]) !== "sed") return false
+  if (tokens.length < 3 || tokens.length > 4) return false
+  if (tokens[1] !== "-n") return false
+  return /^(\d+,)?\d+p$/.test(tokens[2])
+}
+
+function isSafeBase64(tokens: string[]): boolean {
+  if (normalizeExecutable(tokens[0]) !== "base64") return false
+  return !tokens.slice(1).some((token) => {
+    const lower = token.toLowerCase()
+    return lower === "-o" || lower === "--output" || lower.startsWith("--output=") || (lower.startsWith("-o") && lower !== "-o")
+  })
 }
