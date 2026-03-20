@@ -1,5 +1,5 @@
 import { app, BrowserWindow, IpcMain } from "electron"
-import { existsSync, readFileSync, mkdirSync, readdirSync, statSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "fs"
 import { execFile, execSync } from "child_process"
 import { homedir } from "os"
 import { join, resolve } from "path"
@@ -19,10 +19,40 @@ import type { ApprovalDecision } from "../types"
 const CODEX_HOME = join(homedir(), ".codex")
 const SETUP_MARKER_PATH = join(CODEX_HOME, ".sandbox", "setup_marker.json")
 const SANDBOX_USERS_PATH = join(CODEX_HOME, ".sandbox-secrets", "sandbox_users.json")
+const ELEVATED_WORKSPACES_PATH = join(CODEX_HOME, ".sandbox", "elevated_workspaces.json")
 const SETUP_VERSION = 5
 
-/** Track which workspace directories have had elevated ACL setup done (session-level). */
+/** Persistent + session cache of workspace dirs that have had elevated ACL setup done. */
 const elevatedSetupDirs = new Set<string>()
+
+/** Load previously configured workspace paths from disk into the in-memory set. */
+function loadElevatedWorkspaceDirs(): void {
+  try {
+    if (!existsSync(ELEVATED_WORKSPACES_PATH)) return
+    const data = JSON.parse(readFileSync(ELEVATED_WORKSPACES_PATH, "utf-8"))
+    if (Array.isArray(data.paths)) {
+      for (const p of data.paths) {
+        if (typeof p === "string") elevatedSetupDirs.add(p)
+      }
+    }
+  } catch {
+    // Corrupt or missing file — start fresh, will be overwritten on next save
+  }
+}
+
+/** Persist the current set of configured workspace paths to disk. */
+function saveElevatedWorkspaceDirs(): void {
+  try {
+    const sbxDir = join(CODEX_HOME, ".sandbox")
+    mkdirSync(sbxDir, { recursive: true })
+    writeFileSync(ELEVATED_WORKSPACES_PATH, JSON.stringify({ paths: [...elevatedSetupDirs] }, null, 2))
+  } catch (err) {
+    console.warn("[Sandbox] Failed to persist elevated workspace dirs:", err)
+  }
+}
+
+// Load persisted dirs immediately so they survive app restarts
+loadElevatedWorkspaceDirs()
 
 /** Sensitive directories under user profile that should NOT be readable by the sandbox user. */
 const USERPROFILE_READ_ROOT_EXCLUSIONS = [
@@ -279,9 +309,10 @@ export function isWorkspaceElevatedSetupDone(dir: string): boolean {
   return elevatedSetupDirs.has(dir)
 }
 
-/** Mark a workspace directory as having elevated ACL setup done. */
+/** Mark a workspace directory as having elevated ACL setup done, and persist to disk. */
 export function markWorkspaceElevatedSetupDone(dir: string): void {
   elevatedSetupDirs.add(dir)
+  saveElevatedWorkspaceDirs()
 }
 
 export function registerSandboxHandlers(ipcMain: IpcMain): void {

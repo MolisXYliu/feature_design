@@ -1374,6 +1374,26 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
     const isElevatedSandbox = effectiveMode === "elevated"
 
+    // Elevated mode: proactively ensure the workspace has ACL setup before spawning codex.exe.
+    // This prevents the command from silently blocking mid-execution when codex.exe returns
+    // "setup refresh failed" (which triggers a reactive UAC mid-command).
+    // Using persistent cache so workspaces only need setup once, across restarts.
+    if (isElevatedSandbox && attempt === 1) {
+      const { isWorkspaceElevatedSetupDone, runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } =
+        await import("../ipc/sandbox")
+      if (!isWorkspaceElevatedSetupDone(this.workingDir)) {
+        console.log(`[LocalSandbox] elevated: workspace not yet ACL-configured, running setup proactively: ${this.workingDir}`)
+        const setupResult = await runElevatedSetupForPaths([this.workingDir])
+        if (setupResult.success) {
+          markWorkspaceElevatedSetupDone(this.workingDir)
+          console.log(`[LocalSandbox] elevated: proactive setup done for ${this.workingDir}`)
+        } else {
+          console.warn(`[LocalSandbox] elevated: proactive setup failed: ${setupResult.error}`)
+          // Continue anyway — codex.exe will handle "setup refresh failed" reactively as fallback
+        }
+      }
+    }
+
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
