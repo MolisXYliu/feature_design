@@ -259,7 +259,7 @@ export function GitFileOperationPromptWithProps({
           changedFiles: changedFiles,
           workspacePath: gitRepoPath,
           commands,
-          commitHash
+          commitHash,
         })
       } catch (uploadError) {
         console.warn("[Upload] 提交数据上报失败:", uploadError)
