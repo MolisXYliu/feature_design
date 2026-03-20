@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
   ShieldCheck,
+  Info,
   Database,
   Layers,
   Clock,
@@ -108,9 +109,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showNux, setShowNux] = useState(false)
   const [nuxLoading, setNuxLoading] = useState(false)
   const [nuxError, setNuxError] = useState<string | null>(null)
-  const [nuxDevMode, setNuxDevMode] = useState(false)
-  const [nuxDevPassword, setNuxDevPassword] = useState("")
-  const [nuxUnlocked, setNuxUnlocked] = useState(false)
+  const [nuxLoadingStep, setNuxLoadingStep] = useState(0)
+
+  const NUX_LOADING_STEPS = [
+    "正在准备沙箱环境...",
+    "等待管理员授权，请在弹出的窗口中点击「是」...",
+    "正在创建沙箱隔离用户...",
+    "正在配置目录访问权限...",
+    "即将完成，请稍候...",
+  ]
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
@@ -376,12 +383,33 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [threadId])
 
-  // Check if NUX (first-run sandbox setup) is needed
+  // Check if NUX (first-run sandbox setup) is needed, then auto-start elevated setup
   useEffect(() => {
     window.api.sandbox.isNuxNeeded().then((needed) => {
-      if (needed) setShowNux(true)
+      if (!needed) return
+      setShowNux(true)
+      setNuxLoading(true)
+      setNuxError(null)
+      window.api.sandbox.completeNux("elevated")
+        .then(() => setShowNux(false))
+        .catch((e) => {
+          setNuxError(e instanceof Error ? e.message : String(e))
+          setNuxLoading(false)
+        })
     }).catch((e) => console.warn("[NUX] Failed to check:", e))
   }, [])
+
+  // Cycle loading step messages while NUX is configuring
+  useEffect(() => {
+    if (!nuxLoading) { setNuxLoadingStep(0); return }
+    const timers = [
+      setTimeout(() => setNuxLoadingStep(1), 3_000),
+      setTimeout(() => setNuxLoadingStep(2), 12_000),
+      setTimeout(() => setNuxLoadingStep(3), 30_000),
+      setTimeout(() => setNuxLoadingStep(4), 60_000),
+    ]
+    return () => timers.forEach(clearTimeout)
+  }, [nuxLoading])
 
   // Thinking messages: loading 时轮换提示语
   useEffect(() => {
@@ -1123,148 +1151,72 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       {/* NUX: First-run sandbox setup dialog */}
       {showNux && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
-          <div className="bg-background border border-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 space-y-4">
+          <div className="bg-background border border-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 space-y-5">
+            {/* Header */}
             <div className="flex items-center gap-2">
               <ShieldCheck className="size-5 text-primary" />
               <h2 className="text-lg font-bold">设置 Agent 沙箱环境</h2>
             </div>
 
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              沙箱环境保护你的文件并控制网络访问，防止 Agent 意外修改系统或泄露数据。
-            </p>
+            {/* Policy notice */}
+            <div className="flex items-start gap-2.5 rounded-md border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-700 dark:text-amber-400">
+              <Info className="size-4 shrink-0 mt-0.5" />
+              <span>公司安全限制，默认选择 elevated 沙箱模式，确有其他需要请联系管理员。</span>
+            </div>
 
-            {nuxError && (
-              <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400 space-y-2">
-                <p>管理员沙箱配置失败：{nuxError}</p>
-                <p>请重试，如仍无法配置请联系开发人员。</p>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                    disabled={nuxLoading}
-                    onClick={() => setNuxError(null)}
-                  >
-                    重试
-                  </button>
+            {/* Loading state */}
+            {nuxLoading && (
+              <div className="flex flex-col items-center gap-4 py-6">
+                <div className="relative size-14">
+                  <div className="absolute inset-0 size-14 rounded-full border-4 border-primary/15" />
+                  <div className="absolute inset-0 size-14 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <ShieldCheck className="size-5 text-primary" />
+                  </div>
+                </div>
+                <div className="text-center space-y-1.5">
+                  <div className="text-sm font-medium transition-all duration-500">
+                    {NUX_LOADING_STEPS[nuxLoadingStep]}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    首次配置可能需要 1&ndash;3 分钟，请勿关闭窗口
+                  </div>
+                </div>
+                {/* Progress dots */}
+                <div className="flex gap-1.5">
+                  {NUX_LOADING_STEPS.map((_, i) => (
+                    <div
+                      key={i}
+                      className={`size-1.5 rounded-full transition-all duration-500 ${
+                        i <= nuxLoadingStep ? "bg-primary" : "bg-primary/20"
+                      }`}
+                    />
+                  ))}
                 </div>
               </div>
             )}
 
-            {!nuxError && (
-              <div className="flex flex-col gap-2">
+            {/* Error state */}
+            {nuxError && (
+              <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400 space-y-2">
+                <p className="font-medium">管理员沙箱配置失败</p>
+                <p className="text-xs opacity-80">{nuxError}</p>
+                <p className="text-xs">如重试仍失败，请联系管理员。</p>
                 <button
-                  className="flex items-center gap-3 rounded-lg border-2 border-primary bg-primary/5 p-4 text-left transition-colors hover:bg-primary/10 disabled:opacity-50"
-                  disabled={nuxLoading}
-                  onClick={async () => {
-                    setNuxLoading(true)
+                  className="mt-1 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                  onClick={() => {
                     setNuxError(null)
-                    try {
-                      const result = await window.api.sandbox.runElevatedSetup()
-                      if (result.success) {
-                        await window.api.sandbox.completeNux("elevated")
-                        setShowNux(false)
-                      } else {
-                        setNuxError(result.error || "配置失败")
-                      }
-                    } catch (e) {
-                      setNuxError(e instanceof Error ? e.message : String(e))
-                    } finally { setNuxLoading(false) }
+                    setNuxLoading(true)
+                    window.api.sandbox.completeNux("elevated")
+                      .then(() => setShowNux(false))
+                      .catch((e) => {
+                        setNuxError(e instanceof Error ? e.message : String(e))
+                        setNuxLoading(false)
+                      })
                   }}
                 >
-                  <ShieldCheck className="size-5 text-primary shrink-0" />
-                  <div>
-                    <div className="text-sm font-medium">默认沙箱 (需要管理员权限)</div>
-                    <div className="text-xs text-muted-foreground">推荐 — 独立用户 + 防火墙，最强隔离</div>
-                  </div>
+                  重试
                 </button>
-
-                <button
-                  className={`flex items-center gap-3 rounded-lg border-2 border-border p-4 text-left ${nuxUnlocked ? "transition-colors hover:border-primary/40 hover:bg-muted/40 disabled:opacity-50" : "opacity-50 cursor-not-allowed"}`}
-                  disabled={nuxUnlocked ? nuxLoading : true}
-                  onClick={nuxUnlocked ? async () => {
-                    setNuxLoading(true)
-                    try {
-                      await window.api.sandbox.completeNux("unelevated")
-                      setShowNux(false)
-                    } catch (e) { console.error(e) }
-                    finally { setNuxLoading(false) }
-                  } : undefined}
-                >
-                  <ShieldCheck className="size-5 text-muted-foreground shrink-0" />
-                  <div>
-                    <div className="text-sm font-medium">非管理员沙箱 (风险较高)</div>
-                    <div className="text-xs text-muted-foreground">受限令牌隔离，无需管理员权限</div>
-                    {!nuxUnlocked && <div className="text-xs text-amber-500 mt-1">如需选择请联系开发人员</div>}
-                  </div>
-                </button>
-
-                <button
-                  className={`flex items-center gap-3 rounded-lg border-2 border-border p-4 text-left ${nuxUnlocked ? "transition-colors hover:border-primary/40 hover:bg-muted/40 disabled:opacity-50" : "opacity-50 cursor-not-allowed"}`}
-                  disabled={nuxUnlocked ? nuxLoading : true}
-                  onClick={nuxUnlocked ? async () => {
-                    setNuxLoading(true)
-                    try {
-                      await window.api.sandbox.completeNux("none")
-                      setShowNux(false)
-                    } catch (e) { console.error(e) }
-                    finally { setNuxLoading(false) }
-                  } : undefined}
-                >
-                  <X className="size-5 text-muted-foreground shrink-0" />
-                  <div>
-                    <div className="text-sm font-medium">跳过</div>
-                    <div className="text-xs text-muted-foreground">不启用沙箱，可稍后在设置中配置</div>
-                    {!nuxUnlocked && <div className="text-xs text-amber-500 mt-1">如需选择请联系开发人员</div>}
-                  </div>
-                </button>
-
-                {/* Developer backdoor */}
-                {!nuxUnlocked && (
-                  <div className="pt-2 text-center">
-                    {!nuxDevMode ? (
-                      <button
-                        className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-                        onClick={() => setNuxDevMode(true)}
-                      >
-                        开发人员通道
-                      </button>
-                    ) : (
-                      <div className="flex items-center justify-center gap-2">
-                        <input
-                          type="password"
-                          className="w-36 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
-                          placeholder="请输入开发密码"
-                          value={nuxDevPassword}
-                          onChange={(e) => setNuxDevPassword(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && nuxDevPassword === "admin123456") {
-                              setNuxUnlocked(true)
-                              setNuxDevMode(false)
-                            }
-                          }}
-                          autoFocus
-                        />
-                        <button
-                          className="px-2 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                          onClick={() => {
-                            if (nuxDevPassword === "admin123456") {
-                              setNuxUnlocked(true)
-                              setNuxDevMode(false)
-                            }
-                          }}
-                        >
-                          确认
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {nuxLoading && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="size-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <span>正在配置...</span>
               </div>
             )}
           </div>

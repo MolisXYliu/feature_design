@@ -95,15 +95,12 @@ function psEscape(s: string): string {
 function isCurrentProcessElevated(): boolean {
   if (process.platform !== "win32") return false
 
+  // Use whoami /groups to check for High Mandatory Level SID (S-1-16-12288).
+  // This is the only reliable way to confirm the process is truly elevated.
+  // Do NOT use `net session`: in corporate domain environments it can succeed
+  // for non-admin users due to group policy, producing a false positive that
+  // causes the UAC prompt to be skipped entirely.
   const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
-
-  try {
-    execSync("net session", { stdio: "ignore", windowsHide: true, cwd: safeCwd })
-    return true
-  } catch {
-    // fall through
-  }
-
   try {
     const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
     return output.includes("S-1-16-12288")

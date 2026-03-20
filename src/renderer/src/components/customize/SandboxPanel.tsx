@@ -15,10 +15,10 @@ interface ModeOption {
 
 const MODE_OPTIONS: ModeOption[] = [
   {
-    value: "none",
-    label: "关闭",
-    description: "不启用沙箱，命令直接在当前用户权限下执行。",
-    icon: <ShieldOff className="size-4" />
+    value: "elevated",
+    label: "Elevated 沙箱",
+    description: "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
+    icon: <ShieldPlus className="size-4" />
   },
   {
     value: "unelevated",
@@ -33,10 +33,10 @@ const MODE_OPTIONS: ModeOption[] = [
     icon: <ShieldCheck className="size-4" />
   },
   {
-    value: "elevated",
-    label: "Elevated 沙箱",
-    description: "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
-    icon: <ShieldPlus className="size-4" />
+    value: "none",
+    label: "关闭",
+    description: "不启用沙箱，命令直接在当前用户权限下执行。",
+    icon: <ShieldOff className="size-4" />
   }
 ]
 
@@ -196,7 +196,7 @@ export function SandboxPanel(): React.JSX.Element {
 
   return (
     <div className="flex flex-1 overflow-hidden isolate">
-      <div className="w-full flex flex-col p-6 gap-8">
+      <div className="w-full flex flex-col p-6 gap-8 overflow-y-auto">
 
         {/* Yolo 模式 */}
         <div className="flex flex-col gap-4">
@@ -247,6 +247,57 @@ export function SandboxPanel(): React.JSX.Element {
             <h2 className={cn("text-lg font-bold", !isWindows && "text-muted-foreground")}>Windows 沙箱</h2>
             {!isWindows && (
               <span className="text-xs text-muted-foreground">（仅 Windows 可用）</span>
+            )}
+            {/* Developer backdoor — anchored to header so always visible */}
+            {!unlocked && isWindows && (
+              <div className="ml-auto">
+                {!devMode ? (
+                  <button
+                    className="text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                    onClick={() => setDevMode(true)}
+                  >
+                    开发人员通道
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="password"
+                      className="w-32 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
+                      placeholder="开发密码"
+                      value={devPassword}
+                      onChange={(e) => setDevPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && devPassword === "admin123456") {
+                          setUnlocked(true)
+                          setDevMode(false)
+                        }
+                        if (e.key === "Escape") {
+                          setDevMode(false)
+                          setDevPassword("")
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      className="px-2 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                      onClick={() => {
+                        if (devPassword === "admin123456") {
+                          setUnlocked(true)
+                          setDevMode(false)
+                        }
+                      }}
+                    >
+                      确认
+                    </button>
+                    <button
+                      className="px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => { setDevMode(false); setDevPassword("") }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -309,47 +360,6 @@ export function SandboxPanel(): React.JSX.Element {
               )
             })}
 
-            {/* Developer backdoor */}
-            {!unlocked && isWindows && (
-              <div className="pt-1 text-center">
-                {!devMode ? (
-                  <button
-                    className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-                    onClick={() => setDevMode(true)}
-                  >
-                    开发人员通道
-                  </button>
-                ) : (
-                  <div className="flex items-center justify-center gap-2">
-                    <input
-                      type="password"
-                      className="w-36 px-2 py-1 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
-                      placeholder="请输入开发密码"
-                      value={devPassword}
-                      onChange={(e) => setDevPassword(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && devPassword === "admin123456") {
-                          setUnlocked(true)
-                          setDevMode(false)
-                        }
-                      }}
-                      autoFocus
-                    />
-                    <button
-                      className="px-2 py-1 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                      onClick={() => {
-                        if (devPassword === "admin123456") {
-                          setUnlocked(true)
-                          setDevMode(false)
-                        }
-                      }}
-                    >
-                      确认
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Elevated setup status */}
