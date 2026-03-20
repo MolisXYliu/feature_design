@@ -116,6 +116,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
   }
 
   const ip = localStorage.getItem('localIp')
+  const isFeatured = item.featured === "精品"
 
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
@@ -149,15 +150,22 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
           ) : (
             <>
               {isInstalled ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                  onClick={handleUpdateInstall}
-                >
-                  <Zap className="size-3" />
-                  更新安装
-                </Button>
+                isFeatured ? (
+                  <span className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-2 py-1 rounded-full flex items-center gap-1">
+                    <Zap className="size-3" />
+                    自动保持最新
+                  </span>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                    onClick={handleUpdateInstall}
+                  >
+                    <Zap className="size-3" />
+                    更新安装
+                  </Button>
+                )
               ) : (
                 <Button
                   variant="outline"
@@ -218,6 +226,14 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
         </div>
       )}
 
+      {/* Featured auto-update notice */}
+      {isFeatured && isInstalled && (
+        <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
+          <Star className="size-3 shrink-0 text-yellow-500" />
+          精品技能无需手动更新，系统将自动安装最新版本
+        </div>
+      )}
+
       {/* Metadata row */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground border-t border-border pt-2 mt-1">
         {item.filename && (
@@ -238,8 +254,8 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
         )}
         {item.featured && (
           <div className="flex items-center gap-1" title="推荐标签">
-            <Star className="size-3 shrink-0 text-yellow-500" />
-            <span className="text-yellow-600">{item.featured}</span>
+            <Star className={`size-3 shrink-0 ${isFeatured ? "text-yellow-500" : "text-muted-foreground"}`} />
+            <span className={isFeatured ? "text-yellow-600 font-medium" : ""}>{item.featured}</span>
           </div>
         )}
         {item.user_id && (
@@ -428,7 +444,7 @@ export function MarketPanel(): React.JSX.Element {
         let response: MarketApiResponse
         switch (activeTab) {
           case "skill":
-            if (skillsData.length === 0) {
+
               response = await marketApi.getSkills()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -444,10 +460,10 @@ export function MarketPanel(): React.JSX.Element {
                 })
                 setSkillsData(dataWithFlags)
               }
-            }
+
             break
           case "mcp":
-            if (mcpsData.length === 0) {
+
               response = await marketApi.getMcps()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -458,10 +474,10 @@ export function MarketPanel(): React.JSX.Element {
                 }))
                 setMcpsData(dataWithFlags)
               }
-            }
+
             break
           case "plugin":
-            if (pluginsData.length === 0) {
+
               response = await marketApi.getPlugins()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -472,7 +488,7 @@ export function MarketPanel(): React.JSX.Element {
                 }))
                 setPluginsData(dataWithFlags)
               }
-            }
+
             break
         }
       } catch (error) {
