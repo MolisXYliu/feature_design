@@ -169,8 +169,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
-      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${powershellSingleQuote(mavenRepoLocal)}"`
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
+      // NOTE: Do NOT use powershellSingleQuote here — single quotes inside a double-quoted
+      // string are literal characters in PowerShell. Maven would receive the quote as part
+      // of the path, causing it to be treated as a relative path and prepended with cwd.
+      // Reference $env:TEMP (already set above) via subexpression to avoid all quoting issues.
+      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=$($env:TEMP)\\m2-repo"`
     }
 
     return ""
