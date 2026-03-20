@@ -121,21 +121,45 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     const { ipcRenderer } = window.electron
 
-    ipcRenderer.on("version", (ver: string) => {
-      console.log("版本：", ver)
-      setVersion(ver)
+    // 主动请求版本，不依赖推送时序
+    ipcRenderer.invoke("get-version").then((ver: unknown) => {
+      console.log("版本 (invoke)：", ver)
+      if (ver) setVersion(ver as string)
+    }).catch((e: unknown) => console.warn("get-version failed:", e))
+
+    // 保留推送监听作为备用
+    const removeListener = ipcRenderer.on("version", (ver: unknown) => {
+      console.log("版本 (push)：", ver)
+      setVersion(ver as string)
     })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
   }, [])
 
   useEffect(() => {
     const { ipcRenderer } = window.electron
 
-    ipcRenderer.on("ip", (ver: string) => {
-      console.log("local ip：", ver)
+    // 主动请求 IP，不依赖推送时序
+    ipcRenderer.invoke("get-local-ip").then((ip: unknown) => {
+      console.log("local ip (invoke)：", ip)
+      if (ip) {
+        localStorage.setItem("localIp", ip as string)
+      }
+    }).catch((e: unknown) => console.warn("get-local-ip failed:", e))
+
+    // 保留推送监听作为备用（例如网络变化时主进程重新推送）
+    const removeListener = ipcRenderer.on("ip", (ver: unknown) => {
+      console.log("local ip (push)：", ver)
       if (ver) {
-        localStorage.setItem("localIp", ver)
+        localStorage.setItem("localIp", ver as string)
       }
     })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
   }, [])
 
   const {
@@ -476,7 +500,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
           let role: Message["role"] = "assistant"
           if (streamMsg.type === "human") role = "user"
-          else if (streamMsg.type === "tool") role = "tool"
+          else if (streamMsg.type === "tool") role = "assistant"
           else if (streamMsg.type === "ai") role = "assistant"
 
           const storeMsg: Message = {

@@ -169,6 +169,14 @@ if (!gotTheLock) {
       return process.platform
     })
 
+    ipcMain.handle("get-local-ip", async () => {
+      return getLocalIP()
+    })
+
+    ipcMain.handle("get-version", async () => {
+      return app.getVersion()
+    })
+
     ipcMain.handle("open-folder", async (_, folderPath: string) => {
       try {
         await shell.openPath(folderPath)
