@@ -124,10 +124,10 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
   const isFeatured = item.featured === "精品"
 
   return (
-    <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
+    <div className="p-4 rounded-lg border border-gray-300 hover:shadow-lg transition-colors">
       {/* Header: name + badges + actions */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 mb-4">
           <div className="flex items-center gap-2 mb-0.5 flex-wrap">
             <h3 className="font-semibold text-sm">{item.name}</h3>
             {item.chinese_name && (
@@ -850,7 +850,7 @@ export function MarketPanel(): React.JSX.Element {
         <div className="flex-1 overflow-hidden">
           <TabsContent value={activeTab} className="mt-0 h-full">
             <ScrollArea className="h-full">
-              <div className="p-4 space-y-3">
+              <div className="p-4 space-y-10">
                 {loading ? (
                   <div className="text-center py-8 text-muted-foreground text-sm">加载中...</div>
                 ) : error ? (
