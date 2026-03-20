@@ -20,6 +20,8 @@ import {UserInfoConfig} from '../main/storage'
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
+  openLoginWindow:()=>ipcRenderer.invoke('open-login-window'),
+  closeLoginWindow:()=>ipcRenderer.invoke('close-login-window'),
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {

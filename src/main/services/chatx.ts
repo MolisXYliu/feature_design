@@ -194,7 +194,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
     notifyRenderer("threads:changed")
   }
 
-  const channel = `agent:stream:${threadId}`
+  const channel = `scheduler:stream:${threadId}`
   let hasStreamedContent = false
 
   try {

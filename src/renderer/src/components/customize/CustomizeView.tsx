@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -12,8 +12,9 @@ import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
 import { ChatXPanel } from "./ChatXPanel"
+import { UserInfoPanel } from "./UserInfoPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx" | "userinfo"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView, customizeInitialTab } = useAppStore()
@@ -151,6 +152,18 @@ export function CustomizeView(): React.JSX.Element {
             <Cpu className="size-4 shrink-0" />
             机器人管理
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "userinfo"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("userinfo")}
+          >
+            <CircleUser className="size-4 shrink-0" />
+            个人信息
+          </button>
         </nav>
       </div>
 
@@ -172,6 +185,8 @@ export function CustomizeView(): React.JSX.Element {
         <ChatXPanel />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
+      ) : activeTab === "userinfo" ? (
+        <UserInfoPanel />
       ) : null}
     </div>
   )

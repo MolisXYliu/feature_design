@@ -38,6 +38,7 @@ import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
+import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -121,21 +122,49 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     const { ipcRenderer } = window.electron
 
-    ipcRenderer.on("version", (ver: string) => {
-      console.log("版本：", ver)
-      setVersion(ver)
+    // 主动请求版本，不依赖推送时序
+    ipcRenderer.invoke("get-version").then((ver: unknown) => {
+      console.log("版本 (invoke)：", ver)
+      if (ver) setVersion(ver as string)
+    }).catch((e: unknown) => console.warn("get-version failed:", e))
+
+    // 保留推送监听作为备用
+    const removeListener = ipcRenderer.on("version", (ver: unknown) => {
+      console.log("版本 (push)：", ver)
+      setVersion(ver as string)
+
+      localStorage.setItem("version", ver as string)
+      updateMMJUserInfo()
     })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
   }, [])
 
   useEffect(() => {
     const { ipcRenderer } = window.electron
 
-    ipcRenderer.on("ip", (ver: string) => {
-      console.log("local ip：", ver)
+    // 主动请求 IP，不依赖推送时序
+    ipcRenderer.invoke("get-local-ip").then((ip: unknown) => {
+      console.log("local ip (invoke)：", ip)
+      if (ip) {
+        localStorage.setItem("localIp", ip as string)
+        updateMMJUserInfo()
+      }
+    }).catch((e: unknown) => console.warn("get-local-ip failed:", e))
+
+    // 保留推送监听作为备用（例如网络变化时主进程重新推送）
+    const removeListener = ipcRenderer.on("ip", (ver: unknown) => {
+      console.log("local ip (push)：", ver)
       if (ver) {
-        localStorage.setItem("localIp", ver)
+        localStorage.setItem("localIp", ver as string)
       }
     })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
   }, [])
 
   const {
@@ -147,6 +176,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   } = useAppStore()
 
   const goodSkillsRef = useRef<MarketItem[]>([])
+  const allSkillsRef = useRef<MarketItem[]>([])
   const [goodSkillsData, setGoodSkillsData] = useState<MarketItem[]>([])
 
   // Define loadSkills function at component level so it can be accessed everywhere
@@ -176,6 +206,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       const goodSkills = res?.data?.filter((it) => it.featured === "精品")
       console.log("Found good skills:", goodSkills)
       goodSkillsRef.current = goodSkills || []
+      allSkillsRef.current = res?.data || []
       setGoodSkillsData(goodSkills || [])
 
       // 自动安装所有精品技能
@@ -189,8 +220,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [loadSkills])
 
+  const getSkillShowLabel=(name)=>{
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
+    return target?.chinese_name || name || ""
+  }
+
   const getTargetRemoteSkill = useCallback((name: string) => {
-    const target = goodSkillsRef.current?.find((it) => it.name === name)
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
     return target?.guidance || ""
   }, [])
 
@@ -469,7 +505,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
           let role: Message["role"] = "assistant"
           if (streamMsg.type === "human") role = "user"
-          else if (streamMsg.type === "tool") role = "tool"
+          else if (streamMsg.type === "tool") role = "assistant"
           else if (streamMsg.type === "ai") role = "assistant"
 
           const storeMsg: Message = {
@@ -618,6 +654,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
     const message = input.trim()
     setInput("")
+    insertLog('send: '+message)
 
     const isFirstMessage = threadMessages.length === 0
 
@@ -1373,7 +1410,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                                   <div className="rounded-md border border-amber-200/80 p-1.5 text-amber-500 group-hover:text-amber-600 transition-colors">
                                     <Zap className="size-4" />
                                   </div>
-                                  <div className="text-xs text-foreground leading-5">{label}</div>
+                                  <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
                                 </div>
                               </button>
                             ))}
@@ -1397,7 +1434,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                               <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
                                 <Wrench className={"size-4"} />
                               </div>
-                              <div className="text-xs text-foreground leading-5">{label}</div>
+                              <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
                             </div>
                           </button>
                         )) : (

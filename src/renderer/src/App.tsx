@@ -8,7 +8,7 @@ import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
-import { VersionChecker } from "@/components/notifications/VersionChecker"
+import { initMMJ } from "../js/mmjUtils"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -48,6 +48,7 @@ function App(): React.JSX.Element {
         window.electron.openExternal(link.href);
       }
     });
+    initMMJ()
   }, []);
 
   // Track drag start widths
