@@ -16,13 +16,13 @@ interface ModeOption {
 const MODE_OPTIONS: ModeOption[] = [
   {
     value: "elevated",
-    label: "Elevated 沙箱",
+    label: "强隔离沙箱",
     description: "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
     icon: <ShieldPlus className="size-4" />
   },
   {
     value: "unelevated",
-    label: "Unelevated 沙箱",
+    label: "受限令牌沙箱",
     description: "使用 Codex 受限令牌沙箱隔离命令执行：工作目录外文件写保护、主流网络工具软阻断（npm/pip/git/curl）。无需管理员权限，零配置。",
     icon: <Shield className="size-4" />
   },
@@ -254,6 +254,7 @@ export function SandboxPanel(): React.JSX.Element {
                 {!devMode ? (
                   <button
                     className="text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                    title="开发人员专用通道：解锁后可切换受限令牌沙箱、只读沙箱等调试模式，普通用户无需使用"
                     onClick={() => setDevMode(true)}
                   >
                     开发人员通道
@@ -302,9 +303,17 @@ export function SandboxPanel(): React.JSX.Element {
           </div>
 
           {isWindows ? (
-            <div className="flex items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
-              <Info className="size-4 mt-0.5 shrink-0" />
-              <p>切换沙箱模式后，将在下一次对话中生效。</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-400">
+                <Info className="size-4 mt-0.5 shrink-0" />
+                <p>根据公司安全管控要求，Agent 执行命令须在隔离环境中运行，<strong>非经审批不得关闭或降级沙箱模式</strong>。日常开发请保持使用<strong>强隔离沙箱</strong>，其他模式仅限经授权的开发人员在调试场景下使用。</p>
+              </div>
+              {unlocked && (
+                <div className="flex items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
+                  <Info className="size-4 mt-0.5 shrink-0" />
+                  <p>切换沙箱模式后，将在下一次对话中生效。</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex items-start gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm text-muted-foreground">
@@ -380,7 +389,7 @@ export function SandboxPanel(): React.JSX.Element {
           {elevatedSetupStatus === "done" && (
             <div className="flex items-center gap-2 max-w-lg rounded-md border border-green-500/20 bg-green-500/5 p-3 text-sm text-green-600 dark:text-green-400">
               <ShieldCheck className="size-4 shrink-0" />
-              <p>Elevated 沙箱配置完成，将在下一次对话中生效。</p>
+              <p>强隔离沙箱配置完成，将在下一次对话中生效。</p>
             </div>
           )}
 
@@ -402,7 +411,7 @@ export function SandboxPanel(): React.JSX.Element {
                     onClick={handleFallbackToUnelevated}
                     className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
                   >
-                    回退到 Unelevated 沙箱
+                    回退到受限令牌沙箱
                   </button>
                 )}
               </div>
