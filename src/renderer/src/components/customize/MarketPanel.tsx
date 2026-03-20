@@ -96,13 +96,14 @@ interface MarketItemCardProps {
   onDelete: (item: MarketItem) => void
   onUpdate: (item: MarketItem) => void
   onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
-  onUpdateInstall: (item: MarketItem) => void  // 新增更新安装回调
+  onUpdateInstall: (item: MarketItem) => void
+  onUninstall: (item: MarketItem) => void  // 新增卸载回调
   isDownloading?: boolean
   isInstalled?: boolean  // 新增已安装状态
   isUpdating?: boolean   // 新增更新中状态
 }
 
-function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall, isDownloading = false, isInstalled = false, isUpdating = false }: MarketItemCardProps) {
+function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall, onUninstall, isDownloading = false, isInstalled = false, isUpdating = false }: MarketItemCardProps) {
   const handleInstallDownload = () => {
     onDownload(item, false) // Install to application
   }
@@ -113,6 +114,10 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
 
   const handleUpdateInstall = () => {
     onUpdateInstall(item)  // 更新安装
+  }
+
+  const handleUninstall = () => {
+    onUninstall(item)
   }
 
   const ip = localStorage.getItem('localIp')
@@ -175,6 +180,18 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
                 >
                   <Zap className="size-3" />
                   安装
+                </Button>
+              )}
+              {isInstalled && !isFeatured && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-auto px-2 gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                  onClick={handleUninstall}
+                  title="卸载"
+                >
+                  <Trash2 className="size-3 mr-1" />
+                  卸载
                 </Button>
               )}
               <Button
@@ -527,6 +544,39 @@ export function MarketPanel(): React.JSX.Element {
     setDeleteDialog({ open: true, item })
   }
 
+  const handleUninstall = async (item: MarketItem) => {
+    const itemName = item.name || item.id || ''
+    if (!itemName) return
+
+    try {
+      if (activeTab === "skill" && window.api?.skills?.delete) {
+        const skillsMetadata = await window.api.skills.list()
+        const existingSkill = skillsMetadata.find(skill => skill.name === itemName)
+        if (existingSkill) {
+          await window.api.skills.delete(existingSkill.path)
+        }
+        await loadInstalledSkills()
+      } else if (activeTab === "mcp" && window.api?.mcp?.delete) {
+        const mcpsMetadata = await window.api.mcp.list()
+        const existingMcp = mcpsMetadata.find(mcp => mcp.name === itemName)
+        if (existingMcp) {
+          await window.api.mcp.delete(existingMcp.id)
+        }
+        await loadInstalledMcps()
+      } else if (activeTab === "plugin" && window.api?.plugins?.delete) {
+        const pluginsMetadata = await window.api.plugins.list()
+        const existingPlugin = pluginsMetadata.find(plugin => plugin.name === itemName)
+        if (existingPlugin) {
+          await window.api.plugins.delete(existingPlugin.path)
+        }
+        await loadInstalledPlugins()
+      }
+    } catch (error) {
+      console.error("Failed to uninstall item:", error)
+      setError(error instanceof Error ? error.message : "卸载失败")
+    }
+  }
+
   const confirmDelete = async () => {
     if (!deleteDialog.item) return
 
@@ -841,6 +891,7 @@ export function MarketPanel(): React.JSX.Element {
                       onUpdate={handleUpdate}
                       onDownload={handleDownload}
                       onUpdateInstall={handleUpdateInstall}  // 修正：使用正确的handleUpdateInstall函数
+                      onUninstall={handleUninstall}  // 传递卸载回调
                       isDownloading={downloadingItems.has(item.id || item.name)}
                       isInstalled={item.installed}  // 传递已安装状态
                       isUpdating={updatingItems.has(item.id || item.name)}  // 修正：使用updatingItems而不是downloadingItems
