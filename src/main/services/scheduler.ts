@@ -143,8 +143,13 @@ async function executeTask(taskId: string): Promise<void> {
 
     const converter = new StreamConverter()
 
+    // reminder 类型：执行时动态包装暖心模板；action 类型：原样发送
+    const finalPrompt = task.taskType === "reminder"
+      ? `你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：${task.prompt}\n要求：\n(1) 不要解释你是谁\n(2) 直接输出一条暖心的提醒消息\n(3) 可以加一句简短的鸡汤或关怀的话\n(4) 控制在2-3句话以内\n(5) 用emoji点缀`
+      : task.prompt
+
     const stream = await agent.stream(
-      { messages: [new HumanMessage(task.prompt)] },
+      { messages: [new HumanMessage(finalPrompt)] },
       {
         configurable: { thread_id: threadId },
         signal: abortController.signal,

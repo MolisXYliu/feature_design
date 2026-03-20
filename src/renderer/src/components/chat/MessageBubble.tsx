@@ -55,7 +55,7 @@ interface MessageBubbleProps {
 export function MessageBubble({
   message,
   previousMessage,
-  isStreaming,
+  isStreaming = true,
   toolResults,
   pendingApproval,
   onApprovalDecision,
@@ -212,6 +212,7 @@ export function MessageBubble({
                     showApprovalButtons={!isBatch}
                     onApprovalDecision={onApprovalDecision}
                     threadId={threadId}
+                    isStreaming={isStreaming}
                   />
                 );
               }
@@ -245,9 +246,15 @@ export function MessageBubble({
                       </div>
                     )}
 
-                    {result === undefined && (
+                    {result === undefined && isStreaming && (
                       <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600 border border-gray-200 animate-pulse">
                         RUNNING
+                      </div>
+                    )}
+
+                    {result === undefined && !isStreaming && (
+                      <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 border border-amber-200">
+                        INTERRUPTED
                       </div>
                     )}
                   </button>
@@ -261,6 +268,7 @@ export function MessageBubble({
                         isError={result?.is_error}
                         needsApproval={false}
                         onApprovalDecision={undefined}
+                        isStreaming={isStreaming}
                         threadId={threadId}
                       />
                     </div>

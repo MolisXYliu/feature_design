@@ -15,8 +15,13 @@ import {
   File,
   Folder,
   Maximize2,
-  X,
-  AlertCircle
+  Minimize2,
+  AlertCircle,
+  GitCommit,
+  Eye,
+  EyeOff,
+  Minus,
+  Plus
 } from "lucide-react"
 import { memo, useState } from "react";
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +44,8 @@ interface ToolCallRendererProps {
   /** Which approval button types to show */
   approvalTypes?: ("approve" | "approve_session" | "approve_permanent" | "reject")[]
   threadId: string
+  /** Whether the stream is still active — used to distinguish RUNNING vs INTERRUPTED. Defaults to true (prefer RUNNING over INTERRUPTED when unknown). */
+  isStreaming?: boolean
 }
 
 const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -306,11 +313,10 @@ function TaskDisplay({
 }
 
 // Render git diff nicely
-export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
+export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [renderMode, setRenderMode] = useState<"preview" | "full">("preview")
 
-  // Use provided diff or fallback to mock data
   const diffToUse = diff || ""
 
   // Parse git diff to extract old and new content
@@ -320,19 +326,22 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     let newContent = ""
     let inHunk = false
     let totalLines = 0
+    let addedLines = 0
+    let removedLines = 0
 
     for (const line of lines) {
       if (line.startsWith("@@")) {
         inHunk = true
         continue
       }
-
       if (inHunk) {
         totalLines++
         if (line.startsWith("-")) {
           oldContent += line.substring(1) + "\n"
+          removedLines++
         } else if (line.startsWith("+")) {
           newContent += line.substring(1) + "\n"
+          addedLines++
         } else if (line.startsWith(" ")) {
           oldContent += line.substring(1) + "\n"
           newContent += line.substring(1) + "\n"
@@ -343,31 +352,26 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     return {
       oldContent: oldContent.trim(),
       newContent: newContent.trim(),
-      totalLines
+      totalLines,
+      addedLines,
+      removedLines
     }
   }
 
-  const { oldContent, newContent, totalLines } = parseGitDiff(diffToUse)
+  const { oldContent, newContent, totalLines, addedLines, removedLines } = parseGitDiff(diffToUse)
 
-  // Performance optimization: only show preview for large diffs
   const isLargeDiff = totalLines > 100
   const maxPreviewLines = 20
 
-  // Get preview content (first N lines)
   const getPreviewContent = (content: string, maxLines: number) => {
     const lines = content.split("\n")
     if (lines.length <= maxLines) return content
     return (
       lines.slice(0, maxLines).join("\n") +
-      "\n...(显示前 " +
-      maxLines +
-      " 行，共 " +
-      lines.length +
-      " 行)"
+      "\n...(显示前 " + maxLines + " 行，共 " + lines.length + " 行)"
     )
   }
 
-  // Use preview content if not expanded and diff is large
   const shouldUsePreview = isLargeDiff && renderMode === "preview"
   const displayOldContent = shouldUsePreview
     ? getPreviewContent(oldContent, maxPreviewLines)
@@ -376,29 +380,68 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
     ? getPreviewContent(newContent, maxPreviewLines)
     : newContent
 
-  const DiffViewer = (
+  const makeDiffViewer = (fullscreen: boolean) => (
     <ReactDiffViewer
       oldValue={oldValue || displayOldContent}
       newValue={newValue || displayNewContent}
-      splitView={isFullscreen}
+      splitView={fullscreen}
       hideLineNumbers={false}
       useDarkTheme={false}
-      loadingElement={()=><div className={'text-center font-bold text-lg py-2'}>loading...</div>}
-      disableWordDiff={shouldUsePreview} // Disable word diff for better performance with large content
+      loadingElement={() => (
+        <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+          <div className="size-3 rounded-full bg-primary/40 animate-pulse" />
+          加载中…
+        </div>
+      )}
+      disableWordDiff={shouldUsePreview}
       compareMethod={shouldUsePreview ? DiffMethod.LINES : DiffMethod.WORDS}
       styles={{
+        variables: {
+          light: {
+            diffViewerBackground: "transparent",
+            diffViewerColor: "#292524",
+            addedBackground: "#dcfce7",
+            addedColor: "#166534",
+            removedBackground: "#fee2e2",
+            removedColor: "#991b1b",
+            wordAddedBackground: "#bbf7d0",
+            wordRemovedBackground: "#fecaca",
+            addedGutterBackground: "#bbf7d0",
+            removedGutterBackground: "#fecaca",
+            gutterBackground: "#FAF9F6",
+            gutterBackgroundDark: "#F0EEE9",
+            highlightBackground: "#fef9c3",
+            highlightGutterBackground: "#fef08a",
+            codeFoldGutterBackground: "#F5F3EF",
+            codeFoldBackground: "#F5F3EF",
+            emptyLineBackground: "#F5F3EF",
+            gutterColor: "#A8A29E",
+            addedGutterColor: "#16a34a",
+            removedGutterColor: "#dc2626",
+            codeFoldContentColor: "#A8A29E",
+            diffViewerTitleBackground: "#F0EEE9",
+            diffViewerTitleColor: "#44403C",
+            diffViewerTitleBorderColor: "#EEECE7",
+          }
+        },
         diffContainer: {
-          maxHeight: isFullscreen ? "100%" : "24rem",
-          minHeight: isFullscreen ? "100%" : "100px",
+          maxHeight: fullscreen ? "100%" : "22rem",
+          minHeight: fullscreen ? "100%" : "80px",
           overflow: "auto",
-          height: isFullscreen ? "100%" : "100px"
+          height: fullscreen ? "100%" : undefined,
+          borderRadius: "0",
         },
         line: {
-          lineHeight: "1.6",
-          fontSize:'1rem'
+          lineHeight: "1.65",
+          fontSize: "0.75rem",
         },
-        contentText:{
-          fontFamily:'Consolas'
+        contentText: {
+          fontFamily: "'Consolas', 'JetBrains Mono', 'Fira Code', monospace",
+          // fontSize: "0.75rem",
+        },
+        gutter: {
+          minWidth: "2.5rem",
+          padding: "0 0.5rem",
         }
       }}
     />
@@ -406,88 +449,119 @@ export const DiffDisplay = memo( ({ diff, oldValue, newValue}:any) =>  {
 
   return (
     <>
-      {/* Header with controls */}
-      <div className=" flex items-center justify-between gap-1 p-1.5 bg-background/90 border-b border-l border-border rounded-bl-sm">
-        <div>变更查看 （默认显示前20行）</div>
-       <div className={'flex space-x-2 '}>
-         {isLargeDiff && (
-           <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground mr-1">
-                {totalLines} 行
-              </span>
-             <button
-               onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-               className="text-[10px] cursor-pointer px-2 py-1 bg-background hover:bg-muted border border-border rounded transition-colors"
-               title={renderMode === "preview" ? "显示完整内容" : "显示预览"}
-             >
-               {renderMode === "preview" ?  "显示全部代码" : "显示少量代码"}
-             </button>
-           </div>
-         )}
-         <button
-           onClick={() => setIsFullscreen(true)}
-           className="text-[14px] cursor-pointer p-1.5 bg-background/80 hover:bg-muted border border-border rounded transition-colors"
-           title="全屏查看diff"
-         >
-           <Maximize2 className="size-3" />
-         </button>
-       </div>
+      {/* Header toolbar */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-muted/60 border-b border-border">
+        {/* Left: icon + title + stats */}
+        <div className="flex items-center gap-2 min-w-0">
+          <GitCommit className="size-3.5 text-muted-foreground shrink-0" />
+          <span className="text-[11px] font-semibold text-foreground tracking-wide truncate">
+            变更预览
+          </span>
+          {(addedLines > 0 || removedLines > 0) && (
+            <div className="flex items-center gap-1">
+              {addedLines > 0 && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400">
+                  <Plus className="size-2.5" />
+                  {addedLines}
+                </span>
+              )}
+              {removedLines > 0 && (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400">
+                  <Minus className="size-2.5" />
+                  {removedLines}
+                </span>
+              )}
+              {isLargeDiff && (
+                <span className="text-[10px] text-muted-foreground">
+                  共 {totalLines} 行
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Right: controls */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => setIsFullscreen(true)}
+            className="inline-flex items-center gap-1 text-[10px] font-medium cursor-pointer px-2 py-1 rounded bg-background hover:bg-accent/20 border border-border text-muted-foreground hover:text-foreground transition-colors"
+            title="全屏查看"
+          >
+            <Maximize2 className="size-2.5" />
+            全屏
+          </button>
+        </div>
       </div>
 
-      {/* Performance warning for large diffs */}
+      {/* Large-file warning banner */}
       {isLargeDiff && renderMode === "full" && (
-        <div className=" p-2 bg-amber-50/90 dark:bg-amber-950/90 border-t border-amber-200 dark:border-amber-800">
-          <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
-            <div className="size-2 bg-amber-500 rounded-full animate-pulse" />
-            大文件可能影响性能，建议在全屏模式下查看
-          </div>
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-800">
+          <div className="size-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+          <span className="text-amber-700 dark:text-amber-300">
+            大文件渲染可能较慢，建议切换至全屏模式查看
+          </span>
         </div>
       )}
 
-      <div className="relative text-xs font-mono bg-background rounded-sm overflow-scroll w-full max-h-96 min-h-40">
-
-
-
-        {DiffViewer}
+      {/* Diff content */}
+      <div className="relative font-mono bg-background overflow-auto w-full" style={{ maxHeight: "22rem", minHeight: "5rem" }}>
+        {makeDiffViewer(false)}
       </div>
 
-      {/* Fullscreen Modal */}
+      {/* Fullscreen modal */}
       {isFullscreen && (
-        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm mt-10">
-          <div className="flex flex-col h-full">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-border">
-              <div className="flex items-center gap-4">
-                <h3 className="text-sm font-medium">Git Diff - 全屏视图</h3>
-                <span className="text-xs text-muted-foreground">
-                  {totalLines} 行更改
-                </span>
-              </div>
+        <div className="fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur-sm" style={{ marginTop: "40px" }}>
+          {/* Modal header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/40 shrink-0">
+            <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
-                {isLargeDiff && <button
-                  onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
-                  className="cursor-pointer px-3 py-1.5 text-xs bg-background hover:bg-muted border border-border rounded transition-colors"
-                >
-                  {renderMode === "preview" ? "显示全部代码" : "显示少量代码"}
-                </button>}
-                <button
-                  onClick={() => {
-                    setIsFullscreen(false);
-                    setRenderMode("preview");
-                  }}
-                  className="cursor-pointer p-1.5 hover:bg-muted border border-border rounded transition-colors"
-                  title="退出全屏"
-                >
-                  <X className="size-4" />
-                </button>
+                <GitCommit className="size-4 text-primary" />
+                <span className="text-sm font-semibold">Git Diff — 全屏视图</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {addedLines > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400">
+                    <Plus className="size-3" />
+                    {addedLines} 行新增
+                  </span>
+                )}
+                {removedLines > 0 && (
+                  <span className="inline-flex items-center gap-0.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400">
+                    <Minus className="size-3" />
+                    {removedLines} 行删除
+                  </span>
+                )}
+                <span className="text-xs text-muted-foreground">共 {totalLines} 行</span>
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              {isLargeDiff && (
+                <button
+                  onClick={() => setRenderMode(renderMode === "preview" ? "full" : "preview")}
+                  className="inline-flex items-center gap-1.5 cursor-pointer px-3 py-1.5 text-xs font-medium bg-background hover:bg-muted border border-border rounded transition-colors"
+                >
+                  {renderMode === "preview" ? (
+                    <><Eye className="size-3" />展开全部代码</>
+                  ) : (
+                    <><EyeOff className="size-3" />精简预览</>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => { setIsFullscreen(false); setRenderMode("preview") }}
+                className="inline-flex items-center gap-1.5 cursor-pointer px-3 py-1.5 text-xs font-medium hover:bg-muted border border-border rounded transition-colors"
+                title="退出全屏"
+              >
+                <Minimize2 className="size-3" />
+                退出全屏
+              </button>
+            </div>
+          </div>
 
-            {/* Full content */}
-            <div className="flex-1 p-4 overflow-hidden">
-              <div className="h-full text-sm font-mono bg-background rounded border border-border overflow-scroll">
-                {DiffViewer}
-              </div>
+          {/* Modal content */}
+          <div className="flex-1 overflow-hidden p-4">
+            <div className="h-full rounded-md border border-border overflow-auto bg-background font-mono text-xs">
+              {makeDiffViewer(true)}
             </div>
           </div>
         </div>
@@ -505,7 +579,8 @@ export function ToolCallRenderer({
   onApprovalDecision,
   retryReason,
   approvalTypes = ["approve", "approve_session", "approve_permanent", "reject"],
-  threadId
+  threadId,
+  isStreaming = true
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
@@ -521,11 +596,6 @@ export function ToolCallRenderer({
   const Icon = TOOL_ICONS[toolCall.name] || Terminal
   const label = TOOL_LABELS[toolCall.name] || toolCall.name
   const isPanelSynced = PANEL_SYNCED_TOOLS.has(toolCall.name)
-
-  const handleApprove = (e: React.MouseEvent): void => {
-    e.stopPropagation()
-    onApprovalDecision?.("approve")
-  }
 
   const handleReject = (e: React.MouseEvent): void => {
     e.stopPropagation()
@@ -572,9 +642,8 @@ export function ToolCallRenderer({
       }
 
       case "execute": {
-        const command = args.command as string
         const output = typeof result === "string" ? result : undefined
-        return <CommandDisplay command={command} output={isExpanded ? output : undefined} />
+        return <CommandDisplay command="" output={isExpanded ? output : undefined} />
       }
 
       default:
@@ -675,7 +744,6 @@ export function ToolCallRenderer({
         // When expanded, output is shown in CommandDisplay - just show status
         // When collapsed, show the output preview
         const output = typeof result === "string" ? result : JSON.stringify(result)
-        const command = args.command as string
 
         // Special handling for git diff commands
         // todo 暂时注释，看后续是否要放开
@@ -770,8 +838,8 @@ export function ToolCallRenderer({
             <div className="space-y-2">
               <div className={'overflow-scroll'}>
                 <DiffDisplay
-                  oldValue={args.old_string || ""}
-                  newValue={args.new_string  || ""}
+                  oldValue={args.old_string as string || ""}
+                  newValue={args.new_string as string || ""}
                 />
               </div>
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
@@ -783,8 +851,8 @@ export function ToolCallRenderer({
                 operation={toolCall.name}
                 operationId={toolCall.id}
                 threadId={threadId}
-                oldValue={args.old_string || ""}
-                newValue={args.new_string  || ""}
+                oldValue={(args.old_string as string) || ""}
+                newValue={(args.new_string as string) || ""}
                 onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
               />
             </div>
@@ -861,9 +929,6 @@ export function ToolCallRenderer({
         const commitMessage = gitResult.commitMessage as string || ""
         const changedFiles = gitResult.changedFiles || []
         const workspacePath = gitResult.workspacePath || ""
-
-        const error = gitResult.error || ""
-        const message = gitResult.message || ""
 
         // if (error && message?.includes('Not a git repository')){
         //   return <div className="text-sm text-status-critical space-y-3 my-4">
@@ -956,9 +1021,15 @@ export function ToolCallRenderer({
           </Badge>
         )}
 
-        {!needsApproval && result === undefined && (
+        {!needsApproval && result === undefined && isStreaming && (
           <Badge variant="outline" className="ml-auto shrink-0 animate-pulse">
             RUNNING
+          </Badge>
+        )}
+
+        {!needsApproval && result === undefined && !isStreaming && (
+          <Badge variant="warning" className="ml-auto shrink-0">
+            INTERRUPTED
           </Badge>
         )}
 
@@ -1001,7 +1072,9 @@ export function ToolCallRenderer({
               )}
 
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-status-warning bg-status-warning/10 px-2 py-1 rounded-sm">💡 启用 YOLO 模式可跳过审批</span>
+                <span className="text-xs text-status-warning bg-status-warning/10 px-2 py-1 rounded-sm">
+                  💡 启用 YOLO 模式可跳过审批
+                </span>
                 <div className="flex items-center gap-2 flex-wrap">
                   {approvalTypes.includes("reject") && (
                     <button
@@ -1014,7 +1087,10 @@ export function ToolCallRenderer({
                   {approvalTypes.includes("approve") && (
                     <button
                       className="px-3 py-1.5 text-xs bg-status-nominal text-background rounded-sm hover:bg-status-nominal/90 transition-colors"
-                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve") }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onApprovalDecision?.("approve")
+                      }}
                     >
                       运行
                     </button>
@@ -1022,7 +1098,10 @@ export function ToolCallRenderer({
                   {!retryReason && approvalTypes.includes("approve_session") && (
                     <button
                       className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-sm hover:bg-blue-700 transition-colors"
-                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_session") }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onApprovalDecision?.("approve_session")
+                      }}
                     >
                       本会话允许
                     </button>
@@ -1030,7 +1109,10 @@ export function ToolCallRenderer({
                   {!retryReason && approvalTypes.includes("approve_permanent") && (
                     <button
                       className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-sm hover:bg-purple-700 transition-colors"
-                      onClick={(e) => { e.stopPropagation(); onApprovalDecision?.("approve_permanent") }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onApprovalDecision?.("approve_permanent")
+                      }}
                     >
                       始终允许
                     </button>

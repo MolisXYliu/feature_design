@@ -40,6 +40,7 @@ import { MessageBubble } from "./MessageBubble"
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
+import DisplayDiffTest from "./DisplayDiffTest"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -748,6 +749,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         await window.api.heartbeat.cancel()
       } catch (err) {
         console.error("[ChatContainer] Failed to cancel heartbeat:", err)
+      }
+    } else if (scheduledTaskLoading) {
+      // ChatX bot thread: scheduledTaskLoading is true but no scheduledTaskId
+      try {
+        const cancelled = await window.api.chatx.cancelByThread(threadId)
+        if (!cancelled) console.warn("[ChatContainer] ChatX thread not found for cancel:", threadId)
+      } catch (err) {
+        console.error("[ChatContainer] Failed to cancel ChatX thread:", err)
       }
     } else {
       await stream?.stop()
@@ -1502,12 +1511,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             )}
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
+              const isLastMessage = index === displayMessages.length - 1;
 
               return (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   previousMessage={previousMessage}
+                  isStreaming={isLastMessage && isLoading}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
@@ -1515,6 +1526,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 />
               );
             })}
+
+
+            {/*测试git diff功能*/}
+            {/*<DisplayDiffTest/>*/}
+
+
+
             {/* Orchestrator approval request — shown as standalone bar when pending */}
             {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
               <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">

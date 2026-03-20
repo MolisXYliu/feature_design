@@ -5,78 +5,78 @@
   <meta charset="UTF-8" />
   <title>CMBDevClaw</title>
   <script>
-    function getToken({ code, ystRefreshToken, replace }) {
-      fetch('https://archguardservice.paas.xx.cn/cowork/login-info', {
-        method: 'GET',
-        headers: {
-          'ystCode': code,
-          ystRefreshToken: ystRefreshToken || '',
-        }
-      }).then(async res => {
-        const result = await res.json()
-        const ystrefreshtoken = res.headers.get('ystrefreshtoken')
-        const ystAccessToken = res.headers.get('ystAccessToken')
-        if (result.returnCode === 'SUC0000') {
-          const resBody = result.body
-          await window.api.models.upsertUserInfo({
-            sapId: resBody.sapId,//8
-            ystId: resBody.ystId,//6
-            userName: resBody.userName,
-            originOrgId: resBody.originOrgId,
-            orgName: resBody.orgName,
-            ystRefreshToken: ystrefreshtoken,
-            ystCode: code,
-            ystAccessToken: ystAccessToken
-          })
-          if (replace) {
-            history.replaceState(null, null, location.origin)// 替换当前页面主要是去掉code参数
-          }
-        } else {
-          if (!replace) {
-            location.href = "https://oa-auth.paas.xx.com/auth/sso-login" +
-              "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
-              "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.xx.cn/index.html${location.search}`) +
-              "&response_type=code";
-          }
-        }
-      }).catch(err => {
-        console.log(err)
-      })
-    }
-    window.onload = async () => {
-      let thisUrl = document.URL
-      const pp = thisUrl.split('?')
-      let code = ''
-      if (pp.length > 1) {
-        const kvs = pp[1].split('&')
-        kvs.forEach(kv => {
-          const kvArr = kv.split('=')
-          if (kvArr[0] === 'code') {
-            code = kvArr[1]
-          }
-        })
-      }
-      if (code) {
-        getToken({
-          code,
-          replace: true
-        })
-      } else {
-        const userInfo = await window.api.models.getUserInfo();
-        if (userInfo) {
-          getToken({
-            code: userInfo.ystCode,
-            ystRefreshToken: userInfo.ystRefreshToken,
-            replace: false // false 标识如果token过期需要跳转到一事通，而不是刷新当前页面
-          })
-        } else {
-          // location.href = "https://oa-auth.paas.xx.com/auth/sso-login" +
-          //   "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
-          //   "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.xx.cn/index.html${location.search}`) +
-          //   "&response_type=code";
-        }
-      }
-    }
+    // function getToken({ code, ystRefreshToken, replace }) {
+    //   fetch('https://archguardservice.paas.xx.cn/cowork/login-info', {
+    //     method: 'GET',
+    //     headers: {
+    //       'ystCode': code,
+    //       ystRefreshToken: ystRefreshToken || '',
+    //     }
+    //   }).then(async res => {
+    //     const result = await res.json()
+    //     const ystrefreshtoken = res.headers.get('ystrefreshtoken')
+    //     const ystAccessToken = res.headers.get('ystAccessToken')
+    //     if (result.returnCode === 'SUC0000') {
+    //       const resBody = result.body
+    //       await window.api.models.upsertUserInfo({
+    //         sapId: resBody.sapId,//8
+    //         ystId: resBody.ystId,//6
+    //         userName: resBody.userName,
+    //         originOrgId: resBody.originOrgId,
+    //         orgName: resBody.orgName,
+    //         ystRefreshToken: ystrefreshtoken,
+    //         ystCode: code,
+    //         ystAccessToken: ystAccessToken
+    //       })
+    //       if (replace) {
+    //         history.replaceState(null, null, location.origin)// 替换当前页面主要是去掉code参数
+    //       }
+    //     } else {
+    //       if (!replace) {
+    //         location.href = "https://oa-auth.paas.xx.com/auth/sso-login" +
+    //           "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+    //           "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.xx.cn/index.html${location.search}`) +
+    //           "&response_type=code";
+    //       }
+    //     }
+    //   }).catch(err => {
+    //     console.log(err)
+    //   })
+    // }
+    // window.onload = async () => {
+    //   let thisUrl = document.URL
+    //   const pp = thisUrl.split('?')
+    //   let code = ''
+    //   if (pp.length > 1) {
+    //     const kvs = pp[1].split('&')
+    //     kvs.forEach(kv => {
+    //       const kvArr = kv.split('=')
+    //       if (kvArr[0] === 'code') {
+    //         code = kvArr[1]
+    //       }
+    //     })
+    //   }
+    //   if (code) {
+    //     getToken({
+    //       code,
+    //       replace: true
+    //     })
+    //   } else {
+    //     const userInfo = await window.api.models.getUserInfo();
+    //     if (userInfo) {
+    //       getToken({
+    //         code: userInfo.ystCode,
+    //         ystRefreshToken: userInfo.ystRefreshToken,
+    //         replace: false // false 标识如果token过期需要跳转到一事通，而不是刷新当前页面
+    //       })
+    //     } else {
+    //       // location.href = "https://oa-auth.paas.xx.com/auth/sso-login" +
+    //       //   "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+    //       //   "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.xx.cn/index.html${location.search}`) +
+    //       //   "&response_type=code";
+    //     }
+    //   }
+    // }
   </script>
 </head>
 

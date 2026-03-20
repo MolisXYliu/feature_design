@@ -14,7 +14,7 @@ function notifyChanged(): void {
   }
 }
 
-const VALID_FREQUENCIES = new Set(["once", "manual", "hourly", "daily", "weekdays", "weekly"])
+const VALID_FREQUENCIES = new Set(["once", "manual", "hourly", "daily", "weekdays", "weekly", "interval"])
 const RUN_AT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
 function validateInput(config: ScheduledTaskUpsert): void {

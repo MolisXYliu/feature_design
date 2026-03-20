@@ -792,10 +792,17 @@ export function computeNextRunAt(
   from: Date = new Date(),
   runAtTime?: string | null,
   weekday?: number | null,
-  runAt?: string | null
+  runAt?: string | null,
+  intervalMinutes?: number | null
 ): string | null {
   if (frequency === "manual") return null
   if (frequency === "once") return runAt ?? null
+  if (frequency === "interval") {
+    const mins = intervalMinutes && intervalMinutes > 0 ? intervalMinutes : 5
+    const next = new Date(from)
+    next.setMinutes(next.getMinutes() + mins, 0, 0)
+    return next.toISOString()
+  }
   const { hour, minute } = parseTime(runAtTime)
 
   if (frequency === "hourly") {
@@ -875,10 +882,12 @@ export function upsertScheduledTask(
     name: config.name.trim(),
     description: config.description.trim(),
     prompt: config.prompt.trim(),
+    taskType: config.taskType ?? existing?.taskType ?? "action",
     modelId: config.modelId,
     workDir: config.workDir,
     chatxRobotChatId: config.chatxRobotChatId ?? existing?.chatxRobotChatId ?? null,
     frequency: config.frequency,
+    intervalMinutes: config.intervalMinutes ?? existing?.intervalMinutes ?? null,
     runAt: config.runAt ?? existing?.runAt ?? null,
     runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
     weekday: config.weekday ?? existing?.weekday ?? null,
@@ -893,7 +902,8 @@ export function upsertScheduledTask(
       new Date(),
       config.runAtTime ?? existing?.runAtTime ?? null,
       config.weekday ?? existing?.weekday ?? null,
-      config.runAt ?? existing?.runAt ?? null
+      config.runAt ?? existing?.runAt ?? null,
+      config.intervalMinutes ?? existing?.intervalMinutes ?? null
     )
   }
   const index = items.findIndex((i) => i.id === id)
@@ -930,7 +940,7 @@ export function setScheduledTaskEnabled(id: string, enabled: boolean): void {
         const runAtDate = i.runAt ? new Date(i.runAt) : null
         updated.nextRunAt = runAtDate && runAtDate > now ? i.runAt : null
       } else {
-        updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt)
+        updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt, i.intervalMinutes)
       }
     }
     return updated
@@ -955,7 +965,7 @@ export function updateScheduledTaskRunResult(
           lastRunAt: now.toISOString(),
           lastRunStatus: status,
           lastRunError: error,
-          nextRunAt: i.frequency === "once" ? null : computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt),
+          nextRunAt: i.frequency === "once" ? null : computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt, i.intervalMinutes),
           updatedAt: now.toISOString()
         }
       : i
