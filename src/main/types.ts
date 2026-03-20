@@ -212,17 +212,20 @@ export interface McpConnectorUpsert {
 }
 
 // Scheduled Task types
-export type ScheduledTaskFrequency = "once" | "manual" | "hourly" | "daily" | "weekdays" | "weekly"
+export type ScheduledTaskFrequency = "once" | "manual" | "hourly" | "daily" | "weekdays" | "weekly" | "interval"
+export type ScheduledTaskType = "action" | "reminder"
 
 export interface ScheduledTask {
   id: string
   name: string
   description: string
   prompt: string
+  taskType: ScheduledTaskType       // "action" = agent 执行操作, "reminder" = 暖心提醒
   modelId: string | null
   workDir: string | null
   chatxRobotChatId: string | null // 关联的机器人会话ID，执行完后 HTTP 回复
   frequency: ScheduledTaskFrequency
+  intervalMinutes: number | null    // 仅 interval 类型使用，如 5 表示每5分钟
   runAt: string | null            // ISO 时间戳，仅 once 类型使用
   runAtTime: string | null       // "HH:mm" 格式，如 "09:00"
   weekday: number | null          // 0=周日, 1=周一, ..., 6=周六 (仅 weekly 使用)
@@ -239,10 +242,12 @@ export interface ScheduledTaskUpsert {
   name: string
   description: string
   prompt: string
+  taskType?: ScheduledTaskType
   modelId: string | null
   workDir: string | null
   chatxRobotChatId?: string | null
   frequency: ScheduledTaskFrequency
+  intervalMinutes?: number | null
   runAt?: string | null
   runAtTime?: string | null
   weekday?: number | null

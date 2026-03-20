@@ -10,10 +10,16 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog"
-import type { ScheduledTask, ScheduledTaskFrequency, ScheduledTaskUpsert } from "@/types"
+import type { ScheduledTask, ScheduledTaskFrequency, ScheduledTaskType, ScheduledTaskUpsert } from "@/types"
+
+const TASK_TYPE_OPTIONS: { value: ScheduledTaskType; label: string; hint: string }[] = [
+  { value: "action", label: "执行任务", hint: "Agent 实际执行操作（修复代码、扫描文件等）" },
+  { value: "reminder", label: "温馨提醒", hint: "发送暖心提醒消息" }
+]
 
 const FREQUENCY_OPTIONS: { value: ScheduledTaskFrequency; label: string }[] = [
   { value: "manual", label: "手动" },
+  { value: "interval", label: "自定义间隔" },
   { value: "hourly", label: "每小时" },
   { value: "daily", label: "每天" },
   { value: "weekdays", label: "工作日" },
@@ -47,9 +53,11 @@ export function CreateScheduledTaskDialog(props: {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [prompt, setPrompt] = useState("")
+  const [taskType, setTaskType] = useState<ScheduledTaskType>("action")
   const [modelId, setModelId] = useState<string>("")
   const [workDir, setWorkDir] = useState<string>("")
   const [frequency, setFrequency] = useState<ScheduledTaskFrequency>("manual")
+  const [intervalMinutes, setIntervalMinutes] = useState(5)
   const [runAtTime, setRunAtTime] = useState("09:00")
   const [weekday, setWeekday] = useState(1)
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([])
@@ -77,18 +85,22 @@ export function CreateScheduledTaskDialog(props: {
       setName(editTask.name)
       setDescription(editTask.description)
       setPrompt(editTask.prompt)
+      setTaskType(editTask.taskType ?? "action")
       setModelId(editTask.modelId ?? "")
       setWorkDir(editTask.workDir ?? "")
       setFrequency(editTask.frequency)
+      setIntervalMinutes(editTask.intervalMinutes ?? 5)
       setRunAtTime(editTask.runAtTime ?? "09:00")
       setWeekday(editTask.weekday ?? 1)
     } else if (open && !editTask) {
       setName("")
       setDescription("")
       setPrompt("")
+      setTaskType("action")
       setModelId("")
       setWorkDir("")
       setFrequency("manual")
+      setIntervalMinutes(5)
       setRunAtTime("09:00")
       setWeekday(1)
     }
@@ -128,9 +140,11 @@ export function CreateScheduledTaskDialog(props: {
         name: name.trim(),
         description: description.trim(),
         prompt: prompt.trim(),
+        taskType,
         modelId: modelId || null,
         workDir: workDir || null,
         frequency,
+        intervalMinutes: frequency === "interval" ? intervalMinutes : null,
         runAtTime: needsTimePicker(frequency) ? runAtTime : null,
         weekday: frequency === "weekly" ? weekday : null
       }
@@ -146,7 +160,7 @@ export function CreateScheduledTaskDialog(props: {
     } finally {
       setSubmitting(false)
     }
-  }, [name, description, prompt, modelId, workDir, frequency, runAtTime, weekday, editTask, existingNames, onSuccess, onOpenChange])
+  }, [name, description, prompt, taskType, modelId, workDir, frequency, intervalMinutes, runAtTime, weekday, editTask, existingNames, onSuccess, onOpenChange])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -186,10 +200,28 @@ export function CreateScheduledTaskDialog(props: {
 
           <div>
             <label className="text-xs font-medium">
-              提示词 <span className="text-red-500">*</span>
+              任务类型 <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={taskType}
+              onChange={(e) => setTaskType(e.target.value as ScheduledTaskType)}
+              className={selectClass}
+            >
+              {TASK_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {TASK_TYPE_OPTIONS.find((o) => o.value === taskType)?.hint}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium">
+              {taskType === "reminder" ? "提醒内容" : "提示词"} <span className="text-red-500">*</span>
             </label>
             <textarea
-              placeholder="输入发送给 AI 的具体指令内容"
+              placeholder={taskType === "reminder" ? "输入提醒内容，如：该喝水了" : "输入发送给 AI 的具体指令内容"}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               className="mt-1 w-full min-h-[100px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-y"
@@ -241,6 +273,19 @@ export function CreateScheduledTaskDialog(props: {
               ))}
             </select>
           </div>
+
+          {frequency === "interval" && (
+            <div>
+              <label className="text-xs font-medium">间隔时间（分钟）</label>
+              <Input
+                type="number"
+                min={1}
+                value={intervalMinutes}
+                onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))}
+                className="mt-1 w-32"
+              />
+            </div>
+          )}
 
           {needsTimePicker(frequency) && (
             <div>

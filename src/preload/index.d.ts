@@ -10,6 +10,7 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsert,
   HeartbeatConfig,
+  ChatXConfig,
   PluginMetadata,
   PluginManifest
 } from "../main/types"
@@ -243,6 +244,12 @@ interface CustomAPI {
     delete: (id: string) => Promise<{ success: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
     getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+  }
+  chatx: {
+    getConfig: () => Promise<ChatXConfig>
+    saveConfig: (updates: Partial<ChatXConfig>) => Promise<void>
+    restart: () => Promise<void>
+    cancelByThread: (threadId: string) => Promise<boolean>
   }
   sandbox: {
     getMode: () => Promise<"none" | "unelevated" | "readonly" | "elevated">

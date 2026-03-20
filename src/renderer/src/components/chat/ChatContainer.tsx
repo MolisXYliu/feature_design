@@ -749,6 +749,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       } catch (err) {
         console.error("[ChatContainer] Failed to cancel heartbeat:", err)
       }
+    } else if (scheduledTaskLoading) {
+      // ChatX bot thread: scheduledTaskLoading is true but no scheduledTaskId
+      try {
+        const cancelled = await window.api.chatx.cancelByThread(threadId)
+        if (!cancelled) console.warn("[ChatContainer] ChatX thread not found for cancel:", threadId)
+      } catch (err) {
+        console.error("[ChatContainer] Failed to cancel ChatX thread:", err)
+      }
     } else {
       await stream?.stop()
     }
@@ -1502,12 +1510,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             )}
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
+              const isLastMessage = index === displayMessages.length - 1;
 
               return (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   previousMessage={previousMessage}
+                  isStreaming={isLastMessage && isLoading}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}

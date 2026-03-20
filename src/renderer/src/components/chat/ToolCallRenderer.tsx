@@ -39,6 +39,8 @@ interface ToolCallRendererProps {
   /** Which approval button types to show */
   approvalTypes?: ("approve" | "approve_session" | "approve_permanent" | "reject")[]
   threadId: string
+  /** Whether the stream is still active — used to distinguish RUNNING vs INTERRUPTED. Defaults to true (prefer RUNNING over INTERRUPTED when unknown). */
+  isStreaming?: boolean
 }
 
 const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -505,7 +507,8 @@ export function ToolCallRenderer({
   onApprovalDecision,
   retryReason,
   approvalTypes = ["approve", "approve_session", "approve_permanent", "reject"],
-  threadId
+  threadId,
+  isStreaming = true
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
@@ -956,9 +959,15 @@ export function ToolCallRenderer({
           </Badge>
         )}
 
-        {!needsApproval && result === undefined && (
+        {!needsApproval && result === undefined && isStreaming && (
           <Badge variant="outline" className="ml-auto shrink-0 animate-pulse">
             RUNNING
+          </Badge>
+        )}
+
+        {!needsApproval && result === undefined && !isStreaming && (
+          <Badge variant="warning" className="ml-auto shrink-0">
+            INTERRUPTED
           </Badge>
         )}
 

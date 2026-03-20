@@ -492,7 +492,9 @@ const api = {
     saveConfig: (updates: Partial<ChatXConfig>): Promise<void> =>
       ipcRenderer.invoke("chatx:save-config", updates) as Promise<void>,
     restart: (): Promise<void> =>
-      ipcRenderer.invoke("chatx:restart") as Promise<void>
+      ipcRenderer.invoke("chatx:restart") as Promise<void>,
+    cancelByThread: (threadId: string): Promise<boolean> =>
+      ipcRenderer.invoke("chatx:cancel-by-thread", threadId) as Promise<boolean>
   },
   sandbox: {
     getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>

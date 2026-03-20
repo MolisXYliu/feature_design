@@ -49,8 +49,8 @@ export function KanbanView(): React.JSX.Element {
     }
 
     for (const thread of threads) {
-      const isLoading = loadingStates[thread.thread_id] ?? false
       const threadState = allThreadStates[thread.thread_id]
+      const isLoading = (loadingStates[thread.thread_id] ?? false) || Boolean(threadState?.scheduledTaskLoading)
       const hasDraft = Boolean(threadState?.draftInput?.trim())
       const hasPendingApproval = Boolean(threadState?.pendingApproval)
       const status = getThreadKanbanStatus(thread, isLoading, hasDraft, hasPendingApproval)

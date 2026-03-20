@@ -31,6 +31,7 @@ let lastPong = 0
 const processedMsgIds = new Set<string>()
 const runningChats = new Set<string>()
 const activeAbortControllers = new Map<string, AbortController>()
+const threadIdToChatKey = new Map<string, string>()
 const messageQueues = new Map<string, ChatXInboundMessage[]>()
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -194,6 +195,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
     notifyRenderer("threads:changed")
   }
 
+  threadIdToChatKey.set(threadId, chatKey)
   const channel = `scheduler:stream:${threadId}`
   let hasStreamedContent = false
 
@@ -274,6 +276,7 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
   } finally {
     runningChats.delete(chatKey)
     activeAbortControllers.delete(chatKey)
+    threadIdToChatKey.delete(threadId)
     closeCheckpointer(threadId).catch(() => {})
     notifyRenderer("threads:changed")
 
@@ -425,9 +428,21 @@ export function stopChatX(): void {
     controller.abort()
   }
   activeAbortControllers.clear()
+  threadIdToChatKey.clear()
   runningChats.clear()
   messageQueues.clear()
   cleanup()
+}
+
+/** Cancel a running ChatX conversation by threadId. Returns true if found and cancelled. */
+export function cancelChatXByThreadId(threadId: string): boolean {
+  const chatKey = threadIdToChatKey.get(threadId)
+  if (!chatKey) return false
+  const controller = activeAbortControllers.get(chatKey)
+  if (!controller) return false
+  console.log(`[ChatX] Cancelling by threadId=${threadId}, chatKey=${chatKey}`)
+  controller.abort()
+  return true
 }
 
 export function restartChatX(): void {
