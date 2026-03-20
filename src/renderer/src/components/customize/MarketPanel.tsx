@@ -96,13 +96,14 @@ interface MarketItemCardProps {
   onDelete: (item: MarketItem) => void
   onUpdate: (item: MarketItem) => void
   onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
-  onUpdateInstall: (item: MarketItem) => void  // 新增更新安装回调
+  onUpdateInstall: (item: MarketItem) => void
+  onUninstall: (item: MarketItem) => void  // 新增卸载回调
   isDownloading?: boolean
   isInstalled?: boolean  // 新增已安装状态
   isUpdating?: boolean   // 新增更新中状态
 }
 
-function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall, isDownloading = false, isInstalled = false, isUpdating = false }: MarketItemCardProps) {
+function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall, onUninstall, isDownloading = false, isInstalled = false, isUpdating = false }: MarketItemCardProps) {
   const handleInstallDownload = () => {
     onDownload(item, false) // Install to application
   }
@@ -115,7 +116,12 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
     onUpdateInstall(item)  // 更新安装
   }
 
+  const handleUninstall = () => {
+    onUninstall(item)
+  }
+
   const ip = localStorage.getItem('localIp')
+  const isFeatured = item.featured === "精品"
 
   return (
     <div className="p-4 rounded-lg border border-border hover:border-accent-foreground/20 transition-colors">
@@ -149,30 +155,49 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
           ) : (
             <>
               {isInstalled ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                  onClick={handleUpdateInstall}
-                >
-                  <Zap className="size-3" />
-                  更新安装
-                </Button>
+                isFeatured ? (
+                  <span className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-2 py-1 rounded-full flex items-center gap-1">
+                    <Zap className="size-3" />
+                    自动保持最新
+                  </span>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer"
+                    onClick={handleUpdateInstall}
+                  >
+                    <Zap className="size-3" />
+                    更新安装
+                  </Button>
+                )
               ) : (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-3 gap-1"
+                  className="h-7 px-3 gap-1 cursor-pointer"
                   onClick={handleInstallDownload}
                 >
                   <Zap className="size-3" />
                   安装
                 </Button>
               )}
+              {isInstalled && !isFeatured && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-auto px-2 gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                  onClick={handleUninstall}
+                  title="卸载"
+                >
+                  <Trash2 className="size-3 mr-1" />
+                  卸载
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-auto px-2 gap-1"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={handleLocalDownload}
               >
                 <HardDrive className="size-3 mr-1" />
@@ -185,20 +210,22 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onUpdate(item)}
                 title="更新"
               >
-                <Edit className="size-3" />
+                <Edit className="size-3 mr-1" />
+                编辑
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onDelete(item)}
                 title="删除"
               >
-                <Trash2 className="size-3" />
+                <Trash2 className="size-3 mr-1" />
+                删除
               </Button>
             </>
           )}
@@ -215,6 +242,14 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
             <Lightbulb className="size-3 mt-0.5 shrink-0" />
             <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
           </div>
+        </div>
+      )}
+
+      {/* Featured auto-update notice */}
+      {isFeatured && isInstalled && (
+        <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
+          <Star className="size-3 shrink-0 text-yellow-500" />
+          精品技能无需手动更新，系统将自动安装最新版本
         </div>
       )}
 
@@ -238,8 +273,8 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
         )}
         {item.featured && (
           <div className="flex items-center gap-1" title="推荐标签">
-            <Star className="size-3 shrink-0 text-yellow-500" />
-            <span className="text-yellow-600">{item.featured}</span>
+            <Star className={`size-3 shrink-0 ${isFeatured ? "text-yellow-500" : "text-muted-foreground"}`} />
+            <span className={isFeatured ? "text-yellow-600 font-medium" : ""}>{item.featured}</span>
           </div>
         )}
         {item.user_id && (
@@ -428,7 +463,7 @@ export function MarketPanel(): React.JSX.Element {
         let response: MarketApiResponse
         switch (activeTab) {
           case "skill":
-            if (skillsData.length === 0) {
+
               response = await marketApi.getSkills()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -444,10 +479,10 @@ export function MarketPanel(): React.JSX.Element {
                 })
                 setSkillsData(dataWithFlags)
               }
-            }
+
             break
           case "mcp":
-            if (mcpsData.length === 0) {
+
               response = await marketApi.getMcps()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -458,10 +493,10 @@ export function MarketPanel(): React.JSX.Element {
                 }))
                 setMcpsData(dataWithFlags)
               }
-            }
+
             break
           case "plugin":
-            if (pluginsData.length === 0) {
+
               response = await marketApi.getPlugins()
               if (response.success && response.data) {
                 // Add canDelete flag and installed status to each item
@@ -472,7 +507,7 @@ export function MarketPanel(): React.JSX.Element {
                 }))
                 setPluginsData(dataWithFlags)
               }
-            }
+
             break
         }
       } catch (error) {
@@ -507,6 +542,39 @@ export function MarketPanel(): React.JSX.Element {
 
   const handleDelete = (item: MarketItem) => {
     setDeleteDialog({ open: true, item })
+  }
+
+  const handleUninstall = async (item: MarketItem) => {
+    const itemName = item.name || item.id || ''
+    if (!itemName) return
+
+    try {
+      if (activeTab === "skill" && window.api?.skills?.delete) {
+        const skillsMetadata = await window.api.skills.list()
+        const existingSkill = skillsMetadata.find(skill => skill.name === itemName)
+        if (existingSkill) {
+          await window.api.skills.delete(existingSkill.path)
+        }
+        await loadInstalledSkills()
+      } else if (activeTab === "mcp" && window.api?.mcp?.delete) {
+        const mcpsMetadata = await window.api.mcp.list()
+        const existingMcp = mcpsMetadata.find(mcp => mcp.name === itemName)
+        if (existingMcp) {
+          await window.api.mcp.delete(existingMcp.id)
+        }
+        await loadInstalledMcps()
+      } else if (activeTab === "plugin" && window.api?.plugins?.delete) {
+        const pluginsMetadata = await window.api.plugins.list()
+        const existingPlugin = pluginsMetadata.find(plugin => plugin.name === itemName)
+        if (existingPlugin) {
+          await window.api.plugins.delete(existingPlugin.path)
+        }
+        await loadInstalledPlugins()
+      }
+    } catch (error) {
+      console.error("Failed to uninstall item:", error)
+      setError(error instanceof Error ? error.message : "卸载失败")
+    }
   }
 
   const confirmDelete = async () => {
@@ -823,6 +891,7 @@ export function MarketPanel(): React.JSX.Element {
                       onUpdate={handleUpdate}
                       onDownload={handleDownload}
                       onUpdateInstall={handleUpdateInstall}  // 修正：使用正确的handleUpdateInstall函数
+                      onUninstall={handleUninstall}  // 传递卸载回调
                       isDownloading={downloadingItems.has(item.id || item.name)}
                       isInstalled={item.installed}  // 传递已安装状态
                       isUpdating={updatingItems.has(item.id || item.name)}  // 修正：使用updatingItems而不是downloadingItems

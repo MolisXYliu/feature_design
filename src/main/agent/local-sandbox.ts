@@ -29,7 +29,7 @@ import * as chardet from "jschardet"
 import micromatch from "micromatch"
 import { replace } from "./replace"
 import type { ToolOrchestrator } from "./tool-orchestrator"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import type { HookConfig } from "../hooks/types"
 import { runHooks } from "../hooks/runner"
 
@@ -128,6 +128,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly windowsSandbox: "none" | "unelevated" | "readonly" | "elevated"
   private readonly codexExePath: string
   private readonly getHooks: () => HookConfig[]
+  /** Host user's TEMP directory — ACL-granted writable by the elevated sandbox user. */
+  private readonly _elevatedMavenTempDir: string
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
@@ -146,14 +148,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return path.win32.join(systemDrive, "Users", username)
   }
 
-  private static buildElevatedSandboxEnvPreamble(shellBase: string): string {
+  private static buildElevatedSandboxEnvPreamble(shellBase: string, realTempDir: string): string {
     const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
     const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
     const homePath = profileRoot.slice(homeDrive.length) || "\\"
     const localAppData = path.win32.join(profileRoot, "AppData", "Local")
     const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
-    const tempDir = path.win32.join(localAppData, "Temp")
-    const mavenRepoLocal = path.win32.join(tempDir, "m2-repo")
+    // Use the host user's real TEMP for maven.repo.local — it is ACL-granted writable by
+    // the sandbox user (included in write_roots during elevated setup). The sandbox user's
+    // own profile TEMP (C:\Users\CodexSandboxOnline\...\Temp) is NOT granted write access
+    // by the ACL setup, so we must NOT redirect TEMP/TMP to it.
+    const mavenRepoLocal = path.win32.join(realTempDir, "m2-sandbox-repo")
     const envOverrides: Array<[string, string]> = [
       ["USERPROFILE", profileRoot],
       ["HOME", profileRoot],
@@ -161,8 +166,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["HOMEPATH", homePath],
       ["APPDATA", roamingAppData],
       ["LOCALAPPDATA", localAppData],
-      ["TEMP", tempDir],
-      ["TMP", tempDir],
+      // TEMP/TMP intentionally NOT redirected: the sandbox user profile's Temp directory
+      // is not ACL-writable, but the host user's TEMP (used for maven.repo.local) is.
       ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
     ]
@@ -171,7 +176,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      // Append Maven repo local to MAVEN_OPTS (preserving existing value)
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
+      // realTempDir already exists, so no mkdir needed.
       return `${base} & set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
     }
 
@@ -183,8 +189,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // NOTE: Do NOT use powershellSingleQuote here — single quotes inside a double-quoted
       // string are literal characters in PowerShell. Maven would receive the quote as part
       // of the path, causing it to be treated as a relative path and prepended with cwd.
-      // Reference $env:TEMP (already set above) via subexpression to avoid all quoting issues.
-      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=$($env:TEMP)\\m2-repo"`
+      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")}"`
     }
 
     return ""
@@ -222,6 +227,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.codexExePath = options.codexExePath ?? "codex"
     const h = options.hooks
     this.getHooks = typeof h === "function" ? h : () => h ?? []
+    this._elevatedMavenTempDir = baseEnv.TEMP || baseEnv.TMP || tmpdir()
 
     // Eagerly cache the elevation check during construction to avoid blocking
     // the event loop on the first file-write hot path (execSync("net session")).
@@ -1488,7 +1494,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ? `${psUtf8Preamble}; ${command}`
         : command
     const sandboxUserEnvPreamble = isElevatedSandbox
-      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase)
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir)
       : ""
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"

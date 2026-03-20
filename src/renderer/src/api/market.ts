@@ -118,10 +118,10 @@ export const marketApi = {
     const cacheKey = 'skills'
 
     // Check cache first
-    const cachedData = getCachedData(cacheKey)
-    if (cachedData) {
-      return cachedData
-    }
+    // const cachedData = getCachedData(cacheKey)
+    // if (cachedData) {
+    //   return cachedData
+    // }
 
     console.log("Fetching skills from API...")
     try {
@@ -170,10 +170,10 @@ export const marketApi = {
     const cacheKey = 'mcps'
 
     // Check cache first
-    const cachedData = getCachedData(cacheKey)
-    if (cachedData) {
-      return cachedData
-    }
+    // const cachedData = getCachedData(cacheKey)
+    // if (cachedData) {
+    //   return cachedData
+    // }
 
     console.log("Fetching MCPs from API...")
     try {
@@ -222,10 +222,10 @@ export const marketApi = {
     const cacheKey = 'plugins'
 
     // Check cache first
-    const cachedData = getCachedData(cacheKey)
-    if (cachedData) {
-      return cachedData
-    }
+    // const cachedData = getCachedData(cacheKey)
+    // if (cachedData) {
+    //   return cachedData
+    // }
 
     console.log("Fetching plugins from API...")
     try {
