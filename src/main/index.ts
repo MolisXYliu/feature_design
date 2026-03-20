@@ -21,6 +21,7 @@ import { closeRuntime } from "./agent/runtime"
 import  os from "os";
 
 let mainWindow: BrowserWindow | null = null
+let loginWindow: BrowserWindow | null = null
 
 // Simple dev check - replaces @electron-toolkit/utils is.dev
 const isDev = !app.isPackaged
@@ -196,6 +197,35 @@ if (!gotTheLock) {
       } catch (error) {
         console.error("Failed to show item in folder:", error)
         return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
+      }
+    })
+
+    ipcMain.handle("open-login-window", async () => {
+      if (!loginWindow) {
+        loginWindow = new BrowserWindow({
+          width: 1280,
+          height: 800,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            webviewTag: true,
+            preload: join(__dirname, "../preload/index.js"),
+          },
+        })
+      }
+      loginWindow.loadURL("https://oa-auth.paas.twf.com/auth/sso-login" +
+        "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+        "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.twf.cn/login.html`) +
+        "&response_type=code")
+    })
+
+    ipcMain.handle("close-login-window", async () => {
+      if (loginWindow && !loginWindow.isDestroyed()) {
+        loginWindow.close()
+        loginWindow = null
+      }
+      if(mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.reload()
       }
     })
 

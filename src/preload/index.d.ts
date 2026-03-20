@@ -17,6 +17,8 @@ import {UserInfoConfig} from '../main/storage'
 
 interface ElectronAPI {
   openExternal: Promise
+  openLoginWindow:()=>void
+  closeLoginWindow:()=>void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void

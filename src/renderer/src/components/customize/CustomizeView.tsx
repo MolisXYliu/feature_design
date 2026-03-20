@@ -12,8 +12,9 @@ import { PluginsPanel } from "./PluginsPanel"
 import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
 import { ChatXPanel } from "./ChatXPanel"
+import { UserInfoPanel } from "./UserInfoPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx" | "userinfo"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView, customizeInitialTab } = useAppStore()
@@ -172,6 +173,8 @@ export function CustomizeView(): React.JSX.Element {
         <ChatXPanel />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
+      ) : activeTab === "userinfo" ? (
+        <UserInfoPanel />
       ) : null}
     </div>
   )
