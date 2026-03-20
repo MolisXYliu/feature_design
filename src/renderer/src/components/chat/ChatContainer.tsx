@@ -211,7 +211,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     try {
       const res = await marketApi.getSkills()
       const goodSkills = res?.data?.filter((it) => it.featured === "精品")
-      console.log("Found good skills:", goodSkills)
       goodSkillsRef.current = goodSkills || []
       allSkillsRef.current = res?.data || []
       setGoodSkillsData(goodSkills || [])
@@ -533,7 +532,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
           let role: Message["role"] = "assistant"
           if (streamMsg.type === "human") role = "user"
-          else if (streamMsg.type === "tool") role = "assistant"
+          else if (streamMsg.type === "tool") role = "tool"  // ✅ 修复: tool 不应映射为 assistant
           else if (streamMsg.type === "ai") role = "assistant"
 
           const storeMsg: Message = {
@@ -549,7 +548,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           appendMessage(storeMsg)
         }
       }
-      loadThreads()
     }
     prevLoadingRef.current = isLoading
   }, [isLoading, streamData.messages, loadThreads, appendMessage])
