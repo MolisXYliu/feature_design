@@ -17,6 +17,8 @@ import type { ChatXConfig, ChatXRobotConfig } from "@/types"
 const selectClass =
   "w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 
+const IPV4_RE = /^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$/
+
 function emptyRobot(): ChatXRobotConfig {
   return {
     chatId: "",
@@ -70,12 +72,9 @@ function RobotEditDialog(props: {
     if (!isEditing && existingChatIds.includes(form.chatId.trim())) {
       setError("会话 ID 已存在，不能重复"); return
     }
-    if (!form.httpUrl.trim()) { setError("HTTP 地址不能为空"); return }
-    try { new URL(form.httpUrl.trim()) } catch { setError("HTTP 地址格式无效"); return }
     if (!form.fromId.trim()) { setError("fromId 不能为空"); return }
     if (!form.clientId.trim()) { setError("clientId 不能为空"); return }
     if (!form.clientSecret.trim()) { setError("clientSecret 不能为空"); return }
-    if (!form.channel.trim()) { setError("channel 不能为空"); return }
     if (!form.workDir) { setError("请选择工作目录"); return }
 
     const users = toUserListStr.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
@@ -91,7 +90,7 @@ function RobotEditDialog(props: {
       <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editRobot ? "编辑机器人" : "添加机器人"}</DialogTitle>
-          <DialogDescription>配置机器人的连接参数。所有字段均为必填。</DialogDescription>
+          <DialogDescription>配置机器人的认证与工作参数。</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -106,10 +105,6 @@ function RobotEditDialog(props: {
             />
             {isEditing && <p className="text-[10px] text-muted-foreground">会话 ID 创建后不可修改</p>}
           </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium">HTTP 地址</label>
-            <Input value={form.httpUrl} onChange={(e) => update("httpUrl", e.target.value)} placeholder="https://..." className="h-9" />
-          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-sm font-medium">fromId</label>
@@ -119,14 +114,10 @@ function RobotEditDialog(props: {
               <label className="text-sm font-medium">clientId</label>
               <Input value={form.clientId} onChange={(e) => update("clientId", e.target.value)} className="h-9" />
             </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">clientSecret</label>
-              <Input value={form.clientSecret} onChange={(e) => update("clientSecret", e.target.value)} type="password" className="h-9" />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">channel</label>
-              <Input value={form.channel} onChange={(e) => update("channel", e.target.value)} className="h-9" />
-            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium">clientSecret</label>
+            <Input value={form.clientSecret} onChange={(e) => update("clientSecret", e.target.value)} type="password" className="h-9" />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium">toUserList（逗号分隔）</label>
@@ -196,8 +187,8 @@ function RobotDetail(props: {
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">如何使用？</p>
               <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>填写全局 WebSocket 地址和用户 IP，开启服务</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>点击 <span className="font-medium text-foreground/60">+</span> 添加机器人，配置会话 ID、HTTP 回复地址等参数</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>填写用户 IP，开启服务</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>点击 <span className="font-medium text-foreground/60">+</span> 添加机器人，配置会话 ID、认证信息等参数</li>
                 <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>远端消息通过 WS 推送到本地，AI 自动处理并通过 HTTP 回复</li>
                 <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>也可在侧边栏主动创建机器人对话，回复同样发送到远端</li>
               </ul>
@@ -219,11 +210,9 @@ function RobotDetail(props: {
 
   const fields: Array<{ label: string; value: string }> = [
     { label: "会话 ID", value: robot.chatId },
-    { label: "HTTP 地址", value: robot.httpUrl },
     { label: "fromId", value: robot.fromId },
     { label: "clientId", value: robot.clientId },
     { label: "clientSecret", value: "••••••••" },
-    { label: "channel", value: robot.channel },
     { label: "toUserList", value: robot.toUserList.join(", ") },
     { label: "模型", value: modelName },
     { label: "工作目录", value: robot.workDir || "未设置" }
@@ -270,6 +259,7 @@ export function ChatXPanel(): React.JSX.Element {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editIndex, setEditIndex] = useState<number | null>(null)
+  const [ipError, setIpError] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const globalSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -311,25 +301,23 @@ export function ChatXPanel(): React.JSX.Element {
         return
       }
     }
-    // Flush pending debounced save to avoid stale wsUrl/userIp
+    // Flush pending debounced save to avoid stale userIp
     if (globalSaveTimerRef.current && config) {
       clearTimeout(globalSaveTimerRef.current)
       globalSaveTimerRef.current = null
-      await saveConfig({ wsUrl: config.wsUrl, userIp: config.userIp })
+      await saveConfig({ userIp: config.userIp })
     }
     if (enabled && config) {
-      if (!config.wsUrl.trim()) {
-        alert("请先填写 WebSocket 地址")
+      if (!import.meta.env.VITE_CHATX_WS_URL && !config.wsUrl?.trim()) {
+        alert("WebSocket 地址未配置，请联系管理员检查 .env 配置")
         return
       }
-      try {
-        const url = new URL(config.wsUrl.trim())
-        if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-          alert("WebSocket 地址必须以 ws:// 或 wss:// 开头")
-          return
-        }
-      } catch {
-        alert("WebSocket 地址格式无效")
+      if (!config.userIp.trim()) {
+        alert("请先填写用户 IP")
+        return
+      }
+      if (!IPV4_RE.test(config.userIp.trim())) {
+        alert("用户 IP 格式无效")
         return
       }
       if (config.robots.length === 0) {
@@ -339,7 +327,7 @@ export function ChatXPanel(): React.JSX.Element {
       // Check all robots have required fields
       for (let i = 0; i < config.robots.length; i++) {
         const r = config.robots[i]
-        if (!r.chatId || !r.httpUrl || !r.fromId || !r.clientId || !r.clientSecret || !r.channel || !r.workDir || r.toUserList.length === 0) {
+        if (!r.chatId || !r.fromId || !r.clientId || !r.clientSecret || !r.workDir || r.toUserList.length === 0) {
           alert(`机器人 ${i + 1}（${r.chatId || "未命名"}）配置不完整，请先补全所有字段`)
           return
         }
@@ -350,12 +338,26 @@ export function ChatXPanel(): React.JSX.Element {
     try { await window.api.chatx.restart() } catch { /* ignore */ }
   }, [saveConfig, config])
 
-  const updateGlobal = useCallback((field: "wsUrl" | "userIp", value: string) => {
+  const updateGlobal = useCallback((field: "userIp", value: string) => {
     setConfig((prev) => {
       if (!prev) return prev
       const next = { ...prev, [field]: value }
       if (globalSaveTimerRef.current) clearTimeout(globalSaveTimerRef.current)
-      globalSaveTimerRef.current = setTimeout(() => saveConfig({ wsUrl: next.wsUrl, userIp: next.userIp }), 500)
+      globalSaveTimerRef.current = setTimeout(async () => {
+        const ip = next.userIp.trim()
+        if (!ip) {
+          setIpError(null)
+          await saveConfig({ userIp: "" })
+        } else if (IPV4_RE.test(ip)) {
+          setIpError(null)
+          await saveConfig({ userIp: ip })
+          if (next.enabled) {
+            try { await window.api.chatx.restart() } catch { /* ignore */ }
+          }
+        } else {
+          setIpError("IP 格式无效")
+        }
+      }, 500)
       return next
     })
   }, [saveConfig])
@@ -448,25 +450,15 @@ export function ChatXPanel(): React.JSX.Element {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <div>
-              <label className="text-xs text-muted-foreground">WebSocket 地址</label>
-              <Input
-                value={config.wsUrl}
-                onChange={(e) => updateGlobal("wsUrl", e.target.value)}
-                placeholder="wss://..."
-                className="h-7 text-xs mt-0.5"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">用户 IP</label>
-              <Input
-                value={config.userIp}
-                onChange={(e) => updateGlobal("userIp", e.target.value)}
-                placeholder="192.168.1.100"
-                className="h-7 text-xs mt-0.5"
-              />
-            </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">用户 IP</label>
+            <Input
+              value={config.userIp}
+              onChange={(e) => { setIpError(null); updateGlobal("userIp", e.target.value) }}
+              placeholder="192.168.1.100"
+              className={cn("h-8 text-sm", ipError && "border-destructive focus-visible:ring-destructive")}
+            />
+            {ipError && <p className="text-[11px] text-destructive mt-1">{ipError}</p>}
           </div>
         </div>
 
@@ -489,7 +481,7 @@ export function ChatXPanel(): React.JSX.Element {
                   <Cpu className="size-3.5 shrink-0 text-blue-400" />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm truncate block">{robot.chatId || `机器人 ${i + 1}`}</span>
-                    <span className="text-[10px] text-muted-foreground truncate block">{robot.channel || "未配置渠道"}</span>
+                    <span className="text-[10px] text-muted-foreground truncate block">{robot.fromId || "未配置"}</span>
                   </div>
                 </button>
               ))

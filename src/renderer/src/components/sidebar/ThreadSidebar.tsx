@@ -276,7 +276,7 @@ export function ThreadSidebar(): React.JSX.Element {
       }
       // Only show robots that have all required fields filled
       const valid = (config.robots || []).filter(
-        (r) => r.chatId && r.httpUrl && r.fromId && r.clientId && r.clientSecret && r.channel && r.workDir && r.toUserList.length > 0
+        (r) => r.chatId && r.fromId && r.clientId && r.clientSecret && r.workDir && r.toUserList.length > 0
       )
       setRobots(valid)
     } catch { /* ignore */ }

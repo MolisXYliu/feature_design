@@ -1259,11 +1259,9 @@ export function getChatXConfig(): import("./types").ChatXConfig {
               item != null &&
               typeof item === "object" &&
               typeof (item as Record<string, unknown>).chatId === "string" &&
-              typeof (item as Record<string, unknown>).httpUrl === "string" &&
               typeof (item as Record<string, unknown>).fromId === "string" &&
               typeof (item as Record<string, unknown>).clientId === "string" &&
               typeof (item as Record<string, unknown>).clientSecret === "string" &&
-              typeof (item as Record<string, unknown>).channel === "string" &&
               Array.isArray((item as Record<string, unknown>).toUserList)
           )
         : defaults.robots

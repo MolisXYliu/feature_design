@@ -83,10 +83,21 @@ const HTTP_TIMEOUT_MS = 30_000
 export async function sendChatXReply(robot: ChatXRobotConfig, content: string): Promise<void> {
   const cleanContent = stripThink(content).trim()
   if (!cleanContent) return
+  const httpUrl = (import.meta.env.VITE_CHATX_HTTP_URL as string) || robot.httpUrl
+  const channel = (import.meta.env.VITE_CHATX_CHANNEL as string) || robot.channel || ""
+  if (!httpUrl) {
+    const msg = "HTTP 回复地址未配置，请检查 .env 中的 VITE_CHATX_HTTP_URL"
+    console.error(`[ChatX] ${msg}`)
+    notifyAlways("🤖 机器人回复失败", msg)
+    return
+  }
+  if (!channel) {
+    console.warn("[ChatX] channel not configured, using empty string")
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS)
   try {
-    const res = await fetch(robot.httpUrl, {
+    const res = await fetch(httpUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
@@ -94,7 +105,7 @@ export async function sendChatXReply(robot: ChatXRobotConfig, content: string): 
         fromId: robot.fromId,
         clientId: robot.clientId,
         clientSecret: robot.clientSecret,
-        channel: robot.channel,
+        channel,
         toUserList: robot.toUserList,
         content: cleanContent
       })
@@ -296,12 +307,18 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
 
 function connect(): void {
   const config = getChatXConfig()
-  if (!config.enabled || !config.wsUrl) {
-    console.log("[ChatX] Not enabled or no wsUrl configured")
+  const envWsUrl = (import.meta.env.VITE_CHATX_WS_URL as string) || ""
+  const baseWsUrl = envWsUrl || config.wsUrl
+  if (!config.enabled) {
+    console.log("[ChatX] Not enabled")
+    return
+  }
+  if (!baseWsUrl) {
+    console.error("[ChatX] No wsUrl configured (check VITE_CHATX_WS_URL in .env or config)")
     return
   }
 
-  let wsUrl = config.wsUrl
+  let wsUrl = baseWsUrl
   if (config.userIp) {
     const sep = wsUrl.includes("?") ? "&" : "?"
     wsUrl = `${wsUrl}${sep}userIp=${encodeURIComponent(config.userIp)}`
