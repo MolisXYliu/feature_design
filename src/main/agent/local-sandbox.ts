@@ -30,6 +30,8 @@ import micromatch from "micromatch"
 import { replace } from "./replace"
 import type { ToolOrchestrator } from "./tool-orchestrator"
 import { homedir } from "node:os"
+import type { HookConfig } from "../hooks/types"
+import { runHooks } from "../hooks/runner"
 
 /**
  * Sensitive directories under user profile that sandbox tools should not access.
@@ -91,6 +93,9 @@ export interface LocalSandboxOptions {
   windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"
   /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
   codexExePath?: string
+  /** Hook configurations for PreToolUse/PostToolUse lifecycle events.
+   *  Accepts a getter function so hooks are always read fresh from storage. */
+  hooks?: HookConfig[] | (() => HookConfig[])
 }
 
 /**
@@ -122,6 +127,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly workingDir: string
   private readonly windowsSandbox: "none" | "unelevated" | "readonly" | "elevated"
   private readonly codexExePath: string
+  private readonly getHooks: () => HookConfig[]
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
@@ -214,6 +220,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.workingDir = options.rootDir ?? process.cwd()
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
+    const h = options.hooks
+    this.getHooks = typeof h === "function" ? h : () => h ?? []
 
     // Eagerly cache the elevation check during construction to avoid blocking
     // the event loop on the first file-write hot path (execSync("net session")).
@@ -803,14 +811,31 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "写入") }
     }
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "write_file",
+      toolArgs: { filePath, content },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return { error: `[Hook blocked] ${preResult.stdout || "write_file was blocked by a hook"}` }
+    }
     const resolvedPath = this._resolvePath(filePath)
-    return this.withFileLock(resolvedPath, async () => {
-      const result = await super.write(filePath, content)
-      if (!result.error) {
+    const result = await this.withFileLock(resolvedPath, async () => {
+      const r = await super.write(filePath, content)
+      if (!r.error) {
         await this.recordReadTime(resolvedPath)
       }
-      return result
+      return r
     })
+    // PostToolUse hook (fire-and-forget)
+    runHooks(this.getHooks(), "PostToolUse", {
+      toolName: "write_file",
+      toolArgs: { filePath, content },
+      toolResult: JSON.stringify(result),
+      workspacePath: this.workingDir
+    }).catch((e) => console.warn("[Hooks] PostToolUse write error:", e))
+    return result
   }
 
   /**
@@ -868,9 +893,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "编辑") }
     }
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "edit_file",
+      toolArgs: { filePath, oldString, newString, replaceAll },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return { error: `[Hook blocked] ${preResult.stdout || "edit_file was blocked by a hook"}` }
+    }
     try {
       const resolvedPath = this._resolvePath(filePath)
-      return await this.withFileLock(resolvedPath, async () => {
+      const result = await this.withFileLock(resolvedPath, async () => {
         const { buffer } = await this.readFileBuffer(filePath)
         const ext = path.extname(resolvedPath).toLowerCase()
         const encoding = this.detectEncoding(buffer, ext)
@@ -886,15 +920,23 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           expectedContent = newString
           occurrences = 0
         } else {
-          const result = replace(content, oldString, newString, replaceAll)
-          expectedContent = result.newContent
-          occurrences = result.occurrences
+          const r = replace(content, oldString, newString, replaceAll)
+          expectedContent = r.newContent
+          occurrences = r.occurrences
         }
 
         await this.writeFileEncoded(resolvedPath, expectedContent, encoding)
         await this.recordReadTime(resolvedPath)
         return { path: filePath, filesUpdate: null, occurrences }
       })
+      // PostToolUse hook (fire-and-forget)
+      runHooks(this.getHooks(), "PostToolUse", {
+        toolName: "edit_file",
+        toolArgs: { filePath, oldString, newString, replaceAll },
+        toolResult: JSON.stringify(result),
+        workspacePath: this.workingDir
+      }).catch((e) => console.warn("[Hooks] PostToolUse edit error:", e))
+      return result
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       return { error: `Error editing file '${filePath}': ${msg}` }
@@ -1308,13 +1350,49 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "execute",
+      toolArgs: { command },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return {
+        output: `[Hook blocked] ${preResult.stdout || "execute was blocked by a hook"}`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
     // If an orchestrator is configured, delegate to it for approval + sandbox retry.
     // The orchestrator calls back into executeRaw() for actual execution.
     if (this.orchestrator) {
-      return this.orchestrator.execute(command, this.workingDir, this.windowsSandbox)
+      const result = await this.orchestrator.execute(command, this.workingDir, this.windowsSandbox)
+      // PostToolUse hook
+      const postResult = await runHooks(this.getHooks(), "PostToolUse", {
+        toolName: "execute",
+        toolArgs: { command },
+        toolResult: result.output,
+        workspacePath: this.workingDir
+      })
+      if (postResult?.stdout) {
+        return { ...result, output: result.output + "\n\n[Hook output]\n" + postResult.stdout }
+      }
+      return result
     }
 
-    return this.executeRaw(command)
+    const result = await this.executeRaw(command)
+    // PostToolUse hook
+    const postResult = await runHooks(this.getHooks(), "PostToolUse", {
+      toolName: "execute",
+      toolArgs: { command },
+      toolResult: result.output,
+      workspacePath: this.workingDir
+    })
+    if (postResult?.stdout) {
+      return { ...result, output: result.output + "\n\n[Hook output]\n" + postResult.stdout }
+    }
+    return result
   }
 
   /**

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser } from "lucide-react"
+import { ArrowLeft, Brain, Clock, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -13,8 +13,9 @@ import { MarketPanel } from "./MarketPanel"
 import { SandboxPanel } from "./SandboxPanel"
 import { ChatXPanel } from "./ChatXPanel"
 import { UserInfoPanel } from "./UserInfoPanel"
+import { HooksPanel } from "./HooksPanel"
 
-type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx" | "userinfo"
+type CustomizeTab = "skills" | "connectors" | "plugins" | "scheduled" | "heartbeat" | "memory" | "market" | "sandbox" | "chatx" | "userinfo" | "hooks"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView, customizeInitialTab } = useAppStore()
@@ -164,6 +165,18 @@ export function CustomizeView(): React.JSX.Element {
             <CircleUser className="size-4 shrink-0" />
             个人信息
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "hooks"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("hooks")}
+          >
+            <Webhook className="size-4 shrink-0" />
+            钩子
+          </button>
         </nav>
       </div>
 
@@ -187,6 +200,10 @@ export function CustomizeView(): React.JSX.Element {
         <SandboxPanel />
       ) : activeTab === "userinfo" ? (
         <UserInfoPanel />
+      ) : activeTab === "hooks" ? (
+        <div className="flex flex-1 overflow-hidden">
+          <HooksPanel />
+        </div>
       ) : null}
     </div>
   )

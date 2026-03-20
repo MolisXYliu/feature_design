@@ -162,3 +162,6 @@ export interface SkillMetadata {
   metadata?: Record<string, string>
   allowedTools?: string[]
 }
+
+
+export type { HookConfig, HookEvent, HookUpsert } from "../../main/hooks/types"

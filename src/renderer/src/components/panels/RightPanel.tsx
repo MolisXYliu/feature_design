@@ -25,7 +25,8 @@ import {
   Sparkles,
   Puzzle,
   Plug,
-  Power
+  Power,
+  Webhook
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
@@ -35,13 +36,15 @@ import { Button } from "@/components/ui/button"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 
+type HookConfig = Awaited<ReturnType<typeof window.api.hooks.list>>[number]
+
 const HEADER_HEIGHT = 52 // px
 const HANDLE_HEIGHT = 6 // px
 const SECTION_GAP = 8 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
 
-type PanelHeights = { tasks: number; files: number; agents: number; skills: number; plugins: number }
+type PanelHeights = { tasks: number; files: number; agents: number; skills: number; plugins: number; hooks: number }
 
 interface SectionHeaderProps {
   title: string
@@ -136,9 +139,11 @@ export function RightPanel(): React.JSX.Element {
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
   const [pluginsOpen, setPluginsOpen] = useState(false)
+  const [hooksOpen, setHooksOpen] = useState(false)
   const [skills, setSkills] = useState<SkillMetadata[]>([])
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set())
   const [plugins, setPlugins] = useState<PluginMetadata[]>([])
+  const [hooks, setHooks] = useState<HookConfig[]>([])
 
   useEffect(() => {
     async function load(): Promise<void> {
@@ -160,12 +165,19 @@ export function RightPanel(): React.JSX.Element {
     window.api.plugins.list().then(setPlugins).catch(console.error)
   }, [pluginVersion])
 
+  useEffect(() => {
+    if (hooksOpen) {
+      window.api.hooks.list().then(setHooks).catch(console.error)
+    }
+  }, [hooksOpen])
+
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
   const [filesHeight, setFilesHeight] = useState<number | null>(null)
   const [agentsHeight, setAgentsHeight] = useState<number | null>(null)
   const [skillsHeight, setSkillsHeight] = useState<number | null>(null)
   const [pluginsHeight, setPluginsHeight] = useState<number | null>(null)
+  const [hooksHeight, setHooksHeight] = useState<number | null>(null)
 
   // Track drag start heights
   const dragStartHeights = useRef<{
@@ -174,6 +186,7 @@ export function RightPanel(): React.JSX.Element {
     agents: number
     skills: number
     plugins: number
+    hooks: number
   } | null>(null)
 
   // Calculate available content height
@@ -181,10 +194,10 @@ export function RightPanel(): React.JSX.Element {
     if (!containerRef.current) return 0
     const totalHeight = containerRef.current.clientHeight
 
-    const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen]
-    let used = HEADER_HEIGHT * 5
+    const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen]
+    let used = HEADER_HEIGHT * 6
     // Fixed visual gaps between section blocks
-    used += SECTION_GAP * 4
+    used += SECTION_GAP * 5
 
     // Count handles between consecutive open panels
     let handles = 0
@@ -196,15 +209,15 @@ export function RightPanel(): React.JSX.Element {
     used += HANDLE_HEIGHT * handles
 
     return Math.max(0, totalHeight - used)
-  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen])
+  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
 
   // Get current heights for each panel's content area
   const getContentHeights = useCallback(() => {
     const available = getAvailableContentHeight()
-    const openCount = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen].filter(Boolean).length
+    const openCount = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen].filter(Boolean).length
 
     if (openCount === 0) {
-      return { tasks: 0, files: 0, agents: 0, skills: 0, plugins: 0 }
+      return { tasks: 0, files: 0, agents: 0, skills: 0, plugins: 0, hooks: 0 }
     }
 
     const defaultHeight = available / openCount
@@ -214,7 +227,8 @@ export function RightPanel(): React.JSX.Element {
       files: filesOpen ? (filesHeight ?? defaultHeight) : 0,
       agents: agentsOpen ? (agentsHeight ?? defaultHeight) : 0,
       skills: skillsOpen ? (skillsHeight ?? defaultHeight) : 0,
-      plugins: pluginsOpen ? (pluginsHeight ?? defaultHeight) : 0
+      plugins: pluginsOpen ? (pluginsHeight ?? defaultHeight) : 0,
+      hooks: hooksOpen ? (hooksHeight ?? defaultHeight) : 0
     }
   }, [
     getAvailableContentHeight,
@@ -223,11 +237,13 @@ export function RightPanel(): React.JSX.Element {
     agentsOpen,
     skillsOpen,
     pluginsOpen,
+    hooksOpen,
     tasksHeight,
     filesHeight,
     agentsHeight,
     skillsHeight,
-    pluginsHeight
+    pluginsHeight,
+    hooksHeight
   ])
 
   // Handle resize between tasks and the next open section
@@ -437,6 +453,57 @@ export function RightPanel(): React.JSX.Element {
     [getContentHeights, getAvailableContentHeight, tasksOpen, filesOpen, agentsOpen]
   )
 
+  // Handle resize between plugins and hooks
+  const handlePluginsResize = useCallback(
+    (totalDelta: number) => {
+      if (!dragStartHeights.current) {
+        const currentHeights = getContentHeights()
+        dragStartHeights.current = { ...currentHeights }
+      }
+
+      const start = dragStartHeights.current
+      const available = getAvailableContentHeight()
+      const usedByUpperPanels =
+        (tasksOpen ? start.tasks : 0) +
+        (filesOpen ? start.files : 0) +
+        (agentsOpen ? start.agents : 0) +
+        (skillsOpen ? start.skills : 0)
+      const maxForPluginsAndHooks = available - usedByUpperPanels
+
+      let newPluginsHeight = start.plugins + totalDelta
+      let newHooksHeight = start.hooks - totalDelta
+
+      if (newPluginsHeight < MIN_CONTENT_HEIGHT) {
+        newPluginsHeight = MIN_CONTENT_HEIGHT
+        newHooksHeight = start.hooks + (start.plugins - MIN_CONTENT_HEIGHT)
+      }
+      if (newHooksHeight < MIN_CONTENT_HEIGHT) {
+        newHooksHeight = MIN_CONTENT_HEIGHT
+        newPluginsHeight = start.plugins + (start.hooks - MIN_CONTENT_HEIGHT)
+      }
+
+      if (newPluginsHeight + newHooksHeight > maxForPluginsAndHooks) {
+        const excess = newPluginsHeight + newHooksHeight - maxForPluginsAndHooks
+        if (totalDelta > 0) {
+          newHooksHeight = Math.max(MIN_CONTENT_HEIGHT, newHooksHeight - excess)
+        } else {
+          newPluginsHeight = Math.max(MIN_CONTENT_HEIGHT, newPluginsHeight - excess)
+        }
+      }
+
+      setPluginsHeight(newPluginsHeight)
+      setHooksHeight(newHooksHeight)
+
+      if (newPluginsHeight < COLLAPSE_THRESHOLD) {
+        setPluginsOpen(false)
+      }
+      if (newHooksHeight < COLLAPSE_THRESHOLD) {
+        setHooksOpen(false)
+      }
+    },
+    [getContentHeights, getAvailableContentHeight, tasksOpen, filesOpen, agentsOpen, skillsOpen]
+  )
+
   // Reset drag start on mouse up
   useEffect(() => {
     const handleMouseUp = (): void => {
@@ -453,15 +520,16 @@ export function RightPanel(): React.JSX.Element {
     setAgentsHeight(null)
     setSkillsHeight(null)
     setPluginsHeight(null)
-  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen])
+    setHooksHeight(null)
+  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
 
   // Calculate heights in an effect (refs can't be accessed during render)
-  const [heights, setHeights] = useState<PanelHeights>({ tasks: 0, files: 0, agents: 0, skills: 0, plugins: 0 })
+  const [heights, setHeights] = useState<PanelHeights>({ tasks: 0, files: 0, agents: 0, skills: 0, plugins: 0, hooks: 0 })
   useEffect(() => {
     setHeights(getContentHeights())
   }, [getContentHeights])
 
-  const allPanelsClosed = !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen
+  const allPanelsClosed = !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
 
   return (
     <aside
@@ -559,6 +627,25 @@ export function RightPanel(): React.JSX.Element {
         {pluginsOpen && (
           <div className="overflow-auto right-panel-scroll" style={{ height: heights.plugins }}>
             <PluginsContent plugins={plugins} />
+          </div>
+        )}
+      </div>
+
+      {/* Resize handle after PLUGINS */}
+      {pluginsOpen && hooksOpen && <ResizeHandle onDrag={handlePluginsResize} />}
+
+      {/* HOOKS */}
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
+        <SectionHeader
+          title="钩子"
+          icon={Webhook}
+          badge={hooks.filter((h) => h.enabled).length}
+          isOpen={hooksOpen}
+          onToggle={() => setHooksOpen((prev) => !prev)}
+        />
+        {hooksOpen && (
+          <div className="overflow-auto right-panel-scroll" style={{ height: heights.hooks }}>
+            <HooksContent hooks={hooks} onChange={() => window.api.hooks.list().then(setHooks).catch(console.error)} />
           </div>
         )}
       </div>
@@ -1306,6 +1393,76 @@ function PluginsContent({ plugins }: { plugins: PluginMetadata[] }): React.JSX.E
             </Badge>
           </div>
           {disabled.map(renderPluginCard)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const EVENT_BADGE_COLORS: Record<string, string> = {
+  PreToolUse: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  PostToolUse: "bg-green-500/15 text-green-600 dark:text-green-400",
+  Stop: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  Notification: "bg-purple-500/15 text-purple-600 dark:text-purple-400"
+}
+
+function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () => void }): React.JSX.Element {
+  if (hooks.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center text-sm text-muted-foreground py-8 px-4">
+        <Webhook className="size-8 mb-2 opacity-50" />
+        <span>暂无钩子</span>
+        <span className="text-xs mt-1">在自定义面板中添加钩子</span>
+      </div>
+    )
+  }
+
+  const enabled = hooks.filter((h) => h.enabled)
+  const disabled = hooks.filter((h) => !h.enabled)
+
+  const handleToggle = async (hook: HookConfig): Promise<void> => {
+    try {
+      await window.api.hooks.setEnabled(hook.id, !hook.enabled)
+      onChange()
+    } catch (e) {
+      console.error("[HooksContent] Failed to toggle hook:", e)
+    }
+  }
+
+  const renderHookCard = (hook: HookConfig): React.JSX.Element => (
+    <div
+      key={hook.id}
+      className={cn("p-3 rounded-sm border border-border", !hook.enabled && "opacity-60")}
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0", EVENT_BADGE_COLORS[hook.event] ?? "bg-muted text-muted-foreground")}>
+          {hook.event}
+        </span>
+        {hook.matcher && hook.matcher !== "*" && (
+          <span className="text-[10px] text-muted-foreground shrink-0 font-mono">{hook.matcher}</span>
+        )}
+        <button
+          className="ml-auto shrink-0"
+          onClick={() => handleToggle(hook)}
+          title={hook.enabled ? "点击禁用" : "点击启用"}
+        >
+          <Power className={cn("size-3", hook.enabled ? "text-status-nominal" : "text-muted-foreground")} />
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground mt-1.5 font-mono break-all line-clamp-2">{hook.command}</p>
+    </div>
+  )
+
+  return (
+    <div className="p-3 space-y-2">
+      {enabled.length > 0 && enabled.map(renderHookCard)}
+      {disabled.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[11px] text-muted-foreground tracking-wider font-medium">已禁用</span>
+            <Badge variant="outline" className="text-[10px] h-5">{disabled.length}</Badge>
+          </div>
+          {disabled.map(renderHookCard)}
         </div>
       )}
     </div>

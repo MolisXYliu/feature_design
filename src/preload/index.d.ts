@@ -15,6 +15,7 @@ import type {
   PluginManifest
 } from "../main/types"
 import {UserInfoConfig} from '../main/storage'
+import type { HookConfig, HookUpsert } from "../main/hooks/types"
 
 interface ElectronAPI {
   openExternal: Promise
@@ -265,6 +266,13 @@ interface CustomAPI {
     sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onChanged: (callback: () => void) => () => void
+  }
+  hooks: {
+    list: () => Promise<HookConfig[]>
+    create: (config: HookUpsert) => Promise<{ id: string }>
+    update: (config: HookUpsert & { id: string }) => Promise<{ id: string }>
+    delete: (id: string) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<void>
   }
 }
 

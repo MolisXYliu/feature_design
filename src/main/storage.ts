@@ -2,7 +2,8 @@ import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "fs"
+import type { HookConfig, HookUpsert } from "./hooks/types"
 import { readdir, readFile, rm, mkdir, stat as fsStat } from "fs/promises"
 import { app } from "electron"
 import type { PluginMetadata, PluginMcpServerConfig } from "./types"
@@ -1377,4 +1378,80 @@ export function removeApprovalRule(pattern: string): void {
   getOpenworkDir()
   const rules = getApprovalRules().filter((r) => r.pattern !== pattern)
   writeFileSync(APPROVAL_RULES_FILE, JSON.stringify(rules, null, 2))
+}
+
+// ── Hooks ─────────────────────────────────────────────────────────────────────
+
+const HOOKS_FILE = join(OPENWORK_DIR, "hooks.json")
+
+export function getHooks(): HookConfig[] {
+  getOpenworkDir()
+  if (!existsSync(HOOKS_FILE)) return []
+  try {
+    const content = readFileSync(HOOKS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is HookConfig =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).event === "string" &&
+        typeof (item as Record<string, unknown>).command === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function getEnabledHooks(): HookConfig[] {
+  return getHooks().filter((h) => h.enabled)
+}
+
+function writeHooksAtomic(items: HookConfig[]): void {
+  const tmp = HOOKS_FILE + ".tmp"
+  writeFileSync(tmp, JSON.stringify(items, null, 2))
+  renameSync(tmp, HOOKS_FILE)
+}
+
+export function upsertHook(config: HookUpsert & { id?: string }): string {
+  getOpenworkDir()
+  const items = getHooks()
+  const now = new Date().toISOString()
+  const id = config.id ?? uuid()
+  const existing = items.find((i) => i.id === id)
+  const next: HookConfig = {
+    id,
+    event: config.event,
+    matcher: config.matcher,
+    command: config.command.trim(),
+    timeout: config.timeout,
+    enabled: config.enabled ?? true,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  }
+  const index = items.findIndex((i) => i.id === id)
+  if (index >= 0) {
+    items[index] = next
+  } else {
+    items.push(next)
+  }
+  writeHooksAtomic(items)
+  return id
+}
+
+export function deleteHook(id: string): void {
+  getOpenworkDir()
+  const items = getHooks().filter((i) => i.id !== id)
+  writeHooksAtomic(items)
+}
+
+export function setHookEnabled(id: string, enabled: boolean): void {
+  getOpenworkDir()
+  const items = getHooks()
+  if (!items.some((i) => i.id === id)) return
+  const next = items.map((i) =>
+    i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
+  )
+  writeHooksAtomic(next)
 }

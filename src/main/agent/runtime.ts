@@ -59,7 +59,7 @@ import {
   createToolSearchTools,
   fixMcpToolSchema
 } from "./tools/tool-search-tool"
-import { getWindowsSandboxMode, getYoloMode } from "../storage"
+import { getWindowsSandboxMode, getYoloMode, getEnabledHooks } from "../storage"
 import { ApprovalStore } from "./approval-store"
 import { ToolOrchestrator } from "./tool-orchestrator"
 import type { ApprovalRequest, ApprovalDecision } from "../types"
@@ -586,13 +586,18 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const windowsSandbox = process.platform === "win32" ? getWindowsSandboxMode() : "none"
   console.log(`[Runtime] codex.exe: ${codexExePath}, exists: ${codexExists}, sandboxMode: ${windowsSandbox}`)
 
+  const enabledHooks = getEnabledHooks()
+  console.log(`[Runtime] Loaded ${enabledHooks.length} enabled hooks`)
+
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
     timeout: 60_000,
     maxOutputBytes,
     windowsSandbox,
-    codexExePath: codexExists ? codexExePath : undefined
+    codexExePath: codexExists ? codexExePath : undefined,
+    // Pass a getter so hooks are always read fresh from storage at call time
+    hooks: getEnabledHooks
   })
 
   // ── Wire up the approval orchestrator ──

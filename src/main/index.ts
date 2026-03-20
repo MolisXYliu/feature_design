@@ -12,6 +12,7 @@ import { registerGitHandlers } from "./ipc/git"
 import { registerPluginHandlers } from "./ipc/plugins"
 import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerChatXHandlers } from "./ipc/chatx"
+import { registerHooksHandlers } from "./ipc/hooks"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -164,6 +165,7 @@ if (!gotTheLock) {
     registerPluginHandlers(ipcMain)
     registerSandboxHandlers(ipcMain)
     registerChatXHandlers(ipcMain)
+    registerHooksHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
