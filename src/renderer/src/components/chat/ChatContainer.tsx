@@ -40,6 +40,7 @@ import { MessageBubble } from "./MessageBubble"
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
+import DisplayDiffTest from "./DisplayDiffTest"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -1525,6 +1526,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 />
               );
             })}
+
+
+            {/*测试git diff功能*/}
+            {/*<DisplayDiffTest/>*/}
+
+
+
             {/* Orchestrator approval request — shown as standalone bar when pending */}
             {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
               <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">
