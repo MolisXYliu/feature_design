@@ -38,6 +38,7 @@ import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
+import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -131,6 +132,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     const removeListener = ipcRenderer.on("version", (ver: unknown) => {
       console.log("版本 (push)：", ver)
       setVersion(ver as string)
+
+      localStorage.setItem("version", ver as string)
+      updateMMJUserInfo()
     })
 
     return () => {
@@ -146,6 +150,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       console.log("local ip (invoke)：", ip)
       if (ip) {
         localStorage.setItem("localIp", ip as string)
+        updateMMJUserInfo()
       }
     }).catch((e: unknown) => console.warn("get-local-ip failed:", e))
 
@@ -649,6 +654,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
     const message = input.trim()
     setInput("")
+    insertLog('send: '+message)
 
     const isFirstMessage = threadMessages.length === 0
 
