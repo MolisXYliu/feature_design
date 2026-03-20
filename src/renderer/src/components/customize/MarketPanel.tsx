@@ -159,7 +159,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer"
                     onClick={handleUpdateInstall}
                   >
                     <Zap className="size-3" />
@@ -170,7 +170,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-3 gap-1"
+                  className="h-7 px-3 gap-1 cursor-pointer"
                   onClick={handleInstallDownload}
                 >
                   <Zap className="size-3" />
@@ -180,7 +180,7 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-auto px-2 gap-1"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={handleLocalDownload}
               >
                 <HardDrive className="size-3 mr-1" />
@@ -193,20 +193,22 @@ function MarketItemCard({ item, onDelete, onUpdate, onDownload, onUpdateInstall,
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onUpdate(item)}
                 title="更新"
               >
-                <Edit className="size-3" />
+                <Edit className="size-3 mr-1" />
+                编辑
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onDelete(item)}
                 title="删除"
               >
-                <Trash2 className="size-3" />
+                <Trash2 className="size-3 mr-1" />
+                删除
               </Button>
             </>
           )}
