@@ -428,6 +428,7 @@ function isSafePowerShellCommand(words: string[]): boolean {
       return isSafeGoCommand(words)
     case "make":
     case "cmake":
+    case "java":
       return true
     case "dotnet":
       return isSafeDotnetCommand(words)

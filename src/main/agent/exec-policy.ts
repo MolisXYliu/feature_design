@@ -86,7 +86,7 @@ const BANNED_PERSISTENT_PREFIXES: string[][] = [
 ]
 
 const PERSISTABLE_EXECUTABLES = new Set([
-  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "make",
+  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "java", "make",
   "mvn", "npm", "pnpm", "poetry", "pytest", "uv", "yarn"
 ])
 
@@ -333,6 +333,7 @@ function isSafeBuildTool(executable: string, tokens: string[]): boolean {
       return tokens.length >= 2 && !UNSAFE_DOTNET_SUBCOMMANDS.has(tokens[1].toLowerCase())
     case "make":
     case "cmake":
+    case "java":
     case "javac":
       return true
     default:
