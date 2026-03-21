@@ -2,7 +2,8 @@ import { homedir } from "os"
 import { join } from "path"
 import { createHash } from "crypto"
 import { v4 as uuid } from "uuid"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "fs"
+import type { HookConfig, HookUpsert } from "./hooks/types"
 import { readdir, readFile, rm, mkdir, stat as fsStat } from "fs/promises"
 import { app } from "electron"
 import type { PluginMetadata, PluginMcpServerConfig } from "./types"
@@ -848,6 +849,7 @@ export function upsertMcpConnector(
     url: config.url.trim(),
     enabled: config.enabled ?? true,
     advanced: config.advanced,
+    lazyLoad: config.lazyLoad ?? false,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   }
@@ -892,10 +894,17 @@ export function computeNextRunAt(
   from: Date = new Date(),
   runAtTime?: string | null,
   weekday?: number | null,
-  runAt?: string | null
+  runAt?: string | null,
+  intervalMinutes?: number | null
 ): string | null {
   if (frequency === "manual") return null
   if (frequency === "once") return runAt ?? null
+  if (frequency === "interval") {
+    const mins = intervalMinutes && intervalMinutes > 0 ? intervalMinutes : 5
+    const next = new Date(from)
+    next.setMinutes(next.getMinutes() + mins, 0, 0)
+    return next.toISOString()
+  }
   const { hour, minute } = parseTime(runAtTime)
 
   if (frequency === "hourly") {
@@ -975,9 +984,12 @@ export function upsertScheduledTask(
     name: config.name.trim(),
     description: config.description.trim(),
     prompt: config.prompt.trim(),
+    taskType: config.taskType ?? existing?.taskType ?? "action",
     modelId: config.modelId,
     workDir: config.workDir,
+    chatxRobotChatId: config.chatxRobotChatId ?? existing?.chatxRobotChatId ?? null,
     frequency: config.frequency,
+    intervalMinutes: config.intervalMinutes ?? existing?.intervalMinutes ?? null,
     runAt: config.runAt ?? existing?.runAt ?? null,
     runAtTime: config.runAtTime ?? existing?.runAtTime ?? null,
     weekday: config.weekday ?? existing?.weekday ?? null,
@@ -992,7 +1004,8 @@ export function upsertScheduledTask(
       new Date(),
       config.runAtTime ?? existing?.runAtTime ?? null,
       config.weekday ?? existing?.weekday ?? null,
-      config.runAt ?? existing?.runAt ?? null
+      config.runAt ?? existing?.runAt ?? null,
+      config.intervalMinutes ?? existing?.intervalMinutes ?? null
     )
   }
   const index = items.findIndex((i) => i.id === id)
@@ -1029,7 +1042,7 @@ export function setScheduledTaskEnabled(id: string, enabled: boolean): void {
         const runAtDate = i.runAt ? new Date(i.runAt) : null
         updated.nextRunAt = runAtDate && runAtDate > now ? i.runAt : null
       } else {
-        updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt)
+        updated.nextRunAt = computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt, i.intervalMinutes)
       }
     }
     return updated
@@ -1054,7 +1067,7 @@ export function updateScheduledTaskRunResult(
           lastRunAt: now.toISOString(),
           lastRunStatus: status,
           lastRunError: error,
-          nextRunAt: i.frequency === "once" ? null : computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt),
+          nextRunAt: i.frequency === "once" ? null : computeNextRunAt(i.frequency, now, i.runAtTime, i.weekday, i.runAt, i.intervalMinutes),
           updatedAt: now.toISOString()
         }
       : i
@@ -1317,28 +1330,78 @@ export function parseMcpJsonFile(filePath: string): Record<string, PluginMcpServ
   }
 }
 
+// ── ChatX ──────────────────────────────────────────────────────────────────────
+
+const CHATX_CONFIG_FILE = join(OPENWORK_DIR, "chatx-config.json")
+
+function defaultChatXConfig(): import("./types").ChatXConfig {
+  return {
+    enabled: false,
+    wsUrl: "",
+    userIp: "",
+    robots: []
+  }
+}
+
+export function getChatXConfig(): import("./types").ChatXConfig {
+  getOpenworkDir()
+  if (!existsSync(CHATX_CONFIG_FILE)) return defaultChatXConfig()
+  try {
+    const content = readFileSync(CHATX_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultChatXConfig()
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      wsUrl: typeof parsed.wsUrl === "string" ? parsed.wsUrl : defaults.wsUrl,
+      userIp: typeof parsed.userIp === "string" ? parsed.userIp : defaults.userIp,
+      robots: Array.isArray(parsed.robots)
+        ? (parsed.robots as unknown[]).filter(
+            (item): item is import("./types").ChatXRobotConfig =>
+              item != null &&
+              typeof item === "object" &&
+              typeof (item as Record<string, unknown>).chatId === "string" &&
+              typeof (item as Record<string, unknown>).fromId === "string" &&
+              typeof (item as Record<string, unknown>).clientId === "string" &&
+              typeof (item as Record<string, unknown>).clientSecret === "string" &&
+              Array.isArray((item as Record<string, unknown>).toUserList)
+          )
+        : defaults.robots
+    }
+  } catch {
+    return defaultChatXConfig()
+  }
+}
+
+export function saveChatXConfig(updates: Partial<import("./types").ChatXConfig>): void {
+  getOpenworkDir()
+  const current = getChatXConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(CHATX_CONFIG_FILE, JSON.stringify(merged, null, 2))
+}
+
 // ── Sandbox Settings ──────────────────────────────────────────────────────────
 
 const SANDBOX_SETTINGS_FILE = join(OPENWORK_DIR, "sandbox-settings.json")
 
-const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly">(["none", "unelevated", "readonly"])
-type SandboxMode = "none" | "unelevated" | "readonly"
+const SANDBOX_MODES = new Set<"none" | "unelevated" | "readonly" | "elevated">(["none", "unelevated", "readonly", "elevated"])
+type SandboxMode = "none" | "unelevated" | "readonly" | "elevated"
 
-function readSandboxSettings(): { mode: SandboxMode; yolo: boolean } {
-  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "none", yolo: false }
+function readSandboxSettings(): { mode: SandboxMode; yolo: boolean; nuxCompleted: boolean } {
+  if (!existsSync(SANDBOX_SETTINGS_FILE)) return { mode: "unelevated", yolo: false, nuxCompleted: false }
   try {
     const parsed = JSON.parse(readFileSync(SANDBOX_SETTINGS_FILE, "utf-8"))
     return {
-      mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "none",
-      yolo: parsed.yolo === true
+      mode: SANDBOX_MODES.has(parsed.mode) ? parsed.mode : "unelevated",
+      yolo: parsed.yolo === true,
+      nuxCompleted: parsed.nuxCompleted === true
     }
   } catch (err) {
     console.warn("[Storage] Failed to load sandbox settings:", err)
-    return { mode: "none", yolo: false }
+    return { mode: "unelevated", yolo: false, nuxCompleted: false }
   }
 }
 
-function updateSandboxSettings(patch: Partial<{ mode: SandboxMode; yolo: boolean }>): void {
+function updateSandboxSettings(patch: Partial<{ mode: SandboxMode; yolo: boolean; nuxCompleted: boolean }>): void {
   getOpenworkDir()
   const current = readSandboxSettings()
   writeFileSync(SANDBOX_SETTINGS_FILE, JSON.stringify({ ...current, ...patch }, null, 2))
@@ -1358,4 +1421,136 @@ export function getYoloMode(): boolean {
 
 export function setYoloMode(yolo: boolean): void {
   updateSandboxSettings({ yolo })
+}
+
+// ── Sandbox NUX (first-run setup) ────────────────────────────────────────────
+
+export function isSandboxNuxCompleted(): boolean {
+  return readSandboxSettings().nuxCompleted
+}
+
+export function setSandboxNuxCompleted(): void {
+  updateSandboxSettings({ nuxCompleted: true })
+}
+
+// ── Approval Rules (persistent) ──────────────────────────────────────────────
+
+const APPROVAL_RULES_FILE = join(OPENWORK_DIR, "approval-rules.json")
+
+interface ApprovalRuleRecord {
+  pattern: string
+  decision: string
+}
+
+export function getApprovalRules(): ApprovalRuleRecord[] {
+  getOpenworkDir()
+  if (!existsSync(APPROVAL_RULES_FILE)) return []
+  try {
+    const content = readFileSync(APPROVAL_RULES_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is ApprovalRuleRecord =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).pattern === "string" &&
+        typeof (item as Record<string, unknown>).decision === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function addApprovalRule(pattern: string, decision: string): void {
+  getOpenworkDir()
+  const rules = getApprovalRules()
+  const existing = rules.findIndex((r) => r.pattern === pattern)
+  if (existing >= 0) {
+    rules[existing] = { pattern, decision }
+  } else {
+    rules.push({ pattern, decision })
+  }
+  writeFileSync(APPROVAL_RULES_FILE, JSON.stringify(rules, null, 2))
+}
+
+export function removeApprovalRule(pattern: string): void {
+  getOpenworkDir()
+  const rules = getApprovalRules().filter((r) => r.pattern !== pattern)
+  writeFileSync(APPROVAL_RULES_FILE, JSON.stringify(rules, null, 2))
+}
+
+// ── Hooks ─────────────────────────────────────────────────────────────────────
+
+const HOOKS_FILE = join(OPENWORK_DIR, "hooks.json")
+
+export function getHooks(): HookConfig[] {
+  getOpenworkDir()
+  if (!existsSync(HOOKS_FILE)) return []
+  try {
+    const content = readFileSync(HOOKS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is HookConfig =>
+        item != null &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).id === "string" &&
+        typeof (item as Record<string, unknown>).event === "string" &&
+        typeof (item as Record<string, unknown>).command === "string"
+    )
+  } catch {
+    return []
+  }
+}
+
+export function getEnabledHooks(): HookConfig[] {
+  return getHooks().filter((h) => h.enabled)
+}
+
+function writeHooksAtomic(items: HookConfig[]): void {
+  const tmp = HOOKS_FILE + ".tmp"
+  writeFileSync(tmp, JSON.stringify(items, null, 2))
+  renameSync(tmp, HOOKS_FILE)
+}
+
+export function upsertHook(config: HookUpsert & { id?: string }): string {
+  getOpenworkDir()
+  const items = getHooks()
+  const now = new Date().toISOString()
+  const id = config.id ?? uuid()
+  const existing = items.find((i) => i.id === id)
+  const next: HookConfig = {
+    id,
+    event: config.event,
+    matcher: config.matcher,
+    command: config.command.trim(),
+    timeout: config.timeout,
+    enabled: config.enabled ?? true,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  }
+  const index = items.findIndex((i) => i.id === id)
+  if (index >= 0) {
+    items[index] = next
+  } else {
+    items.push(next)
+  }
+  writeHooksAtomic(items)
+  return id
+}
+
+export function deleteHook(id: string): void {
+  getOpenworkDir()
+  const items = getHooks().filter((i) => i.id !== id)
+  writeHooksAtomic(items)
+}
+
+export function setHookEnabled(id: string, enabled: boolean): void {
+  getOpenworkDir()
+  const items = getHooks()
+  if (!items.some((i) => i.id === id)) return
+  const next = items.map((i) =>
+    i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
+  )
+  writeHooksAtomic(next)
 }

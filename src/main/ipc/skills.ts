@@ -11,7 +11,7 @@ function sanitizeSkillName(name: string): string {
     .replace(/[^a-zA-Z0-9-_]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
-    .slice(0, 64) || "skill"
+    .slice(0, 64) || name || "skill"
 }
 
 function isPathUnderAllowedDirs(filePath: string): boolean {
@@ -320,6 +320,51 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
             await fs.writeFile(destPath, entry.getData())
           }
           return { success: true, skillName }
+        }
+
+        return { success: false, error: "仅支持 .md 或 .zip 文件" }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : "Unknown error" }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    "skills:parseNameFromFile",
+    async (
+      _event,
+      payload: { buffer: ArrayBuffer; fileName: string }
+    ): Promise<{ success: boolean; name?: string; error?: string }> => {
+      const { buffer, fileName } = payload
+      if (!buffer || !fileName) return { success: false, error: "无效参数" }
+
+      const ext = path.extname(fileName).toLowerCase()
+      try {
+        if (ext === ".md") {
+          const content = Buffer.from(buffer).toString("utf-8")
+          const frontmatter = parseYamlFrontmatter(content)
+          const name = frontmatter.name?.trim()
+          if (!name) return { success: false, error: "MD 文件 frontmatter 中未找到 name 字段" }
+          return { success: true, name }
+        }
+
+        if (ext === ".zip") {
+          const zip = new AdmZip(Buffer.from(buffer))
+          const entries = zip.getEntries()
+          let mdEntry = entries.find((e) => !e.isDirectory && e.entryName === "SKILL.md")
+          if (!mdEntry) {
+            mdEntry = entries.find((e) => !e.isDirectory && e.entryName.endsWith("/SKILL.md"))
+          }
+          if (!mdEntry) {
+            // 取任意 .md 文件
+            mdEntry = entries.find((e) => !e.isDirectory && e.entryName.toLowerCase().endsWith(".md"))
+          }
+          if (!mdEntry) return { success: false, error: "ZIP 中未找到 MD 文件" }
+          const content = mdEntry.getData().toString("utf-8")
+          const frontmatter = parseYamlFrontmatter(content)
+          const name = frontmatter.name?.trim()
+          if (!name) return { success: false, error: "MD 文件 frontmatter 中未找到 name 字段" }
+          return { success: true, name }
         }
 
         return { success: false, error: "仅支持 .md 或 .zip 文件" }

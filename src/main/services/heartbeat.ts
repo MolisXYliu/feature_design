@@ -267,7 +267,8 @@ async function executeHeartbeat(): Promise<void> {
       workspacePath: config.workDir,
       modelId: config.modelId || undefined,
       extraSystemPrompt: heartbeatContext,
-      noSchedulerTool: true
+      noSchedulerTool: true,
+      abortSignal: abortController.signal
     })
 
     const converter = new StreamConverter()

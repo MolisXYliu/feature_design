@@ -49,9 +49,12 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsert,
   ScheduledTaskFrequency,
+  ScheduledTaskType,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig,
+  ChatXRobotConfig
 } from "../../main/types"
 
 export type {
@@ -62,9 +65,12 @@ export type {
   ScheduledTask,
   ScheduledTaskUpsert,
   ScheduledTaskFrequency,
+  ScheduledTaskType,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig,
+  ChatXRobotConfig
 }
 
 export type StreamEvent =
@@ -156,3 +162,6 @@ export interface SkillMetadata {
   metadata?: Record<string, string>
   allowedTools?: string[]
 }
+
+
+export type { HookConfig, HookEvent, HookUpsert } from "../../main/hooks/types"

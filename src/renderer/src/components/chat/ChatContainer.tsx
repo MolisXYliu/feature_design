@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
   ShieldCheck,
+  Info,
   Database,
   Layers,
   Clock,
@@ -43,6 +44,9 @@ import {
   type SkillConfirmRequest
 } from "./SkillCreateConfirmDialog"
 import { uploadChatData, ChatReportPayload } from "@/api"
+import { marketApi, MarketItem } from "../../api/market"
+import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
+import DisplayDiffTest from "./DisplayDiffTest"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -125,12 +129,182 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
+  // NUX (first-run sandbox setup)
+  const [showNux, setShowNux] = useState(false)
+  const [nuxLoading, setNuxLoading] = useState(false)
+  const [nuxError, setNuxError] = useState<string | null>(null)
+  const [nuxLoadingStep, setNuxLoadingStep] = useState(0)
+
+  const NUX_LOADING_STEPS = [
+    "正在准备沙箱环境...",
+    "等待管理员授权，请在弹出的窗口中点击「是」...",
+    "正在创建沙箱隔离用户...",
+    "正在配置目录访问权限...",
+    "即将完成，请稍候...",
+  ]
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
-  const [latestVersion, setLatestVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState("")
+  const [modelContextLimit, setModelContextLimit] = useState<number | undefined>(undefined)
 
-  const { threads, models, loadThreads, generateTitleForFirstMessage, setShowCustomizeView } = useAppStore()
+  const [version, setVersion] = useState("")
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    // 主动请求版本，不依赖推送时序
+    ipcRenderer.invoke("get-version").then((ver: unknown) => {
+      console.log("版本 (invoke)：", ver)
+      if (ver) setVersion(ver as string)
+    }).catch((e: unknown) => console.warn("get-version failed:", e))
+
+    // 保留推送监听作为备用
+    const removeListener = ipcRenderer.on("version", (ver: unknown) => {
+      console.log("版本 (push)：", ver)
+      setVersion(ver as string)
+
+      localStorage.setItem("version", ver as string)
+      updateMMJUserInfo()
+    })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
+  }, [])
+
+  useEffect(() => {
+    const { ipcRenderer } = window.electron
+
+    // 主动请求 IP，不依赖推送时序
+    ipcRenderer.invoke("get-local-ip").then((ip: unknown) => {
+      console.log("local ip (invoke)：", ip)
+      if (ip) {
+        localStorage.setItem("localIp", ip as string)
+        updateMMJUserInfo()
+      }
+    }).catch((e: unknown) => console.warn("get-local-ip failed:", e))
+
+    // 保留推送监听作为备用（例如网络变化时主进程重新推送）
+    const removeListener = ipcRenderer.on("ip", (ver: unknown) => {
+      console.log("local ip (push)：", ver)
+      if (ver) {
+        localStorage.setItem("localIp", ver as string)
+      }
+    })
+
+    return () => {
+      if (typeof removeListener === "function") removeListener()
+    }
+  }, [])
+
+  const {
+    threads,
+    models,
+    loadThreads,
+    generateTitleForFirstMessage,
+    setShowCustomizeView
+  } = useAppStore()
+
+  const goodSkillsRef = useRef<MarketItem[]>([])
+  const allSkillsRef = useRef<MarketItem[]>([])
+  const [goodSkillsData, setGoodSkillsData] = useState<MarketItem[]>([])
+
+  // Define loadSkills function at component level so it can be accessed everywhere
+  const loadSkills = useCallback(async (): Promise<void> => {
+    try {
+      const [loadedSkills, disabledList] = await Promise.all([
+        window.api.skills.list(),
+        window.api.skills.getDisabled()
+      ])
+      const disabledSet = new Set(disabledList)
+      // Include both built-in (project) and custom (user) skills
+      const availableSkills = loadedSkills.filter(
+        (s) => (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
+      )
+      setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
+    } catch (error) {
+      console.error("[ChatContainer] Failed to load skills:", error)
+      setSkills([])
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
+  const queryRemoteSkills = useCallback(async () => {
+    try {
+      const res = await marketApi.getSkills()
+      const goodSkills = res?.data?.filter((it) => it.featured === "精品")
+      goodSkillsRef.current = goodSkills || []
+      allSkillsRef.current = res?.data || []
+      setGoodSkillsData(goodSkills || [])
+
+      // 自动安装所有精品技能
+      if (goodSkills && goodSkills.length > 0) {
+        await installAllGoodSkills(goodSkills)
+        // 安装完成后重新加载技能列表
+        await loadSkills()
+      }
+    } catch (error) {
+      console.error("Failed to query remote skills:", error)
+    }
+  }, [loadSkills])
+
+  const getSkillShowLabel=(name)=>{
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
+    return target?.chinese_name || name || ""
+  }
+
+  const getTargetRemoteSkill = useCallback((name: string) => {
+    const target = allSkillsRef.current?.find((it) => it.name === name || it.chinese_name === name)
+    return target?.guidance || ""
+  }, [])
+
+  const installAllGoodSkills = async (goodSkills: MarketItem[]) => {
+    console.log("Starting automatic installation of good skills...")
+
+    for (const skill of goodSkills) {
+      try {
+        const skillName = skill.name || skill.id || ""
+
+        if (!skillName) {
+          console.error("Skill name is required for installation:", skill)
+          continue
+        }
+
+        console.log(`Installing skill: ${skillName}`)
+
+        // 删除已存在的技能（如果有的话）
+        try {
+          const skillsMetadata = await window.api.skills.list()
+          const existingSkill = skillsMetadata.find((s) => s.name === skillName)
+
+          if (existingSkill) {
+            console.log(`Deleting existing skill: ${existingSkill.path}`)
+            await window.api.skills.delete(existingSkill.path)
+          }
+        } catch (deleteError) {
+          console.warn(
+            `Failed to delete existing skill ${skillName}, continuing with install:`,
+            deleteError
+          )
+        }
+
+        // 下载并安装技能
+        const response = await marketApi.downloadItem(skillName, "skill", false)
+
+        if (response.success) {
+          console.log(`Successfully installed skill: ${skillName}`)
+        } else {
+          console.error(`Failed to install skill ${skillName}:`, response.error)
+        }
+      } catch (error) {
+        console.error(`Failed to install skill ${skill.name}:`, error)
+      }
+    }
+
+    console.log("Finished automatic installation of good skills")
+  }
 
   // Get persisted thread state and actions from context
   const {
@@ -157,58 +331,110 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
-  const queryLatestVersion = async ()=>{
-   try {
-     const response = await fetch(import.meta.env.VITE_API_BASE_URL+'/api/trajectories/cmbdevclaw/versions/list',{
-       method: "GET",
-       headers: {
-         "Content-Type": "application/json"
-         // Remove placeholder auth token for now
-       }
-     })
-     const data = await response.json()
-     setLatestVersion(data?.current?.version)
-   }catch (e){
-     console.log(e)
-   }
-  }
+  // 从模型配置中获取用户设置的上下文窗口大小
+  useEffect(() => {
+    if (!currentModel || !currentModel.startsWith("custom:")) {
+      setModelContextLimit(undefined)
+      return
+    }
+    let ignore = false
+    const id = currentModel.replace("custom:", "")
+    window.api.models
+      .getCustomConfigs()
+      .then((configs) => {
+        if (ignore) return
+        const match = configs.find((c) => c.id === id)
+        setModelContextLimit(match?.maxTokens)
+      })
+      .catch(() => {
+        if (!ignore) setModelContextLimit(undefined)
+      })
+    return () => { ignore = true }
+  }, [currentModel])
 
-  const needUpdateVersion=useMemo(()=>{
-    return  latestVersion !== __APP_VERSION__
-    // return false
-  },[latestVersion])
+  const queryLatestVersion = useCallback(async () => {
+    try {
+      const response = await fetch(
+        import.meta.env.VITE_API_BASE_URL + "/api/trajectories/cmbdevclaw/versions/list",
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json"
+            // Remove placeholder auth token for now
+          }
+        }
+      )
+      const data = await response.json()
+      setLatestVersion(data?.current?.version)
+    } catch (e) {
+      console.log(e)
+    }
+  }, [])
+
+  const needUpdateVersion = useMemo(() => {
+    return latestVersion !== version
+  }, [latestVersion, version])
 
   useEffect(() => {
+    queryRemoteSkills()
     queryLatestVersion()
     const fetchYoloMode = (): void => {
-      window.api.sandbox.getYoloMode().then(setYoloMode).catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
+      window.api.sandbox
+        .getYoloMode()
+        .then(setYoloMode)
+        .catch((e) => console.warn("[YoloMode] Failed to fetch:", e))
     }
     fetchYoloMode()
     return window.api.sandbox.onChanged(fetchYoloMode)
-  }, [])
+  }, []) // 移除queryRemoteSkills依赖，只在组件挂载时执行一次
 
-  useEffect(()=>{
-    uploadLoChatData(threadMessages)
-  },[threadMessages])
-
-  const uploadLoChatData =async (msgs:Message[])=>{
-    const lastMsg=msgs[msgs.length-1]
-    if(lastMsg){
-      if(lastMsg.role!=='user'){
-        let lUidx=-1
-        for(let i=msgs.length-1;i>=0;i--){
-          if(msgs[i].role==='user'){
-            lUidx=i
+  const uploadLoChatData = useCallback(async (msgs: Message[]) => {
+    const lastMsg = msgs[msgs.length - 1]
+    if (lastMsg) {
+      if (lastMsg.role !== "user") {
+        let lUidx = -1
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "user") {
+            lUidx = i
             break
           }
         }
-        if(lUidx!==-1){
-          await uploadChatData(threadId,msgs.slice(lUidx) as ChatReportPayload[])
+        if (lUidx !== -1) {
+          await uploadChatData(threadId, msgs.slice(lUidx) as ChatReportPayload[])
         }
       }
     }
-  }
+  }, [threadId])
 
+  // Check if NUX (first-run sandbox setup) is needed, then auto-start elevated setup
+  useEffect(() => {
+    window.api.sandbox.isNuxNeeded().then((needed) => {
+      if (!needed) return
+      setShowNux(true)
+      setNuxLoading(true)
+      setNuxError(null)
+      window.api.sandbox.completeNux("elevated")
+        .then(() => setShowNux(false))
+        .catch((e) => {
+          setNuxError(e instanceof Error ? e.message : String(e))
+          setNuxLoading(false)
+        })
+    }).catch((e) => console.warn("[NUX] Failed to check:", e))
+  }, [])
+
+  // Cycle loading step messages while NUX is configuring
+  useEffect(() => {
+    if (!nuxLoading) { setNuxLoadingStep(0); return }
+    const timers = [
+      setTimeout(() => setNuxLoadingStep(1), 3_000),
+      setTimeout(() => setNuxLoadingStep(2), 12_000),
+      setTimeout(() => setNuxLoadingStep(3), 30_000),
+      setTimeout(() => setNuxLoadingStep(4), 60_000),
+    ]
+    return () => timers.forEach(clearTimeout)
+  }, [nuxLoading])
+
+  // Thinking messages: loading 时轮换提示语
   useEffect(() => {
     const currentMessageCount = streamData.messages.length
 
@@ -236,26 +462,34 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [isLoading, streamData.messages.length])
 
-  // Apple Intelligence glow: loading 时显示，淡出由 CSS transition + onTransitionEnd 控制
   useEffect(() => {
-    if (isLoading) {
-      setGlowVisible(true)
-      return
-    }
-    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
-    const timer = setTimeout(() => setGlowVisible(false), 3000)
-    return () => clearTimeout(timer)
-  }, [isLoading])
+    uploadLoChatData(threadMessages)
+  }, [threadMessages, uploadLoChatData])
 
   const handleApprovalDecision = useCallback(
-    async (decision: "approve" | "reject" | "edit"): Promise<void> => {
+    async (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"): Promise<void> => {
       if (!pendingApproval || !stream) return
 
+      // Check if this is an orchestrator-sourced approval (has requestId)
+      const approvalAny = pendingApproval as Record<string, unknown>
+      if (approvalAny._orchestratorRequestId) {
+        // Send decision to main process via the orchestrator's IPC channel
+        window.api.sandbox.sendApprovalDecision({
+          requestId: approvalAny._orchestratorRequestId as string,
+          type: decision === "edit" ? "reject" : decision,
+          tool_call_id: pendingApproval.tool_call?.id || ""
+        })
+        setPendingApproval(null)
+        return
+      }
+
+      // Legacy HITL approval path (non-execute tools)
       setPendingApproval(null)
 
       try {
+        const legacyDecision = (decision === "approve_session" || decision === "approve_permanent") ? "approve" : decision
         await stream.submit(null, {
-          command: { resume: { decision, pendingCount: pendingApproval.pendingCount } },
+          command: { resume: { decision: legacyDecision, pendingCount: pendingApproval.pendingCount } },
           config: { configurable: { thread_id: threadId, model_id: currentModel } }
         })
       } catch (err) {
@@ -266,6 +500,28 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   )
 
   const agentValues = stream?.values as AgentStreamValues | undefined
+
+  // Listen for orchestrator approval requests (fine-grained command approval)
+  useEffect(() => {
+    console.log(`[ChatContainer] Registering approval listener for threadId: ${threadId}`)
+    const cleanup = window.api.sandbox.onApprovalRequest(threadId, (request: unknown) => {
+      console.log("[ChatContainer] Received approval request:", request)
+      const req = request as Record<string, unknown>
+      // Convert the orchestrator approval request to the pendingApproval format
+      // with a marker so handleApprovalDecision can route it correctly.
+      setPendingApproval({
+        id: (req.id as string) || "",
+        tool_call: (req.tool_call as { id: string; name: string; args: Record<string, unknown> }) || { id: "", name: "execute", args: {} },
+        allowed_decisions: ["approve", "reject"],
+        command: req.command,
+        reason: req.reason,
+        _orchestratorRequestId: req.id,
+        _retryReason: req.retry_reason,
+        _approvalTypes: req.allowed_approval_types
+      } as any)
+    })
+    return cleanup
+  }, [threadId, setPendingApproval])
   const streamTodos = agentValues?.todos
   useEffect(() => {
     if (Array.isArray(streamTodos)) {
@@ -279,6 +535,17 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [streamTodos, setTodos])
 
+  // Apple Intelligence glow: loading 时显示，淡出由 CSS animation + onAnimationEnd 控制
+  useEffect(() => {
+    if (isLoading) {
+      setGlowVisible(true)
+      return
+    }
+    // 兜底：如果 transitionEnd 未触发（快速切换等边界情况），3s 后强制隐藏
+    const timer = setTimeout(() => setGlowVisible(false), 3000)
+    return () => clearTimeout(timer)
+  }, [isLoading])
+
   const prevLoadingRef = useRef(false)
   useEffect(() => {
     if (prevLoadingRef.current && !isLoading) {
@@ -289,7 +556,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
           let role: Message["role"] = "assistant"
           if (streamMsg.type === "human") role = "user"
-          else if (streamMsg.type === "tool") role = "tool"
+          else if (streamMsg.type === "tool") role = "tool"  // ✅ 修复: tool 不应映射为 assistant
           else if (streamMsg.type === "ai") role = "assistant"
 
           const storeMsg: Message = {
@@ -305,7 +572,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           appendMessage(storeMsg)
         }
       }
-      loadThreads()
     }
     prevLoadingRef.current = isLoading
   }, [isLoading, streamData.messages, loadThreads, appendMessage])
@@ -438,6 +704,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
     const message = input.trim()
     setInput("")
+    insertLog('send: '+message)
 
     const isFirstMessage = threadMessages.length === 0
 
@@ -506,34 +773,26 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       } catch (err) {
         console.error("[ChatContainer] Failed to cancel heartbeat:", err)
       }
+    } else if (scheduledTaskLoading) {
+      // ChatX bot thread: scheduledTaskLoading is true but no scheduledTaskId
+      try {
+        const cancelled = await window.api.chatx.cancelByThread(threadId)
+        if (!cancelled) console.warn("[ChatContainer] ChatX thread not found for cancel:", threadId)
+      } catch (err) {
+        console.error("[ChatContainer] Failed to cancel ChatX thread:", err)
+      }
     } else {
-      await stream?.stop()
+      // Stop frontend stream and kill backend child processes in parallel
+      await Promise.all([
+        stream?.stop(),
+        window.api.agent.cancel(threadId)
+      ])
     }
   }
 
   useEffect(() => {
     let mounted = true
 
-    const loadSkills = async (): Promise<void> => {
-      try {
-        const [loadedSkills, disabledList] = await Promise.all([
-          window.api.skills.list(),
-          window.api.skills.getDisabled()
-        ])
-        if (!mounted) return
-        const disabledSet = new Set(disabledList)
-        // Include both built-in (project) and custom (user) skills
-        const availableSkills = loadedSkills.filter((s) =>
-          (s.source === "project" || s.source === "user") && !disabledSet.has(s.name)
-        )
-        setSkills([...availableSkills].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")))
-      } catch (error) {
-        console.error("[ChatContainer] Failed to load skills:", error)
-        if (mounted) setSkills([])
-      } finally {
-        if (mounted) setSkillsLoading(false)
-      }
-    }
 
     void loadSkills()
 
@@ -612,7 +871,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   // ────────────────────────────────────────────────────────
 
   const getSkillId = useCallback((skill: SkillMetadata): string => {
-    const fromPath = skill.path.split("/").slice(-2, -1)[0]
+    const fromPath = skill?.path?.split("/").slice(-2, -1)[0]
     return (fromPath || skill.name || "").toLowerCase()
   }, [])
 
@@ -900,47 +1159,75 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     const general = builtInSkills.filter((skill) => !isProgrammingSkill(skill))
     const programming = builtInSkills.filter(isProgrammingSkill)
 
+    // 精品技能名称集合，从「我安装的技能」中剔除
+    const goodSkillNames = new Set(goodSkillsData.map((g) => g.name))
+    const pureCustomSkills = userSkills.filter((s) => !goodSkillNames.has(s.name)
+    && s.name !== 'encrypt-password'
+    )
+    // todo  s.name !== 'encrypt-password' 这个逻辑在代码暂时写死，后面排查
+
     return {
       generalSkills: general,
       programmingSkills: programming,
-      customSkills: userSkills
+      customSkills: pureCustomSkills,
     }
-  }, [skills, isProgrammingSkill])
+  }, [skills, isProgrammingSkill, goodSkillsData])
+
+  // 精品技能：按 category 分组，匹配本地已安装的 SkillMetadata
+  const goodSkillsByCategory = useMemo(() => {
+    const localSkillMap = new Map(
+      skills.filter((s) => s.source === "user").map((s) => [s.name, s])
+    )
+    const groups = new Map<
+      string,
+      Array<{ skill: SkillMetadata; label: string; marketItem: MarketItem }>
+    >()
+    for (const item of goodSkillsData) {
+      const localSkill = localSkillMap.get(item.name)
+      // if (!localSkill) continue
+      const category = item.category || "精品技能"
+      if (!groups.has(category)) groups.set(category, [])
+      groups.get(category)!.push({
+        skill: localSkill || {},
+        label: item.chinese_name || item.name,
+        marketItem: item,
+      })
+    }
+    return groups
+  }, [goodSkillsData, skills])
 
   const visibleGeneralSkillCards = useMemo(() => {
     const source = showAllGeneralSkills ? generalSkills : generalSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllGeneralSkills, generalSkills, getSkillSummary, getSkillIcon])
 
   const programmingSkillCards = useMemo(() => {
     const source = showAllProgrammingSkills ? programmingSkills : programmingSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllProgrammingSkills, programmingSkills, getSkillSummary, getSkillIcon])
 
   const customSkillCards = useMemo(() => {
     const source = showAllCustomSkills ? customSkills : customSkills.slice(0, 8)
-
     return source.map((skill) => ({
       skill,
       label: getSkillSummary(skill),
-      icon: getSkillIcon(skill)
+      icon: getSkillIcon(skill),
     }))
   }, [showAllCustomSkills, customSkills, getSkillSummary, getSkillIcon])
 
   const handleUseSkillPrompt = useCallback(
-    (skill: SkillMetadata): void => {
+    (skill: SkillMetadata, label?: string): void => {
+      const custPrompt = label ? getTargetRemoteSkill(label) : ""
       const prompt = buildSkillPrompt(skill)
-      setInput(prompt)
+      setInput(custPrompt || prompt)
       requestAnimationFrame(() => {
         const textarea = inputRef.current
         if (!textarea) return
@@ -949,7 +1236,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         textarea.setSelectionRange(cursor, cursor)
       })
     },
-    [buildSkillPrompt, setInput]
+    [buildSkillPrompt, setInput, getTargetRemoteSkill]
   )
 
   const handleCopyToClipboard = (text: string) => {
@@ -1009,6 +1296,81 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         </div>
       )}
 
+      {/* NUX: First-run sandbox setup dialog */}
+      {showNux && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
+          <div className="bg-background border border-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 space-y-5">
+            {/* Header */}
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="size-5 text-primary" />
+              <h2 className="text-lg font-bold">设置 Agent 沙箱环境</h2>
+            </div>
+
+            {/* Policy notice */}
+            <div className="flex items-start gap-2.5 rounded-md border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-700 dark:text-amber-400">
+              <Info className="size-4 shrink-0 mt-0.5" />
+              <span>公司安全限制，默认选择 elevated 沙箱模式，确有其他需要请联系管理员。</span>
+            </div>
+
+            {/* Loading state */}
+            {nuxLoading && (
+              <div className="flex flex-col items-center gap-4 py-6">
+                <div className="relative size-14">
+                  <div className="absolute inset-0 size-14 rounded-full border-4 border-primary/15" />
+                  <div className="absolute inset-0 size-14 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <ShieldCheck className="size-5 text-primary" />
+                  </div>
+                </div>
+                <div className="text-center space-y-1.5">
+                  <div className="text-sm font-medium transition-all duration-500">
+                    {NUX_LOADING_STEPS[nuxLoadingStep]}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    首次配置可能需要 1&ndash;3 分钟，请勿关闭窗口
+                  </div>
+                </div>
+                {/* Progress dots */}
+                <div className="flex gap-1.5">
+                  {NUX_LOADING_STEPS.map((_, i) => (
+                    <div
+                      key={i}
+                      className={`size-1.5 rounded-full transition-all duration-500 ${
+                        i <= nuxLoadingStep ? "bg-primary" : "bg-primary/20"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Error state */}
+            {nuxError && (
+              <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400 space-y-2">
+                <p className="font-medium">管理员沙箱配置失败</p>
+                <p className="text-xs opacity-80">{nuxError}</p>
+                <p className="text-xs">如重试仍失败，请联系管理员。</p>
+                <button
+                  className="mt-1 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                  onClick={() => {
+                    setNuxError(null)
+                    setNuxLoading(true)
+                    window.api.sandbox.completeNux("elevated")
+                      .then(() => setShowNux(false))
+                      .catch((e) => {
+                        setNuxError(e instanceof Error ? e.message : String(e))
+                        setNuxLoading(false)
+                      })
+                  }}
+                >
+                  重试
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Skill generation progress is shown in the right panel's 代理 section */}
       {/* Copy notification */}
       {showCopyNotification && (
@@ -1048,7 +1410,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           {programmingSkillCards.map(({ skill, label, icon }) => (
                             <button
-                              key={skill.path}
+                              key={label+skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
                               className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
@@ -1092,7 +1454,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                           {visibleGeneralSkillCards.map(({ skill, label, icon }) => (
                             <button
-                              key={skill.path}
+                              key={label+skill.path}
                               type="button"
                               onClick={() => handleUseSkillPrompt(skill)}
                               className=" group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
@@ -1128,59 +1490,67 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         )}
                       </button>
                     )}
+                    {/* 精品技能：按 category 分组展示 */}
+                    {goodSkillsByCategory.size > 0 &&
+                      Array.from(goodSkillsByCategory.entries()).map(([category, items]) => (
+                        <div key={category} className="space-y-2">
+                          <div className="text-xs text-muted-foreground font-medium tracking-wider flex items-center gap-1">
+                            <Zap className="size-3 text-amber-500" />
+                            <span>{category}</span>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {items.map(({ skill, label }) => (
+                              <button
+                                key={label+skill.path}
+                                type="button"
+                                onClick={() => handleUseSkillPrompt(skill, label)}
+                                className="group w-full rounded-xl border border-amber-200/70 bg-amber-50/60 px-3 py-2 text-left hover:bg-amber-100/70 hover:border-amber-300 transition-colors"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="rounded-md border border-amber-200/80 p-1.5 text-amber-500 group-hover:text-amber-600 transition-colors">
+                                    <Zap className="size-4" />
+                                  </div>
+                                  <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     <div className="space-y-2">
                       <div className="text-xs text-muted-foreground font-medium tracking-wider">
                         <span>我安装的技能</span>
                         <span className={'ml-2'}>(  路径：自定义 / 应用市场 )</span>
                       </div>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {customSkillCards?.length ? customSkillCards.map(({ skill, label, icon }) => (
+                        {customSkillCards?.length ? customSkillCards.map(({ skill, label }) => (
                           <button
-                            key={skill.path}
+                            key={label+skill.path}
                             type="button"
-                            onClick={() => handleUseSkillPrompt(skill)}
+                            onClick={() => handleUseSkillPrompt(skill, label)}
                             className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
                           >
                             <div className="flex items-center gap-3">
-                              <div
-                                className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                              <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
                                 <Wrench className={"size-4"} />
                               </div>
-                              <div className="text-xs text-foreground leading-5">{label}</div>
+                              <div className="text-xs text-foreground leading-5">{getSkillShowLabel(label)}</div>
                             </div>
                           </button>
-                        )) : <button
-                          type="button"
-                          className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
-                              <CircleAlert className={"size-4"} />
+                        )) : (
+                          <button
+                            type="button"
+                            className="group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors">
+                                <CircleAlert className={"size-4"} />
+                              </div>
+                              <div className="text-xs text-foreground leading-5">暂无</div>
                             </div>
-                            <div className="text-xs text-foreground leading-5">暂无</div>
-                          </div>
-                        </button>}
+                          </button>
+                        )}
                       </div>
-                      {customSkills.length > 8 && (
-                        <button
-                          type="button"
-                          onClick={() => setShowAllCustomSkills((prev) => !prev)}
-                          className="mx-auto flex items-center gap-1 rounded-full border border-border/70 bg-background px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
-                        >
-                          {showAllCustomSkills ? (
-                            <>
-                              <ChevronUp className="size-3.5" />
-                              <span>收起</span>
-                            </>
-                          ) : (
-                            <>
-                              <ChevronDown className="size-3.5" />
-                              <span>展开更多（+{customSkills.length - 8}）</span>
-                            </>
-                          )}
-                        </button>
-                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -1282,12 +1652,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             )}
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
+              const isLastMessage = index === displayMessages.length - 1;
 
               return (
                 <MessageBubble
                   key={message.id}
                   message={message}
                   previousMessage={previousMessage}
+                  isStreaming={isLastMessage && isLoading}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
@@ -1295,6 +1667,84 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 />
               );
             })}
+
+
+            {/*测试git diff功能*/}
+            {/*<DisplayDiffTest/>*/}
+
+
+
+            {/* Orchestrator approval request — shown as standalone bar when pending */}
+            {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
+              <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 text-amber-500" />
+                  <span className="text-sm font-medium">命令需要审批</span>
+                </div>
+                <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
+                  {(pendingApproval as Record<string, unknown>).command
+                    ? String((pendingApproval as Record<string, unknown>).command)
+                    : pendingApproval.tool_call?.args?.command
+                      ? String(pendingApproval.tool_call.args.command)
+                      : "unknown command"}
+                </div>
+                {(pendingApproval as Record<string, unknown>)._retryReason && (
+                  <div className="text-xs text-amber-600 dark:text-amber-400">
+                    {String((pendingApproval as Record<string, unknown>)._retryReason)}
+                  </div>
+                )}
+                {(pendingApproval as Record<string, unknown>).reason && (
+                  <div className="text-xs text-muted-foreground">
+                    原因：{String((pendingApproval as Record<string, unknown>).reason)}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {(pendingApproval as Record<string, unknown>)._retryReason ? (
+                    <>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
+                        onClick={() => handleApprovalDecision("approve")}
+                      >
+                        无沙箱重试
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                        onClick={() => handleApprovalDecision("reject")}
+                      >
+                        拒绝
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                        onClick={() => handleApprovalDecision("approve")}
+                      >
+                        运行
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                        onClick={() => handleApprovalDecision("approve_session")}
+                      >
+                        本会话允许
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                        onClick={() => handleApprovalDecision("approve_permanent")}
+                      >
+                        始终允许
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                        onClick={() => handleApprovalDecision("reject")}
+                      >
+                        拒绝
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
@@ -1361,7 +1811,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   className={cn(
                     "relative z-[1] flex-1 resize-none rounded-xl border border-border",
                     "px-4 py-3 text-sm placeholder:text-muted-foreground",
-                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-wait disabled:opacity-70 shadow-sm",
+                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-70 shadow-sm",
                     "transition-colors duration-300",
                     glowVisible ? "bg-white/80" : "bg-white"
                   )}
@@ -1415,7 +1865,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 )}
               </div>
               {tokenUsage && (
-                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} />
+                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} contextLimit={modelContextLimit} />
               )}
             </div>
           </div>

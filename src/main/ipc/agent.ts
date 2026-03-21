@@ -17,7 +17,8 @@ import {
   isOnlineSkillEvolutionEnabled,
   isSkillAutoProposeEnabled
 } from "../storage"
-import { notifyIfBackground } from "../services/notify"
+import { notifyIfBackground, stripThink } from "../services/notify"
+import { trySendChatXReply } from "../services/chatx"
 import { TraceCollector } from "../agent/trace/collector"
 import {
   requestSkillIntent,
@@ -495,6 +496,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         threadId,
         workspacePath,
         modelId: effectiveModelId,
+        abortSignal: abortController.signal
       })
       const humanMessage = new HumanMessage(message)
 
@@ -594,6 +596,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         ) return undefined
         return { inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens }
       }
+
+      let lastFinalText = ""  // 最终回复（不含中间工具推理），用于 ChatX HTTP 回复
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break
@@ -853,6 +857,33 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           }
         }
 
+        if (mode === "values") {
+          try {
+            const state = serialized as { messages?: Array<{ kwargs?: Record<string, unknown>; id?: string[] }> }
+            if (state?.messages) {
+              const finalMsgs = state.messages.filter((m) => {
+                const cn = Array.isArray(m.id) ? m.id[m.id.length - 1] || "" : ""
+                const kw = m.kwargs || {}
+                return cn.includes("AI") && (!kw.tool_calls || !Array.isArray(kw.tool_calls) || kw.tool_calls.length === 0)
+              })
+              const last = finalMsgs[finalMsgs.length - 1]
+              if (last) {
+                const kw = last.kwargs || {}
+                const content = kw.content
+                let text = ""
+                if (typeof content === "string") text = content
+                else if (Array.isArray(content)) {
+                  text = (content as Array<{ type: string; text?: string }>)
+                    .filter((b) => b.type === "text" && typeof b.text === "string")
+                    .map((b) => b.text!)
+                    .join("")
+                }
+                if (text.trim()) lastFinalText = text.trim()
+              }
+            }
+          } catch { /* best-effort */ }
+        }
+
         window.webContents.send(channel, {
           type: "stream",
           mode,
@@ -900,6 +931,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
           }
         } else {
           resetSkillEvolutionSession(threadId)
+        }
+
+        // If this is a ChatX-linked thread, also send reply via HTTP (only final answer, no tool reasoning)
+        const chatxReply = lastFinalText || stripThink(assistantText).trim()
+        if (metadata.chatxRobotChatId && chatxReply) {
+          trySendChatXReply(metadata.chatxRobotChatId as string, chatxReply)
         }
 
         const conversation = assistantText.trim()
@@ -1003,7 +1040,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
-        modelId: effectiveModelId
+        modelId: effectiveModelId,
+        abortSignal: abortController.signal
       })
       const config = {
         configurable: { thread_id: threadId },
@@ -1055,6 +1093,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   })
 
   // Handle HITL interrupt response
+  // NOTE: With the orchestrator-based approval system, execute commands are no
+  // longer interrupted via HITL middleware. This handler remains for backward
+  // compatibility and non-execute tool interrupts.
   ipcMain.on("agent:interrupt", async (event, { threadId, decision }: AgentInterruptParams) => {
     const channel = `agent:stream:${threadId}`
     const window = BrowserWindow.fromWebContents(event.sender)
@@ -1095,7 +1136,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     window.once("closed", onWindowClosed)
 
     try {
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId })
+      const agent = await createAgentRuntime({ threadId, workspacePath, modelId, abortSignal: abortController.signal })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
@@ -1149,9 +1190,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   // Handle cancellation
   ipcMain.handle("agent:cancel", async (_event, { threadId }: AgentCancelParams) => {
     const controller = activeRuns.get(threadId)
+    console.log(`[Agent] cancel: threadId=${threadId}, hasController=${!!controller}, activeRuns=[${Array.from(activeRuns.keys()).join(", ")}]`)
     if (controller) {
       controller.abort()
       activeRuns.delete(threadId)
+      console.log(`[Agent] cancel: aborted controller for thread ${threadId}`)
+    } else {
+      console.warn(`[Agent] cancel: no active run found for thread ${threadId}`)
     }
   })
 }

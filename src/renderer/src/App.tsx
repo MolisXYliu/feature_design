@@ -8,7 +8,7 @@ import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
-import { VersionChecker } from "@/components/notifications/VersionChecker"
+import { initMMJ } from "../js/mmjUtils"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -48,6 +48,18 @@ function App(): React.JSX.Element {
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
   const [zoomLevel, setZoomLevel] = useState(1)
+
+  useEffect(() => {
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const link = target.closest('a'); // 找到点击的<a>标签
+      if (link && link.href) {
+        e.preventDefault(); // 阻止默认跳转
+        window.electron.openExternal(link.href);
+      }
+    });
+    initMMJ()
+  }, []);
 
   // Track drag start widths
   const dragStartWidths = useRef<{ left: number; right: number } | null>(null)

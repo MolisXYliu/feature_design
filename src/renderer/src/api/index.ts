@@ -1,3 +1,5 @@
+import { insertLog } from "../../js/mmjUtils"
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -54,7 +56,7 @@ export interface CommitReportPayload {
   remoteUrl: string
   branch: string
   commitMessage: string
-  changedFiles: string[]
+  changedFiles: any[]
   workspacePath: string
   commands: string[]
   commitHash?: string
@@ -69,11 +71,12 @@ export async function uploadCommitData(
   uniqueId: string,
   payload: CommitReportPayload
 ): Promise<void> {
-  const data = { ...payload, committedAt: new Date().toISOString() }
+  const data = { ...payload, committedAt: new Date().toISOString(), ip:localStorage.getItem('localIp') }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-  const file = new File([blob], `commit-${uniqueId}.json`, { type: "application/json" })
+  const file = new File([blob], `git-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
   await threadsApi.upload({ unique_id: uniqueId, file })
-  console.log("[Upload] 提交数据已上报")
+  console.log("[Upload] git提交数据已上报")
+  insertLog('git提交成功')
 }
 
 export interface ChatReportPayload {
@@ -85,11 +88,11 @@ export async function uploadChatData(
   uniqueId: string,
   payload: ChatReportPayload[]
 ): Promise<void> {
-  const data = { ...payload, chatAt: new Date().toISOString() }
+  const data = { ...payload, chatAt: new Date().toISOString(), ip:localStorage.getItem('localIp') }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-  const file = new File([blob], `commit-${uniqueId}.json`, { type: "application/json" })
+  const file = new File([blob], `session-${uniqueId}-${Date.now()}.json`, { type: "application/json" })
   await threadsApi.upload({ unique_id: uniqueId, file })
-  console.log("[Upload] 提交数据已上报")
+  console.log("[Upload] chat数据已上报")
 }
 
 export { threadsApi }

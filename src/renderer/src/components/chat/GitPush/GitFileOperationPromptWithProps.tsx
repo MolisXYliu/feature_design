@@ -33,6 +33,7 @@ interface GitFileOperationPromptWithPropsProps {
   onSkip?: () => void
   operationId?: string // 操作ID，用于唯一标识本次操作
   workspacePath:string
+  threadId?:string
 }
 
 export function GitFileOperationPromptWithProps({
@@ -43,7 +44,8 @@ export function GitFileOperationPromptWithProps({
   changedFiles = [],
   onSkip,
   operationId,
-  workspacePath
+  workspacePath,
+   threadId
 }: GitFileOperationPromptWithPropsProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   const currentOperationId = useMemo(() => {
@@ -73,6 +75,7 @@ export function GitFileOperationPromptWithProps({
   } | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
   const [cardNumber, setCardNumber] = useState("")
+  const [executingCommands, setExecutingCommands] = useState<string[]>([])
   // 用于控制每个文件的diff展示状态
   const [expandedDiffs, setExpandedDiffs] = useState<Set<number>>(new Set())
   // 添加命令预览状态
@@ -198,6 +201,9 @@ export function GitFileOperationPromptWithProps({
       hasRemote ? `git -C "${gitRepoPath}" push` : null
     ].filter(Boolean) as string[]
 
+    // 设置正在执行的命令
+    setExecutingCommands(commands)
+
     try {
       let commitHash = ""
 
@@ -246,14 +252,14 @@ export function GitFileOperationPromptWithProps({
 
       // ─── 上报本次提交数据 ──────────────────────────────────────────────────
       try {
-        await uploadCommitData(currentOperationId, {
+        await uploadCommitData(threadId || currentOperationId, {
           remoteUrl: remoteUrl || "",
           branch: branch || "",
           commitMessage: commitMessage.trim(),
-          changedFiles: changedFiles.map((f) => f.path),
+          changedFiles: changedFiles,
           workspacePath: gitRepoPath,
           commands,
-          commitHash
+          commitHash,
         })
       } catch (uploadError) {
         console.warn("[Upload] 提交数据上报失败:", uploadError)
@@ -334,7 +340,7 @@ export function GitFileOperationPromptWithProps({
       <div className="flex items-start gap-2 p-2 bg-muted/50 border border-border rounded">
         <Check className="size-4 text-muted-foreground mt-0.5" />
         <div className="flex-1 text-xs">
-          <div className="font-medium text-muted-foreground">没有文件改动，无需提交</div>
+          <div className="font-medium text-muted-foreground">本目录下没有文件改动，无需提交</div>
           <div className="text-muted-foreground/70 mt-1">当前没有检测到任何文件变更，无需执行 Git 提交操作。</div>
         </div>
       </div>
@@ -409,7 +415,7 @@ export function GitFileOperationPromptWithProps({
                 <ChevronRight className="size-4" />
               )}
               <FileText className="size-4" />
-              修改的文件 ({changedFiles.length})
+              本目录下修改的文件 ({changedFiles.length})
             </button>
 
             {showChangedFiles && (
@@ -528,7 +534,7 @@ export function GitFileOperationPromptWithProps({
           )}
 
           <div className="flex items-center gap-2">
-            <span className="text-muted-foreground">仓库:</span>
+            <span className="text-muted-foreground">目录:</span>
             <span className="font-mono text-xs truncate">{gitRepoPath}</span>
           </div>
         </div>
@@ -632,13 +638,13 @@ export function GitFileOperationPromptWithProps({
               {
                 step: 0,
                 label: "添加所有文件到暂存区",
-                command: "git add .",
+                command: executingCommands[0] ?? `git -C "${gitRepoPath}" add .`,
                 info: "将所有修改的文件添加到暂存区"
               },
               {
                 step: 1,
                 label: "提交更改",
-                command: `git commit -m "${commitMessage.trim()}"`,
+                command: executingCommands[1] ?? `git commit -m "..."`,
                 info: `分支: ${branch || "unknown"} | 信息: ${commitMessage.trim()}`
               },
               ...(hasRemote
@@ -646,7 +652,7 @@ export function GitFileOperationPromptWithProps({
                     {
                       step: 2,
                       label: "推送到远程仓库",
-                      command: "git push",
+                      command: executingCommands[2] ?? `git -C "${gitRepoPath}" push`,
                       info: `推送到 ${
                         remoteUrl
                           ? remoteUrl.split("/").pop()?.replace(".git", "")

@@ -29,11 +29,22 @@ export function createGitWorkflowTool(workspacePath: string) {
   )
 }
 
+// Convert POSIX-style path returned by Git on Windows (e.g. /c/Users/foo) to Windows path (C:\Users\foo)
+function normalizGitPath(gitPath: string): string {
+  if (platform() !== "win32") return gitPath
+  // Git on Windows may return /c/Users/... style paths
+  const posixDriveMatch = gitPath.match(/^\/([a-zA-Z])\/(.*)$/)
+  if (posixDriveMatch) {
+    return `${posixDriveMatch[1].toUpperCase()}:\\${posixDriveMatch[2].replace(/\//g, "\\")}`
+  }
+  return gitPath
+}
+
 // Helper function to execute git commands with Windows compatibility
 function executeGitCommand(command: string, workspacePath: string): string {
   const isWindows = platform() === "win32"
 
-  // Normalize the workspace path for Windows
+  // Normalize the workspace path
   const normalizedPath = path.resolve(workspacePath)
 
   const options = {
@@ -41,29 +52,20 @@ function executeGitCommand(command: string, workspacePath: string): string {
     encoding: "utf-8" as const,
     env: {
       ...process.env,
-      // Disable Git LFS for operations that don't need it
       GIT_LFS_SKIP_SMUDGE: "1",
-      // Ensure proper PATH for Windows
       ...(isWindows && { PATH: process.env.PATH })
     },
-    // Use proper shell for Windows - use undefined for default shell on Windows
-    shell: isWindows ? (undefined as string | undefined) : "/bin/bash",
-    // Increase timeout for Windows
+    // On Windows use cmd shell so git in PATH is resolved correctly;
+    // on macOS/Linux use /bin/bash
+    shell: isWindows ? ("cmd.exe" as string | undefined) : "/bin/bash",
     timeout: 30000,
-    // Handle Windows-specific options
     windowsHide: isWindows
   }
 
   try {
     return execSync(command, options).toString().trim()
   } catch (error: unknown) {
-    // Enhanced error handling for Windows
-    if (
-      isWindows &&
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
+    if (isWindows && error instanceof Error && "code" in error && error.code === "ENOENT") {
       throw new Error(
         `Git command not found. Please ensure Git is installed and in your PATH. Command: ${command}`
       )
@@ -80,8 +82,30 @@ export async function getGitInfo(
 ): Promise<string> {
   console.log(workspacePath, branch, remote, "????????")
   try {
-    // Check if we're in a git repository
-    if (!existsSync(path.join(workspacePath, ".git"))) {
+    // Resolve the effective starting path:
+    // If workspacePath does not exist, walk up until we find an existing directory.
+    let effectivePath = path.resolve(workspacePath)
+    while (effectivePath && !existsSync(effectivePath)) {
+      const parent = path.dirname(effectivePath)
+      if (parent === effectivePath) {
+        // Reached filesystem root without finding an existing directory
+        return JSON.stringify({
+          message: "Workspace path does not exist",
+          workspacePath,
+          error: true
+        })
+      }
+      effectivePath = parent
+    }
+
+    // Find the actual git root directory (may be a parent of workspacePath).
+    // git rev-parse --show-toplevel on Windows Git Bash returns POSIX paths,
+    // so we normalise the result with normalizGitPath().
+    let gitRoot: string
+    try {
+      const raw = executeGitCommand("git rev-parse --show-toplevel", effectivePath)
+      gitRoot = path.resolve(normalizGitPath(raw))
+    } catch {
       return JSON.stringify({
         message: "Not a git repository",
         workspacePath,
@@ -93,13 +117,9 @@ export async function getGitInfo(
     let targetBranch = branch
     if (!branch || branch === "current") {
       try {
-        // Use more compatible command for all platforms including Windows
-        targetBranch = executeGitCommand("git rev-parse --abbrev-ref HEAD", workspacePath)
+        targetBranch = executeGitCommand("git rev-parse --abbrev-ref HEAD", gitRoot)
         console.log("Current branch:", targetBranch)
-
-        if (!targetBranch) {
-          targetBranch = ""
-        }
+        if (!targetBranch) targetBranch = ""
       } catch {
         targetBranch = ""
       }
@@ -110,11 +130,10 @@ export async function getGitInfo(
     // Get remote URL
     let remoteUrl: string
     try {
-      remoteUrl = executeGitCommand(`git remote get-url ${remoteName}`, workspacePath)
+      remoteUrl = executeGitCommand(`git remote get-url ${remoteName}`, gitRoot)
     } catch {
       try {
-        // Fallback: try to get any remote URL
-        remoteUrl = executeGitCommand("git remote get-url origin", workspacePath)
+        remoteUrl = executeGitCommand("git remote get-url origin", gitRoot)
       } catch {
         remoteUrl = "Remote not found"
       }
@@ -125,7 +144,13 @@ export async function getGitInfo(
     const changedFiles: Array<{ path: string; status: string; diff?: string }> = []
 
     try {
-      const status = executeGitCommand("git status --porcelain", workspacePath)
+      // Compute relative path from gitRoot to workspacePath so we only get
+      // changes under workspacePath, not the entire repository.
+      const relativeWorkspacePath = path.relative(gitRoot, path.resolve(workspacePath))
+      const scopePath = relativeWorkspacePath
+        ? `-- "${relativeWorkspacePath.replace(/\\/g, "/")}"`
+        : ""
+      const status = executeGitCommand(`git status --porcelain ${scopePath}`, gitRoot)
       hasChanges = status.length > 0
 
       if (hasChanges) {
@@ -133,69 +158,63 @@ export async function getGitInfo(
 
         for (const line of statusLines) {
           const statusCode = line.substring(0, 2)
-          // Handle both single and double space after status code
-          let filePath = line.substring(2).replace(/^\s+/, "") // Remove leading spaces
+          let filePath = line.substring(2).replace(/^\s+/, "")
 
           // Handle renamed files (format: "R  old_name -> new_name")
           if (filePath.includes(" -> ")) {
             filePath = filePath.split(" -> ")[1]
           }
 
-          // Remove quotes if present (git uses quotes for paths with special characters)
-          // Windows git often uses quotes for paths with special characters or spaces
+          // Remove surrounding quotes (git quotes paths with special chars / non-ASCII)
           if (filePath.startsWith('"') && filePath.endsWith('"')) {
-            // Properly handle escaped quotes in Windows paths
             filePath = filePath.slice(1, -1).replace(/\\"/g, '"')
           }
 
           filePath = filePath.trim()
 
-          // Skip binary files, directories, and invalid paths
-          // Use Windows-compatible path separators
-          const gitPath = filePath.includes(".git/") || filePath.includes(".git\\")
-          if (!filePath || gitPath || filePath.endsWith("/") || filePath.endsWith("\\")) {
+          // Skip .git internals and bare directory entries
+          const isGitInternal = filePath.includes(".git/") || filePath.includes(".git\\")
+          if (!filePath || isGitInternal || filePath.endsWith("/") || filePath.endsWith("\\")) {
             continue
           }
 
-          // Normalize file paths for cross-platform compatibility
-          const normalizedFilePath = path.normalize(path.join(workspacePath, filePath))
+          // git always uses forward-slash separators; convert to OS-native for file system ops
+          const osFilePath = filePath.replace(/\//g, path.sep)
+          const normalizedFilePath = path.join(gitRoot, osFilePath)
 
           const fileInfo: { path: string; status: string; diff?: string } = {
             path: normalizedFilePath,
             status: getStatusDescription(statusCode)
           }
 
-          // Get individual file diff
+          // Get individual file diff.
+          // Always pass the path to git with forward slashes (git's native format),
+          // and quote it to handle spaces on both platforms.
           try {
-            // Escape file path for git command to handle special characters and spaces
-            const escapedFilePath = filePath.includes(' ') || filePath.includes('"')
-              ? `"${filePath.replace(/"/g, '\\"')}"`
-              : filePath
-
-            const fileDiff = executeGitCommand(`git diff -- ${escapedFilePath}`, workspacePath)
+            const gitFilePath = filePath.replace(/\\/g, "/")
+            const fileDiff = executeGitCommand(`git diff -- "${gitFilePath}"`, gitRoot)
             if (fileDiff.trim()) {
               fileInfo.diff = fileDiff
             }
           } catch (error) {
             console.warn(`Failed to get diff for file ${filePath}:`, error)
-            // Try alternative approach for untracked files
+            // For new untracked files there is no diff output — read the file directly
             if (statusCode === "??") {
               try {
-                // For untracked files, we need to read the file content directly
-                const fullFilePath = path.join(workspacePath, filePath)
-                if (existsSync(fullFilePath)) {
-                  const fileContent = readFileSync(fullFilePath, 'utf-8')
-                  const lines = fileContent.split('\n')
-                  // Create a diff-like format for new files
-                  fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line => `+${line}`).join('\n')}`
+                if (existsSync(normalizedFilePath)) {
+                  const fileContent = readFileSync(normalizedFilePath, "utf-8")
+                  const lines = fileContent.split("\n")
+                  fileInfo.diff = `--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join("\n")}`
                 }
               } catch (untrackedError) {
-                console.warn(`Failed to get content for untracked file ${filePath}:`, untrackedError)
+                console.warn(
+                  `Failed to get content for untracked file ${filePath}:`,
+                  untrackedError
+                )
               }
             }
           }
 
-          // Always add the file info
           changedFiles.push(fileInfo)
         }
       }
@@ -204,15 +223,15 @@ export async function getGitInfo(
     }
 
     const result = {
-      _instruction:
-        "DO NOT respond to this tool result. No commentary or follow-up actions required.",
+      _instruction: "DO NOT respond to this tool result. No commentary or follow-up actions required.",
       remote: remoteName,
       remoteUrl: remoteUrl,
       branch: targetBranch,
       commitMessage: commitMessage,
       hasChanges: hasChanges,
       changedFiles: changedFiles,
-      workspacePath
+      workspacePath,
+      gitRoot
     }
 
     return JSON.stringify(result, null, 2)

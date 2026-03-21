@@ -48,14 +48,14 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   toolResults?: Map<string, ToolResultInfo>
   pendingApproval?: HITLRequest | null
-  onApprovalDecision?: (decision: "approve" | "reject" | "edit") => void
-  threadId: string // Add threadId prop
+  onApprovalDecision?: (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit") => void
+  threadId: string
 }
 
 export function MessageBubble({
   message,
   previousMessage,
-  isStreaming,
+  isStreaming = true,
   toolResults,
   pendingApproval,
   onApprovalDecision,
@@ -212,6 +212,7 @@ export function MessageBubble({
                     showApprovalButtons={!isBatch}
                     onApprovalDecision={onApprovalDecision}
                     threadId={threadId}
+                    isStreaming={isStreaming}
                   />
                 );
               }
@@ -245,9 +246,15 @@ export function MessageBubble({
                       </div>
                     )}
 
-                    {result === undefined && (
+                    {result === undefined && isStreaming && (
                       <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600 border border-gray-200 animate-pulse">
                         RUNNING
+                      </div>
+                    )}
+
+                    {result === undefined && !isStreaming && (
+                      <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 border border-amber-200">
+                        INTERRUPTED
                       </div>
                     )}
                   </button>
@@ -261,6 +268,7 @@ export function MessageBubble({
                         isError={result?.is_error}
                         needsApproval={false}
                         onApprovalDecision={undefined}
+                        isStreaming={isStreaming}
                         threadId={threadId}
                       />
                     </div>
@@ -273,9 +281,12 @@ export function MessageBubble({
             {pendingApproval && (pendingApproval.pendingCount ?? 1) > 1 && onApprovalDecision &&
               message.tool_calls!.some(tc => pendingApproval.pendingToolCallIds?.includes(tc.id) || pendingApproval.tool_call?.id === tc.id) && (
               <div className="rounded-sm border border-amber-500/50 bg-amber-500/5 px-3 py-2.5 flex items-center justify-between">
-                <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                  共 {pendingApproval.pendingCount} 个命令待审批
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-amber-600 dark:text-amber-400 font-medium whitespace-nowrap">
+                    共 {pendingApproval.pendingCount} 个命令待审批
+                  </span>
+                  <span className="text-xs text-status-warning bg-status-warning/10 px-2 py-1 rounded-sm whitespace-nowrap">💡 启用 YOLO 模式可跳过审批</span>
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     className="px-3 py-1.5 text-xs border border-border rounded-sm hover:bg-background-interactive transition-colors"

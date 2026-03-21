@@ -48,14 +48,23 @@ import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
 import { createReadStream } from "fs"
 import { createGunzip } from "zlib"
 import { pipeline } from "stream/promises"
-import { app } from "electron"
-import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT } from "./system-prompt"
+import { app, BrowserWindow } from "electron"
+import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT, LAZY_MCP_SYSTEM_PROMPT } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
+import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
-import { getWindowsSandboxMode, getYoloMode } from "../storage"
+import {
+  McpToolRegistry,
+  createToolSearchTools,
+  fixMcpToolSchema
+} from "./tools/tool-search-tool"
+import { getWindowsSandboxMode, getYoloMode, getEnabledHooks } from "../storage"
+import { ApprovalStore } from "./approval-store"
+import { ToolOrchestrator } from "./tool-orchestrator"
+import type { ApprovalRequest, ApprovalDecision } from "../types"
 
 /** Decompress codex.exe.gz → codex.exe if needed (re-extract if .gz is newer than .exe). */
 async function ensureCodexExe(exePath: string): Promise<void> {
@@ -73,6 +82,28 @@ async function ensureCodexExe(exePath: string): Promise<void> {
   } catch (e) {
     console.error("[Runtime] Failed to extract codex.exe:", e)
   }
+}
+
+// ── Pending Approvals (shared between orchestrator and IPC) ──
+
+/** Map of pending approval promises keyed by request ID. */
+export const pendingApprovals = new Map<string, {
+  resolve: (decision: ApprovalDecision) => void
+  request: ApprovalRequest
+  targetWebContentsIds: number[]
+}>()
+
+/** Per-thread approval store cache. */
+const approvalStores = new Map<string, ApprovalStore>()
+
+export function getOrCreateApprovalStore(threadId: string): ApprovalStore {
+  let store = approvalStores.get(threadId)
+  if (!store) {
+    store = new ApprovalStore()
+    store.loadPermanentRules()
+    approvalStores.set(threadId, store)
+  }
+  return store
 }
 
 const BASE_PROMPT =
@@ -269,8 +300,8 @@ export type DeepAgent = ReactAgent<any>
  * @param workspacePath - The workspace path the agent is operating in
  * @returns The complete system prompt
  */
-function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
-  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly")
+function getShellInfo(windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"): { name: string; isBashLike: boolean; isPowerShell: boolean } {
+  const isSandboxed = process.platform === "win32" && (windowsSandbox === "unelevated" || windowsSandbox === "readonly" || windowsSandbox === "elevated")
   const resolved = isSandboxed
     ? LocalSandbox.resolvedWindowsSandboxShell()
     : LocalSandbox.resolvedShell()
@@ -301,7 +332,7 @@ function formatLocalISO(date: Date, timeZone: string): string {
   return `${local}${sign}${oh}:${om}`
 }
 
-function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly"): string {
+function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"): string {
   const isWindows = process.platform === "win32"
   const platform = isWindows ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux"
   const { name: shell, isBashLike, isPowerShell } = getShellInfo(windowsSandbox)
@@ -334,7 +365,7 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
-  const readonlySection = windowsSandbox === "readonly"
+  const sandboxSection = windowsSandbox === "readonly"
     ? `
 ### 只读沙箱模式
 
@@ -344,10 +375,20 @@ ${shellGuidance}
 - 此模式适用于安全审查、代码分析等只读场景。
 - 除非用户明确要求，否则避免执行写入操作，应以建议修改替代直接写入。
 `
+    : windowsSandbox === "elevated"
+    ? `
+### Elevated 沙箱模式
+
+**重要提示：** 你正在 Elevated 沙箱环境中运行。
+- 所有 shell 命令以独立沙箱用户身份执行，与当前用户完全隔离。
+- 出站网络访问不再由本地沙箱额外阻断；是否可联网取决于当前机器和公司的网络策略。
+- 你可以读写工作目录内的文件，但无法访问用户的个人目录（如 .ssh、.aws）。
+- 如果命令因权限不足失败，不要反复重试，向用户说明限制即可。
+`
     : ""
 
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + readonlySection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache
@@ -399,14 +440,20 @@ export function consumeSkillNudge(threadId: string): boolean {
   return had
 }
 
-// Global MCP tools cache: single shared client, lifecycle managed here (not per-thread)
+// Global MCP tools cache: single shared client for both eager and lazy tools
+// Lifecycle managed here (not per-thread), reused across all sessions
+// Note: toolsByServer is cached, but eager/lazy distribution is decided at runtime
+// based on current config (lazyLoad may change without rebuilding client)
 const MCP_TOOLS_CACHE_TTL_MS = 5 * 60 * 1000
 let _mcpToolsCache: {
   fingerprint: string
-  tools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>>
+  toolsByServer: Record<string, Awaited<ReturnType<MultiServerMCPClient["getTools"]>>>
   client: MultiServerMCPClient
   createdAt: number
 } | null = null
+
+// Pending promise to prevent concurrent MCP client initialization
+let _mcpInitPromise: Promise<void> | null = null
 
 // Retired MCP clients: kept alive for agents still referencing their tools.
 // Closed on app exit via closeRuntime().
@@ -415,6 +462,50 @@ const _retiredMcpClients = new Set<MultiServerMCPClient>()
 function computeMcpConfigFingerprint(connectors: { id: string; url: string; advanced?: unknown }[]): string {
   const payload = connectors.map((c) => `${c.id}:${c.url}:${JSON.stringify(c.advanced ?? {})}`).join("|")
   return createHash("sha256").update(payload).digest("hex").slice(0, 16)
+}
+
+/**
+ * Distribute MCP tools between eager tools and lazy registry based on lazyLoad config.
+ * - Plugin servers: always eager
+ * - User connectors: check lazyLoad setting
+ */
+function distributeMcpTools(
+  toolsByServer: Record<string, Awaited<ReturnType<MultiServerMCPClient["getTools"]>>>,
+  mcpConnectors: { id: string; name?: string; lazyLoad?: boolean }[],
+  registry: McpToolRegistry,
+  logLazyTools = false
+): Awaited<ReturnType<MultiServerMCPClient["getTools"]>> {
+  const eagerTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
+
+  for (const [serverId, tools] of Object.entries(toolsByServer)) {
+    // Plugin servers: always eager (plugins don't support lazyLoad)
+    if (serverId.startsWith("plugin:")) {
+      eagerTools.push(...tools)
+      continue
+    }
+
+    // User-configured connectors: check lazyLoad setting
+    const connector = mcpConnectors.find(c => c.id === serverId)
+    if (!connector) {
+      // Connector was deleted or not found, skip its tools
+      continue
+    }
+
+    const isLazy = connector.lazyLoad ?? false
+    if (isLazy) {
+      const serverName = connector.name || serverId
+      if (tools.length > 0) {
+        registry.register(serverName, tools)
+        if (logLazyTools) {
+          console.log("[Runtime] Lazy MCP tools from:", serverName, "count:", tools.length)
+        }
+      }
+    } else {
+      eagerTools.push(...tools)
+    }
+  }
+
+  return eagerTools
 }
 
 export async function getCheckpointer(threadId: string): Promise<SqlJsSaver> {
@@ -478,6 +569,8 @@ export interface CreateAgentRuntimeOptions {
   noSchedulerTool?: boolean
   /** Skip the manage_skill tool (disable skill evolution for scheduled/heartbeat agents) */
   noSkillEvolutionTool?: boolean
+  /** AbortSignal — when signalled, any running child process is killed immediately. */
+  abortSignal?: AbortSignal
 }
 
 // Create agent runtime with configured model and checkpointer
@@ -545,14 +638,64 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const windowsSandbox = process.platform === "win32" ? getWindowsSandboxMode() : "none"
   console.log(`[Runtime] codex.exe: ${codexExePath}, exists: ${codexExists}, sandboxMode: ${windowsSandbox}`)
 
+  const enabledHooks = getEnabledHooks()
+  console.log(`[Runtime] Loaded ${enabledHooks.length} enabled hooks`)
+
   const backend = new LocalSandbox({
     rootDir: workspacePath,
     virtualMode: false,
-    timeout: 600_000,
+    timeout: 60_000,
     maxOutputBytes,
     windowsSandbox,
-    codexExePath: codexExists ? codexExePath : undefined
+    codexExePath: codexExists ? codexExePath : undefined,
+    // Pass a getter so hooks are always read fresh from storage at call time
+    hooks: getEnabledHooks,
+    abortSignal: options.abortSignal
   })
+
+  // ── Wire up the approval orchestrator ──
+  const yoloMode = getYoloMode()
+  if (!yoloMode) {
+    const approvalStore = getOrCreateApprovalStore(threadId)
+
+    // The approval requester sends requests to the renderer via BrowserWindow IPC.
+    // It returns a Promise that is resolved when the renderer sends back a decision.
+    // P3 fix: auto-reject after 5 minutes to prevent indefinite hangs.
+    const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
+
+    const requestApproval = (req: ApprovalRequest): Promise<ApprovalDecision> => {
+      return new Promise<ApprovalDecision>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          if (pendingApprovals.has(req.id)) {
+            pendingApprovals.delete(req.id)
+            console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
+            resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
+          }
+        }, APPROVAL_TIMEOUT_MS)
+
+        pendingApprovals.set(req.id, {
+          resolve: (decision: ApprovalDecision) => {
+            clearTimeout(timeoutId)
+            resolve(decision)
+          },
+          request: req,
+          targetWebContentsIds: BrowserWindow.getAllWindows().map(w => w.webContents.id)
+        })
+        console.log(`[Orchestrator] sending approval request on channel: approval:request:${threadId}, reqId=${req.id}, command=${req.command}`)
+        // Broadcast to all windows — the active one will display the approval UI
+        for (const win of BrowserWindow.getAllWindows()) {
+          win.webContents.send(`approval:request:${threadId}`, req)
+        }
+      })
+    }
+
+    const rawExecute = (command: string, sandboxMode?: string): Promise<import("deepagents").ExecuteResponse> => {
+      return backend.executeRaw(command, sandboxMode)
+    }
+
+    const orchestrator = new ToolOrchestrator(approvalStore, rawExecute, requestApproval, false)
+    backend.setOrchestrator(orchestrator)
+  }
 
   let systemPrompt = getSystemPrompt(workspacePath, windowsSandbox)
   if (extraSystemPrompt) {
@@ -628,67 +771,110 @@ The workspace root is: ${workspacePath}`
 
   const mcpConnectors = getEnabledMcpConnectors()
   const pluginMcpConfigs = getEnabledPluginMcpConfigs()
+
+  // Create instance-level registry for lazy tools (avoid global state)
+  const registry = new McpToolRegistry()
   let mcpTools: Awaited<ReturnType<MultiServerMCPClient["getTools"]>> = []
+
+  // Unified MCP client for both eager and lazy tools
   if (mcpConnectors.length > 0 || Object.keys(pluginMcpConfigs).length > 0) {
+    // Build fingerprint including all connectors (both eager and lazy)
     const fingerprint = computeMcpConfigFingerprint([
       ...mcpConnectors,
       ...Object.entries(pluginMcpConfigs).map(([k, v]) => ({ id: k, url: v.url ?? v.command ?? "", advanced: v }))
     ])
+
+    // Wait for any pending initialization to complete (prevents concurrent init)
+    if (_mcpInitPromise) {
+      await _mcpInitPromise
+    }
+
+    // Re-check cache validity after waiting for pending init
     const cached = _mcpToolsCache
     const cacheValid = cached
       && cached.fingerprint === fingerprint
       && (Date.now() - cached.createdAt) < MCP_TOOLS_CACHE_TTL_MS
 
     if (cacheValid) {
-      mcpTools = cached.tools
-      console.log("[Runtime] MCP tools from cache:", mcpTools.length)
+      // Reuse cached client - redistribute tools based on CURRENT lazyLoad config
+      // (lazyLoad may have changed since cache was created)
+      mcpTools = distributeMcpTools(cached.toolsByServer, mcpConnectors, registry, false)
+      console.log("[Runtime] MCP tools from cache, eager:", mcpTools.length, "lazy:", registry.getToolCount())
     } else {
-      let mcpClient: MultiServerMCPClient | null = null
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mcpServers: Record<string, any> = {}
-        for (const c of mcpConnectors) {
-          mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: c.advanced })
-        }
-        // Add plugin MCP servers
-        for (const [name, cfg] of Object.entries(pluginMcpConfigs)) {
-          if (cfg.command) {
-            mcpServers[name] = {
-              command: cfg.command,
-              args: cfg.args ?? []
-            }
-          } else if (cfg.url) {
-            mcpServers[name] = buildMcpServerConfig({
-              url: cfg.url,
-              advanced: { headers: cfg.headers, transport: cfg.transport }
-            })
-          }
-        }
-        mcpClient = new MultiServerMCPClient({
-          throwOnLoadError: false,
-          onConnectionError: "ignore",
-          useStandardContentBlocks: true,
-          mcpServers
-        })
-        mcpTools = await mcpClient.getTools()
+      // Create new client with all connectors
+      // Use a shared promise to prevent concurrent initialization
+      _mcpInitPromise = (async () => {
+        let mcpClient: MultiServerMCPClient | null = null
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const mcpServers: Record<string, any> = {}
 
-        const oldClient = _mcpToolsCache?.client
-        _mcpToolsCache = { fingerprint, tools: mcpTools, client: mcpClient, createdAt: Date.now() }
-        if (oldClient && oldClient !== mcpClient) {
-          _retiredMcpClients.add(oldClient)
+          // Add user-configured MCP connectors
+          for (const c of mcpConnectors) {
+            mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: c.advanced })
+          }
+          // Add plugin MCP servers
+          for (const [name, cfg] of Object.entries(pluginMcpConfigs)) {
+            if (cfg.command) {
+              mcpServers[name] = {
+                command: cfg.command,
+                args: cfg.args ?? []
+              }
+            } else if (cfg.url) {
+              mcpServers[name] = buildMcpServerConfig({
+                url: cfg.url,
+                advanced: { headers: cfg.headers, transport: cfg.transport }
+              })
+            }
+          }
+          mcpClient = new MultiServerMCPClient({
+            throwOnLoadError: false,
+            onConnectionError: "ignore",
+            useStandardContentBlocks: true,
+            mcpServers
+          })
+
+          // Get tools grouped by server
+          const toolsByServer = await mcpClient.initializeConnections()
+
+          // Distribute tools based on lazyLoad setting
+          mcpTools = distributeMcpTools(toolsByServer, mcpConnectors, registry, true)
+
+          // Update cache - store toolsByServer for redistribution on cache hit
+          const oldClient = _mcpToolsCache?.client
+          _mcpToolsCache = {
+            fingerprint,
+            toolsByServer,
+            client: mcpClient,
+            createdAt: Date.now()
+          }
+          if (oldClient && oldClient !== mcpClient) {
+            _retiredMcpClients.add(oldClient)
+          }
+          console.log("[Runtime] MCP tools loaded, eager:", mcpTools.length, "lazy:", registry.getToolCount())
+        } catch (e) {
+          if (mcpClient) {
+            mcpClient.close().catch(() => {})
+          }
+          console.warn("[Runtime] MCP client init failed:", e)
+        } finally {
+          _mcpInitPromise = null
         }
-        console.log("[Runtime] MCP tools loaded:", mcpTools.length)
-      } catch (e) {
-        if (mcpClient) {
-          mcpClient.close().catch(() => {})
-        }
-        console.warn("[Runtime] MCP client init failed:", e)
-      }
+      })()
+      await _mcpInitPromise
     }
-  } else if (_mcpToolsCache && Object.keys(pluginMcpConfigs).length === 0) {
+  } else if (_mcpToolsCache) {
+    // No connectors enabled, retire the cached client
     _retiredMcpClients.add(_mcpToolsCache.client)
     _mcpToolsCache = null
     console.log("[Runtime] MCP connectors disabled, retired cached client")
+  }
+
+  // Fix MCP tool schemas: some MCP servers return `required: null` instead of `required: []`
+  // which causes API errors. Normalize null/undefined to empty array.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const t of mcpTools as any[]) {
+    fixMcpToolSchema(t)
   }
 
   // Wrap MCP tools so that any ToolException/McpError is caught and returned
@@ -714,10 +900,21 @@ The workspace root is: ${workspacePath}`
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const extraTools: any[] = []
   if (!options.noSchedulerTool) {
+    let chatxRobotChatId: string | null = null
+    if (options.threadId) {
+      try {
+        const threadRow = getThread(options.threadId)
+        if (threadRow?.metadata) {
+          const meta = JSON.parse(threadRow.metadata)
+          chatxRobotChatId = (meta.chatxRobotChatId as string) || null
+        }
+      } catch { /* ignore */ }
+    }
     extraTools.push(createSchedulerTool({
       workspacePath,
       modelId: options.modelId,
-      threadId: options.threadId
+      threadId: options.threadId,
+      chatxRobotChatId
     }))
   }
   if (!options.noSkillEvolutionTool) {
@@ -728,6 +925,14 @@ The workspace root is: ${workspacePath}`
   // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
 
+  // Add tool search tools if there are lazy-loaded MCP tools
+  const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
+  if (toolSearchTools.length > 0) {
+    console.log("[Runtime] Added tool search tools for lazy MCP tools:", registry.getToolCount())
+    // Add lazy MCP system prompt so LLM knows how to use search_tool
+    systemPrompt += LAZY_MCP_SYSTEM_PROMPT
+  }
+
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
@@ -736,14 +941,17 @@ The workspace root is: ${workspacePath}`
 
   const agent = createDeepAgent({
     model,
-    tools: [...mcpTools, ...memoryTools, ...extraTools],
+    tools: [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools],
     checkpointer,
     backend,
     systemPrompt,
     filesystemSystemPrompt,
     skills: allSkillsSources.length > 0 ? allSkillsSources : undefined,
     memory: memorySources?.length ? memorySources : undefined,
-    interruptOn: getYoloMode() ? undefined : { execute: true },
+    // When the orchestrator is active (non-YOLO), it handles execute approval
+    // internally via IPC — no need for the HITL middleware to intercept execute.
+    // HITL middleware is still used in YOLO=false mode for non-execute tools if needed.
+    interruptOn: undefined,
     summarizationTrigger: { type: "tokens", value: triggerTokens },
     summarizationKeep: { type: "tokens", value: keepTokens },
     toolTokenLimitBeforeEvict: toolEvictLimit,

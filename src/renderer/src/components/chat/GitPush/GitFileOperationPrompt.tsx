@@ -11,6 +11,8 @@ interface GitFileOperationPromptProps {
   onSkip?: () => void
   operationId?: string // 新增：操作ID，用于唯一标识本次操作
   threadId: string // 新增：线程ID，用于上报提交数据
+  oldValue?:string
+  newValue?:string
 }
 
 export function GitFileOperationPrompt({
@@ -18,7 +20,9 @@ export function GitFileOperationPrompt({
   operation,
   onSkip,
   operationId,
-  threadId
+  threadId,
+  oldValue,
+  newValue
 }: GitFileOperationPromptProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   // 基于文件路径和操作类型生成稳定的ID，而不是基于时间戳
@@ -46,6 +50,7 @@ export function GitFileOperationPrompt({
     output?: string
   } | null>(null)
   const [currentStep, setCurrentStep] = useState(0)
+  const [executingCommands, setExecutingCommands] = useState<string[]>([])
   const [gitInfo, setGitInfo] = useState<{
     branch?: string
     remote?: string
@@ -235,6 +240,9 @@ export function GitFileOperationPrompt({
       gitInfo.hasRemote ? `git -C "${repoPath}" push` : null
     ].filter(Boolean) as string[]
 
+    // 保存实际执行的命令列表，供步骤显示使用
+    setExecutingCommands(commands)
+
     try {
       let commitHash = ""
 
@@ -287,7 +295,12 @@ export function GitFileOperationPrompt({
           remoteUrl: gitInfo.remote || "",
           branch: gitInfo.branch || "",
           commitMessage: commitMessage.trim(),
-          changedFiles: [filePath],
+          changedFiles: [{
+            path:filePath,
+            status:'modify',
+            oldValue,
+            newValue
+          }],
           workspacePath: repoPath,
           commands,
           commitHash
@@ -470,13 +483,13 @@ export function GitFileOperationPrompt({
               {
                 step: 0,
                 label: "添加文件到暂存区",
-                command: `git add "${filePath}"`,
+                command: executingCommands[0] ?? `git add "${filePath}"`,
                 info: `将 ${filePath.split("/").pop()} 添加到暂存区`
               },
               {
                 step: 1,
                 label: "提交更改",
-                command: `git commit -m "${commitMessage.trim()}"`,
+                command: executingCommands[1] ?? `git commit -m "..."`,
                 info: `分支: ${gitInfo.branch || "unknown"} | 信息: ${commitMessage.trim()}`
               },
               ...(gitInfo.hasRemote
@@ -484,7 +497,7 @@ export function GitFileOperationPrompt({
                     {
                       step: 2,
                       label: "推送到远程仓库",
-                      command: "git push",
+                      command: executingCommands[2] ?? `git push`,
                       info: `推送到 ${
                         gitInfo.remote
                           ? gitInfo.remote.split("/").pop()?.replace(".git", "")

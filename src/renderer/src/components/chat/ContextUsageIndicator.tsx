@@ -75,19 +75,21 @@ function formatTokenCountFull(tokens: number): string {
 interface ContextUsageIndicatorProps {
   tokenUsage: TokenUsage | null
   modelId: string
+  contextLimit?: number
   className?: string
 }
 
 export function ContextUsageIndicator({
   tokenUsage,
   modelId,
+  contextLimit: contextLimitProp,
   className
 }: ContextUsageIndicatorProps): React.JSX.Element | null {
   if (!tokenUsage) {
     return null
   }
 
-  const contextLimit = getContextLimit(modelId)
+  const contextLimit = contextLimitProp ?? getContextLimit(modelId)
   const usedTokens = tokenUsage.inputTokens
   const usagePercent = Math.min((usedTokens / contextLimit) * 100, 100)
 

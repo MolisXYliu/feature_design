@@ -28,6 +28,50 @@ import * as iconv from "iconv-lite"
 import * as chardet from "jschardet"
 import micromatch from "micromatch"
 import { replace } from "./replace"
+import type { ToolOrchestrator } from "./tool-orchestrator"
+import { homedir, tmpdir } from "node:os"
+import type { HookConfig } from "../hooks/types"
+import { runHooks } from "../hooks/runner"
+
+/**
+ * Sensitive directories under user profile that sandbox tools should not access.
+ * Matches codex's USERPROFILE_READ_ROOT_EXCLUSIONS.
+ */
+const SENSITIVE_DIR_NAMES = new Set([
+  ".ssh", ".gnupg", ".aws", ".azure", ".kube",
+  ".docker", ".config", ".npm", ".pki", ".terraform.d"
+])
+
+const WINDOWS_SANDBOX_OFFLINE_USERNAME = "CodexSandboxOffline"
+const WINDOWS_SANDBOX_ONLINE_USERNAME = "CodexSandboxOnline"
+
+/**
+ * Check if a path falls within a sensitive directory that should be blocked
+ * when sandbox mode is elevated.
+ */
+function isSensitivePath(filePath: string): boolean {
+  const home = homedir()
+  const normalized = path.resolve(filePath).replace(/\\/g, "/")
+  const homeNorm = home.replace(/\\/g, "/")
+
+  // Only restrict paths under user profile
+  if (!normalized.toLowerCase().startsWith(homeNorm.toLowerCase() + "/")) {
+    return false
+  }
+
+  // Get the first path segment relative to home
+  const relative = normalized.slice(homeNorm.length + 1)
+  const firstSegment = relative.split("/")[0]
+  return SENSITIVE_DIR_NAMES.has(firstSegment.toLowerCase())
+}
+
+function powershellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function cmdSetLiteral(value: string): string {
+  return value.replace(/"/g, '""')
+}
 
 /**
  * Options for LocalSandbox configuration.
@@ -45,10 +89,17 @@ export interface LocalSandboxOptions {
   maxOutputBytes?: number
   /** Environment variables to pass to commands (default: process.env) */
   env?: Record<string, string>
-  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'none' runs directly (default: 'none') */
-  windowsSandbox?: "none" | "unelevated" | "readonly"
+  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'elevated' uses dedicated sandbox user isolation, 'none' runs directly (default: 'none') */
+  windowsSandbox?: "none" | "unelevated" | "readonly" | "elevated"
   /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
   codexExePath?: string
+  /** Hook configurations for PreToolUse/PostToolUse lifecycle events.
+   *  Accepts a getter function so hooks are always read fresh from storage. */
+  hooks?: HookConfig[] | (() => HookConfig[])
+  /** AbortSignal for cancelling running child processes when the user aborts.
+   *  When signalled, any in-flight execute() will kill its child process immediately
+   *  (SIGTERM → 200ms → SIGKILL), matching OpenCode/Codex abort behaviour. */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -78,13 +129,86 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly maxOutputBytes: number
   private readonly env: Record<string, string>
   private readonly workingDir: string
-  private readonly windowsSandbox: "none" | "unelevated" | "readonly"
+  private readonly windowsSandbox: "none" | "unelevated" | "readonly" | "elevated"
   private readonly codexExePath: string
+  private readonly getHooks: () => HookConfig[]
+  /** Host user's TEMP directory — ACL-granted writable by the elevated sandbox user. */
+  private readonly _elevatedMavenTempDir: string
+  /** Optional orchestrator for fine-grained approval + sandbox retry */
+  private orchestrator?: ToolOrchestrator
+  /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
+  private abortSignal?: AbortSignal
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
   private readonly _virtualMode: boolean
   private readonly _cwd: string
   private readonly _maxFileSizeBytes: number
+  /** Per-file Promise chain lock to serialize concurrent read-write operations */
+  private readonly _fileLocks = new Map<string, Promise<void>>()
+  /** mtime recorded after each successful read/write, for external-modification detection */
+  private readonly _fileReadTimes = new Map<string, number>()
+
+  private static getElevatedSandboxUserProfileRoot(networkEnabled: boolean): string {
+    const username = networkEnabled ? WINDOWS_SANDBOX_ONLINE_USERNAME : WINDOWS_SANDBOX_OFFLINE_USERNAME
+    const systemDrive = process.env.SystemDrive || "C:"
+    return path.win32.join(systemDrive, "Users", username)
+  }
+
+  private static buildElevatedSandboxEnvPreamble(shellBase: string, realTempDir: string): string {
+    const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
+    const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
+    const homePath = profileRoot.slice(homeDrive.length) || "\\"
+    const localAppData = path.win32.join(profileRoot, "AppData", "Local")
+    const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
+    // Use the host user's real TEMP for maven.repo.local — it is ACL-granted writable by
+    // the sandbox user (included in write_roots during elevated setup). The sandbox user's
+    // own profile TEMP (C:\Users\CodexSandboxOnline\...\Temp) is NOT granted write access
+    // by the ACL setup, so we must NOT redirect TEMP/TMP to it.
+    const mavenRepoLocal = path.win32.join(realTempDir, "m2-sandbox-repo")
+    const envOverrides: Array<[string, string]> = [
+      ["USERPROFILE", profileRoot],
+      ["HOME", profileRoot],
+      ["HOMEDRIVE", homeDrive],
+      ["HOMEPATH", homePath],
+      ["APPDATA", roamingAppData],
+      ["LOCALAPPDATA", localAppData],
+      // TEMP/TMP intentionally NOT redirected: the sandbox user profile's Temp directory
+      // is not ACL-writable, but the host user's TEMP (used for maven.repo.local) is.
+      ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
+      ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
+    ]
+
+    if (shellBase === "cmd") {
+      const base = envOverrides
+        .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
+        .join(" & ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
+      // realTempDir already exists, so no mkdir needed.
+      return `${base} & set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
+    }
+
+    if (shellBase === "pwsh" || shellBase === "powershell") {
+      const base = envOverrides
+        .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
+        .join("; ")
+      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
+      // NOTE: Do NOT use powershellSingleQuote here — single quotes inside a double-quoted
+      // string are literal characters in PowerShell. Maven would receive the quote as part
+      // of the path, causing it to be treated as a relative path and prepended with cwd.
+      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")}"`
+    }
+
+    return ""
+  }
+
+  private static shouldFallbackToUnelevatedForNetworkAuth(output: string): boolean {
+    const lower = output.toLowerCase()
+    return lower.includes("sec_e_no_credentials")
+      || lower.includes("no credentials are available in the security package")
+      || output.includes("安全包中没有凭据")
+      || (lower.includes("schannel") && lower.includes("credential"))
+      || (output.includes("Invoke-WebRequest") && output.includes("认证失败"))
+  }
 
   constructor(options: LocalSandboxOptions = {}) {
     super({
@@ -94,7 +218,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     })
 
     this.id = `local-sandbox-${randomUUID().slice(0, 8)}`
-    this.timeout = options.timeout ?? 120_000 // 2 minutes default
+    this.timeout = options.timeout ?? 60_000 // 1 minute default
     this.maxOutputBytes = options.maxOutputBytes ?? 100_000 // ~100KB default
     const baseEnv = options.env ?? ({ ...process.env } as Record<string, string>)
     // Ensure UTF-8 locale for spawned shells (Git Bash via pipe defaults to
@@ -107,6 +231,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.workingDir = options.rootDir ?? process.cwd()
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
+    const h = options.hooks
+    this.getHooks = typeof h === "function" ? h : () => h ?? []
+    this._elevatedMavenTempDir = baseEnv.TEMP || baseEnv.TMP || tmpdir()
+    this.abortSignal = options.abortSignal
 
     // Eagerly cache the elevation check during construction to avoid blocking
     // the event loop on the first file-write hot path (execSync("net session")).
@@ -132,6 +260,35 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
     }
 
+  }
+
+  /**
+   * Check if a path is blocked by sandbox policy.
+   * When sandbox is elevated, sensitive directories (e.g. .ssh, .aws) are blocked.
+   */
+  private isBlockedBySandbox(filePath: string): boolean {
+    if (this.windowsSandbox !== "elevated") return false
+    try {
+      const resolved = this._resolvePath(filePath)
+      return isSensitivePath(resolved)
+    } catch {
+      return isSensitivePath(filePath)
+    }
+  }
+
+  /** Inject the approval orchestrator (called from runtime.ts). */
+  setOrchestrator(orch: ToolOrchestrator): void {
+    this.orchestrator = orch
+  }
+
+  /** Expose the sandbox mode for the orchestrator. */
+  getSandboxMode(): "none" | "unelevated" | "readonly" | "elevated" {
+    return this.windowsSandbox
+  }
+
+  /** Expose the working dir for the orchestrator. */
+  getWorkingDir(): string {
+    return this.workingDir
   }
 
   private patchResolvePath(): void {
@@ -180,6 +337,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     glob?: string | null
   ): Promise<GrepMatch[] | string> {
     const resolved = dirPath ?? "/"
+
+    // Block grep on sensitive directories
+    if (this.isBlockedBySandbox(resolved)) {
+      return []
+    }
 
     // Resolve the base path once for reuse
     let baseFull: string
@@ -263,6 +425,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     if (results.length === 0) return results
 
+    // Filter out any results from sensitive directories
+    if (this.windowsSandbox === "elevated") {
+      results = results.filter(m => {
+        try {
+          const resolved = this._resolvePath(m.path)
+          return !isSensitivePath(resolved)
+        } catch {
+          return !isSensitivePath(m.path)
+        }
+      })
+      if (results.length === 0) return results
+    }
+
     const capped: GrepMatch[] = []
     let charCount = 0
 
@@ -301,7 +476,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * of files and consume context on small windows.
    */
   async globInfo(pattern: string, path = "/"): Promise<FileInfo[]> {
-    const infos = await super.globInfo(pattern, path)
+    if (this.isBlockedBySandbox(path)) {
+      return []
+    }
+    let infos = await super.globInfo(pattern, path)
+    // Filter out any results that fall within sensitive directories
+    if (this.windowsSandbox === "elevated") {
+      infos = infos.filter(f => {
+        try {
+          const resolved = this._resolvePath(f.path)
+          return !isSensitivePath(resolved)
+        } catch {
+          return true
+        }
+      })
+    }
     if (infos.length <= LocalSandbox.MAX_GLOB_ENTRIES) return infos
 
     const capped = infos.slice(0, LocalSandbox.MAX_GLOB_ENTRIES)
@@ -322,7 +511,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Light cap for ls to avoid pathological large directory listings.
    */
   async lsInfo(path: string): Promise<FileInfo[]> {
-    const infos = await super.lsInfo(path)
+    if (this.isBlockedBySandbox(path)) {
+      return [{ path: "Error: Access denied — this directory is restricted by sandbox policy.", is_dir: false } as FileInfo]
+    }
+    let infos = await super.lsInfo(path)
+    // Filter out any results that fall within sensitive directories
+    if (this.windowsSandbox === "elevated") {
+      infos = infos.filter(f => {
+        try {
+          const resolved = this._resolvePath(f.path)
+          return !isSensitivePath(resolved)
+        } catch {
+          return true
+        }
+      })
+    }
     if (infos.length <= LocalSandbox.MAX_LS_ENTRIES) return infos
 
     const capped = infos.slice(0, LocalSandbox.MAX_LS_ENTRIES)
@@ -436,12 +639,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    *  - Binary file detection as fallback when jschardet fails
    */
   async read(filePath: string, offset = 0, limit = 500): Promise<string> {
+    if (this.isBlockedBySandbox(filePath)) {
+      return `Error: Access denied — '${filePath}' is restricted by sandbox policy.`
+    }
     try {
       const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
 
       const ext = path.extname(resolvedPath).toLowerCase()
       const encoding = this.detectEncoding(buffer, ext)
       const content = iconv.decode(buffer, encoding)
+      await this.recordReadTime(resolvedPath)
 
       if (!content || content.trim() === "") return "System reminder: File exists but has empty contents"
 
@@ -493,6 +700,51 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     return { buffer, resolvedPath }
+  }
+
+  // ── File safety helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Serialize concurrent operations on the same resolved file path.
+   * Different file paths run in parallel; same path is FIFO-queued.
+   */
+  private async withFileLock<T>(resolvedPath: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this._fileLocks.get(resolvedPath) ?? Promise.resolve()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => { release = r })
+    const tail = prev.then(() => gate)
+    this._fileLocks.set(resolvedPath, tail)
+    try {
+      await prev
+      return await fn()
+    } finally {
+      release()
+      if (this._fileLocks.get(resolvedPath) === tail) {
+        this._fileLocks.delete(resolvedPath)
+      }
+    }
+  }
+
+  /** Record the file's mtime after a successful read or write. */
+  private async recordReadTime(resolvedPath: string): Promise<void> {
+    const stat = await fs.stat(resolvedPath)
+    this._fileReadTimes.set(resolvedPath, stat.mtimeMs)
+  }
+
+  /**
+   * Assert that a file has not been modified externally since the last read.
+   * Compares file mtime against the recorded mtime — same clock source, no drift.
+   */
+  private async assertNotModifiedSinceRead(resolvedPath: string): Promise<void> {
+    const recordedMtime = this._fileReadTimes.get(resolvedPath)
+    if (recordedMtime === undefined) return // first edit without a prior read() — allow it
+    const stat = await fs.stat(resolvedPath)
+    // 50ms tolerance for filesystem timestamp granularity (NTFS async flush, HFS+ 1s resolution)
+    if (stat.mtimeMs > recordedMtime + 50) {
+      throw new Error(
+        `File has been modified externally since last read. Please read the file again before editing.`
+      )
+    }
   }
 
   /**
@@ -566,21 +818,52 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Override write to enforce readonly sandbox restrictions.
    */
   async write(filePath: string, content: string): Promise<WriteResult> {
+    if (this.isBlockedBySandbox(filePath)) {
+      return { error: `Access denied — '${filePath}' is restricted by sandbox policy.` }
+    }
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "写入") }
     }
-    return super.write(filePath, content)
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "write_file",
+      toolArgs: { filePath, content },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return { error: `[Hook blocked] ${preResult.stdout || "write_file was blocked by a hook"}` }
+    }
+    const resolvedPath = this._resolvePath(filePath)
+    const result = await this.withFileLock(resolvedPath, async () => {
+      const r = await super.write(filePath, content)
+      if (!r.error) {
+        await this.recordReadTime(resolvedPath)
+      }
+      return r
+    })
+    // PostToolUse hook (fire-and-forget)
+    runHooks(this.getHooks(), "PostToolUse", {
+      toolName: "write_file",
+      toolArgs: { filePath, content },
+      toolResult: JSON.stringify(result),
+      workspacePath: this.workingDir
+    }).catch((e) => console.warn("[Hooks] PostToolUse write error:", e))
+    return result
   }
 
   /**
    * Override uploadFiles to enforce readonly sandbox restrictions on each file.
    */
   async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
-    if (this.windowsSandbox !== "readonly") return super.uploadFiles(files)
+    // Check for both sandbox-sensitive and readonly-blocked files
+    const indexed = files.map(([filePath, content], i) => ({
+      filePath, content, i,
+      sandboxBlocked: this.isBlockedBySandbox(filePath),
+      writeBlocked: this.isWriteBlocked(filePath)
+    }))
+    const allowed = indexed.filter((e) => !e.sandboxBlocked && !e.writeBlocked)
 
-    // Separate blocked files from allowed files, preserving original order
-    const indexed = files.map(([filePath, content], i) => ({ filePath, content, i, blocked: this.isWriteBlocked(filePath) }))
-    const allowed = indexed.filter((e) => !e.blocked)
+    if (allowed.length === files.length) return super.uploadFiles(files)
 
     // Batch-delegate all allowed files in one call
     const allowedResults = allowed.length > 0
@@ -591,9 +874,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const results: { path: string; error: string | null }[] = new Array(files.length)
     let ai = 0
     for (const entry of indexed) {
-      results[entry.i] = entry.blocked
-        ? { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
-        : allowedResults[ai++]
+      if (entry.sandboxBlocked) {
+        results[entry.i] = { path: entry.filePath, error: `Access denied — '${entry.filePath}' is restricted by sandbox policy.` }
+      } else if (entry.writeBlocked) {
+        results[entry.i] = { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
+      } else {
+        results[entry.i] = allowedResults[ai++]
+      }
     }
     return results
   }
@@ -604,6 +891,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * 2. Use OpenCode's 9-layer progressive string replacement for better
    *    tolerance of LLM-generated oldString variations (whitespace, indent, escapes)
    * 3. Write back in the original encoding to avoid corrupting non-UTF-8 files
+   * 4. File lock to prevent concurrent writes to the same file
+   * 5. Timestamp check to detect external modifications since last read
    */
   async edit(
     filePath: string,
@@ -611,25 +900,56 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     newString: string,
     replaceAll = false
   ): Promise<EditResult> {
+    if (this.isBlockedBySandbox(filePath)) {
+      return { error: `Access denied — '${filePath}' is restricted by sandbox policy.` }
+    }
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "编辑") }
     }
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "edit_file",
+      toolArgs: { filePath, oldString, newString, replaceAll },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return { error: `[Hook blocked] ${preResult.stdout || "edit_file was blocked by a hook"}` }
+    }
     try {
-      const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
-      const ext = path.extname(resolvedPath).toLowerCase()
-      const encoding = this.detectEncoding(buffer, ext)
-      const content = iconv.decode(buffer, encoding)
+      const resolvedPath = this._resolvePath(filePath)
+      const result = await this.withFileLock(resolvedPath, async () => {
+        const { buffer } = await this.readFileBuffer(filePath)
+        const ext = path.extname(resolvedPath).toLowerCase()
+        const encoding = this.detectEncoding(buffer, ext)
+        const content = iconv.decode(buffer, encoding)
 
-      if (content === "" && oldString === "") {
-        await this.writeFileEncoded(resolvedPath, newString, encoding)
-        return { path: filePath, filesUpdate: null, occurrences: 0 }
-      }
+        // Check file hasn't been modified externally since last read
+        await this.assertNotModifiedSinceRead(resolvedPath)
 
-      const { newContent, occurrences } = replace(content, oldString, newString, replaceAll)
+        let expectedContent: string
+        let occurrences: number
 
-      await this.writeFileEncoded(resolvedPath, newContent, encoding)
+        if (content === "" && oldString === "") {
+          expectedContent = newString
+          occurrences = 0
+        } else {
+          const r = replace(content, oldString, newString, replaceAll)
+          expectedContent = r.newContent
+          occurrences = r.occurrences
+        }
 
-      return { path: filePath, filesUpdate: null, occurrences }
+        await this.writeFileEncoded(resolvedPath, expectedContent, encoding)
+        await this.recordReadTime(resolvedPath)
+        return { path: filePath, filesUpdate: null, occurrences }
+      })
+      // PostToolUse hook (fire-and-forget)
+      runHooks(this.getHooks(), "PostToolUse", {
+        toolName: "edit_file",
+        toolArgs: { filePath, oldString, newString, replaceAll },
+        toolResult: JSON.stringify(result),
+        workspacePath: this.workingDir
+      }).catch((e) => console.warn("[Hooks] PostToolUse edit error:", e))
+      return result
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       return { error: `Error editing file '${filePath}': ${msg}` }
@@ -881,20 +1201,58 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Cached result of admin elevation check. */
   private static _isElevated: boolean | null = null
 
-  /** Check if the current process is running with administrator privileges (Windows only). Cached after first call. */
+  /**
+   * Check if the current process is running with administrator privileges (Windows only).
+   * Cached after first call.
+   *
+   * IMPORTANT: In packaged Electron apps, process.cwd() may point to an
+   * invalid or ASAR-internal path, causing execSync to fail even when the
+   * process IS elevated. We explicitly set cwd to %SYSTEMROOT% and add
+   * windowsHide to prevent spurious failures.
+   *
+   * Uses two detection methods:
+   * 1. `net session` — classic, depends on LanmanServer service
+   * 2. `whoami /groups` + High Mandatory Level SID (S-1-16-12288) — most reliable,
+   *    queries the process token directly, no service dependency
+   *
+   * NOTE: Do NOT use `fsutil dirty query` — it succeeds without admin on Windows 11.
+   */
   static isElevated(): boolean {
     if (LocalSandbox._isElevated !== null) return LocalSandbox._isElevated
     if (process.platform !== "win32") {
       LocalSandbox._isElevated = false
       return false
     }
+    // Use a known-good cwd to avoid failures in packaged Electron apps
+    // where process.cwd() may point inside app.asar or a non-existent directory.
+    const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
+
+    // Method 1: net session (requires admin, depends on LanmanServer service)
     try {
-      execSync("net session", { stdio: "ignore" })
+      execSync("net session", { stdio: "ignore", windowsHide: true, cwd: safeCwd })
       LocalSandbox._isElevated = true
-    } catch {
-      LocalSandbox._isElevated = false
+      console.log("[LocalSandbox] isElevated=true (net session)")
+      return true
+    } catch (e) {
+      console.log("[LocalSandbox] net session failed:", (e as Error).message?.slice(0, 120))
     }
-    return LocalSandbox._isElevated
+    // Method 2: whoami /groups — check for High Mandatory Level SID (S-1-16-12288)
+    // This queries the process token directly, independent of any service.
+    // High = admin elevated, Medium (S-1-16-8192) = normal user or non-elevated admin.
+    try {
+      const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
+      if (output.includes("S-1-16-12288")) {
+        LocalSandbox._isElevated = true
+        console.log("[LocalSandbox] isElevated=true (whoami /groups)")
+        return true
+      }
+      console.log("[LocalSandbox] whoami: no High Mandatory Level SID found")
+    } catch (e) {
+      console.log("[LocalSandbox] whoami failed:", (e as Error).message?.slice(0, 120))
+    }
+    LocalSandbox._isElevated = false
+    console.log("[LocalSandbox] isElevated=false")
+    return false
   }
 
   /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done. */
@@ -932,6 +1290,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   private static readonly SIGKILL_TIMEOUT_MS = 200
+  /** Max time (ms) to wait for stdout/stderr to drain after killing a process (matches Codex IO_DRAIN_TIMEOUT_MS). */
+  private static readonly IO_DRAIN_TIMEOUT_MS = 2_000
 
   /**
    * Kill a process tree in a platform-aware manner.
@@ -940,7 +1300,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    */
   private static async killTree(proc: ChildProcess, exited: () => boolean): Promise<void> {
     const pid = proc.pid
-    if (!pid || exited()) return
+    if (!pid || exited()) {
+      console.log(`[LocalSandbox] killTree: skip (pid=${pid}, exited=${exited()})`)
+      return
+    }
+    console.log(`[LocalSandbox] killTree: killing pid=${pid}, platform=${process.platform}`)
 
     if (process.platform === "win32") {
       await new Promise<void>((res) => {
@@ -952,15 +1316,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     try {
+      console.log(`[LocalSandbox] killTree: SIGTERM → pid=${pid}`)
       process.kill(-pid, "SIGTERM")
     } catch {
       try { proc.kill("SIGTERM") } catch { /* already exited */ }
     }
     await new Promise<void>((res) => setTimeout(res, LocalSandbox.SIGKILL_TIMEOUT_MS))
     if (!exited()) {
+      console.log(`[LocalSandbox] killTree: SIGKILL → pid=${pid} (not exited after ${LocalSandbox.SIGKILL_TIMEOUT_MS}ms)`)
       try { process.kill(-pid, "SIGKILL") } catch {
         try { proc.kill("SIGKILL") } catch { /* already exited */ }
       }
+    } else {
+      console.log(`[LocalSandbox] killTree: pid=${pid} exited after SIGTERM, no SIGKILL needed`)
     }
   }
 
@@ -989,8 +1357,79 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
-    if (process.platform === "win32" && this.windowsSandbox !== "none") {
-      return this.executeInWindowsSandbox(command)
+    console.log(`[LocalSandbox] execute: hasOrchestrator=${!!this.orchestrator} sandbox=${this.windowsSandbox}`)
+
+    // Always check forbidden commands, even without orchestrator (YOLO mode safety net)
+    const { assessCommandSafety } = await import("./exec-policy")
+    const safety = assessCommandSafety(command, this.workingDir, {
+      windowsShell: process.platform === "win32" && this.windowsSandbox !== "none" ? "powershell" : "unknown"
+    })
+    if (safety.level === "forbidden") {
+      console.log(`[LocalSandbox] execute: FORBIDDEN — ${safety.reason}`)
+      return {
+        output: `Command forbidden: ${safety.reason}`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
+    // PreToolUse hook
+    const preResult = await runHooks(this.getHooks(), "PreToolUse", {
+      toolName: "execute",
+      toolArgs: { command },
+      workspacePath: this.workingDir
+    })
+    if (preResult?.blocked) {
+      return {
+        output: `[Hook blocked] ${preResult.stdout || "execute was blocked by a hook"}`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
+    // If an orchestrator is configured, delegate to it for approval + sandbox retry.
+    // The orchestrator calls back into executeRaw() for actual execution.
+    if (this.orchestrator) {
+      const result = await this.orchestrator.execute(command, this.workingDir, this.windowsSandbox)
+      // PostToolUse hook
+      const postResult = await runHooks(this.getHooks(), "PostToolUse", {
+        toolName: "execute",
+        toolArgs: { command },
+        toolResult: result.output,
+        workspacePath: this.workingDir
+      })
+      if (postResult?.stdout) {
+        return { ...result, output: result.output + "\n\n[Hook output]\n" + postResult.stdout }
+      }
+      return result
+    }
+
+    const result = await this.executeRaw(command)
+    // PostToolUse hook
+    const postResult = await runHooks(this.getHooks(), "PostToolUse", {
+      toolName: "execute",
+      toolArgs: { command },
+      toolResult: result.output,
+      workspacePath: this.workingDir
+    })
+    if (postResult?.stdout) {
+      return { ...result, output: result.output + "\n\n[Hook output]\n" + postResult.stdout }
+    }
+    return result
+  }
+
+  /**
+   * Raw command execution — no approval logic.
+   * Called directly by the orchestrator after approval is granted,
+   * or as fallback when no orchestrator is configured.
+   */
+  async executeRaw(command: string, sandboxModeOverride?: string): Promise<ExecuteResponse> {
+    const effectiveSandboxMode = (sandboxModeOverride ?? this.windowsSandbox) as typeof this.windowsSandbox
+    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride}`)
+
+    if (process.platform === "win32" && effectiveSandboxMode !== "none") {
+      console.log(`[LocalSandbox] → executeInWindowsSandbox (elevated path)`)
+      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode)
     }
 
     const isWindows = process.platform === "win32"
@@ -1027,11 +1466,35 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /**
    * Execute a command inside the Codex Windows sandbox.
-   * - unelevated: restricted token + NTFS ACL (workdir writable, network blocked)
-   * - readonly: read-only for normal users; admin allows cwd write
+   * - unelevated: restricted token + NTFS ACL (workdir writable, network follows host policy)
+   * - readonly: read-only filesystem sandbox with outbound network allowed
+   * - elevated: dedicated sandbox user + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private async executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated"): Promise<ExecuteResponse> {
+    const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
+    const isElevatedSandbox = effectiveMode === "elevated"
+
+    // Elevated mode: proactively ensure the workspace has ACL setup before spawning codex.exe.
+    // This prevents the command from silently blocking mid-execution when codex.exe returns
+    // "setup refresh failed" (which triggers a reactive UAC mid-command).
+    // Using persistent cache so workspaces only need setup once, across restarts.
+    if (isElevatedSandbox && attempt === 1) {
+      const { isWorkspaceElevatedSetupDone, runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } =
+        await import("../ipc/sandbox")
+      if (!isWorkspaceElevatedSetupDone(this.workingDir)) {
+        console.log(`[LocalSandbox] elevated: workspace not yet ACL-configured, running setup proactively: ${this.workingDir}`)
+        const setupResult = await runElevatedSetupForPaths([this.workingDir])
+        if (setupResult.success) {
+          markWorkspaceElevatedSetupDone(this.workingDir)
+          console.log(`[LocalSandbox] elevated: proactive setup done for ${this.workingDir}`)
+        } else {
+          console.warn(`[LocalSandbox] elevated: proactive setup failed: ${setupResult.error}`)
+          // Continue anyway — codex.exe will handle "setup refresh failed" reactively as fallback
+        }
+      }
+    }
+
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
@@ -1047,55 +1510,91 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       : shellBase === "pwsh" || shellBase === "powershell"
         ? `${psUtf8Preamble}; ${command}`
         : command
+    const sandboxUserEnvPreamble = isElevatedSandbox
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir)
+      : ""
+    const commandWithSandboxEnv = sandboxUserEnvPreamble
+      ? shellBase === "cmd"
+        ? `${sandboxUserEnvPreamble} & ${effectiveCommand}`
+        : `${sandboxUserEnvPreamble}; ${effectiveCommand}`
+      : effectiveCommand
 
-    const isReadonly = this.windowsSandbox === "readonly"
+    const isReadonly = effectiveMode === "readonly"
     const elevated = isReadonly && LocalSandbox.isElevated()
 
+    // elevated: dedicated sandbox user, codex.exe handles the isolation internally
     // readonly + admin: grant full read + cwd write so admin can work in workspace
     // readonly + non-admin: read only, all writes blocked
     // unelevated: workdir writable via --full-auto + ACL
-    const sandboxArgs = isReadonly
-      ? elevated
+    let sandboxArgs: string[]
+    if (isElevatedSandbox) {
+      // -c is a global flag and must come before the "sandbox" subcommand
+      sandboxArgs = [
+        "-c", 'windows.sandbox="elevated"',
+        "-c", "sandbox_workspace_write.network_access=true",
+        "sandbox", "windows",
+        "--full-auto",
+        "--",
+        shell, ...shellFlags, commandWithSandboxEnv
+      ]
+    } else if (isReadonly) {
+      sandboxArgs = elevated
         ? [
-            "sandbox", "windows",
+            "-c", 'sandbox_policy={ type = "read-only", access = { type = "full-access" }, network_access = true }',
             "-c", 'sandbox_permissions=["disk-full-read-access","disk-write-cwd"]',
+            "sandbox", "windows",
             "--",
-            shell, ...shellFlags, effectiveCommand
+            shell, ...shellFlags, commandWithSandboxEnv
           ]
         : [
-            "sandbox", "windows",
+            "-c", 'sandbox_policy={ type = "read-only", access = { type = "full-access" }, network_access = true }',
             "-c", 'sandbox_permissions=["disk-full-read-access"]',
+            "sandbox", "windows",
             "--",
-            shell, ...shellFlags, effectiveCommand
+            shell, ...shellFlags, commandWithSandboxEnv
           ]
-      : [
-          "sandbox", "windows",
-          "--full-auto",
-          "--",
-          shell, ...shellFlags, effectiveCommand
-        ]
+    } else {
+      sandboxArgs = [
+        "-c", "sandbox_workspace_write.network_access=true",
+        "sandbox", "windows",
+        "--full-auto",
+        "--",
+        shell, ...shellFlags, commandWithSandboxEnv
+      ]
+    }
 
-    // ACL grant/revoke needed for unelevated mode and readonly+admin (restricted token still needs NTFS permission).
-    // Readonly non-admin also needs TEMP writable so commands (git, python, etc.) that write temp files don't fail.
+    // Elevated sandbox manages its own ACLs internally — skip manual icacls grants.
+    // For other modes: ACL grant/revoke needed for unelevated and readonly+admin.
     const aclDirs: string[] = []
-    if (!isReadonly || elevated) {
-      aclDirs.push(this.workingDir)
+    if (!isElevatedSandbox) {
+      if (!isReadonly || elevated) {
+        aclDirs.push(this.workingDir)
+      }
+      // Always grant TEMP write for non-elevated sandbox modes — even readonly non-admin
+      // needs it for commands that create temp files.
+      const tmpDir = process.env.TEMP || process.env.TMP
+      if (tmpDir && !aclDirs.includes(tmpDir)) {
+        aclDirs.push(tmpDir)
+      }
+      await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
     }
-    // Always grant TEMP write for all sandbox modes — even readonly non-admin
-    // needs it for commands that create temp files.
-    const tmpDir = process.env.TEMP || process.env.TMP
-    if (tmpDir && !aclDirs.includes(tmpDir)) {
-      aclDirs.push(tmpDir)
-    }
-    await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
 
     try {
-    return await new Promise<ExecuteResponse>((resolve) => {
+    const result = await new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
       let totalBytes = 0
       let resolved = false
       let exited = false
+
+      // Early return if already aborted — avoid spawning a process just to kill it.
+      if (this.abortSignal?.aborted) {
+        resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
+        return
+      }
+
+      console.log(`[LocalSandbox] spawn: ${this.codexExePath} ${JSON.stringify(sandboxArgs)}`)
+      console.log(`[LocalSandbox] cwd: ${this.workingDir}`)
 
       // spawn() reports ENOENT asynchronously via the "error" event, not by throwing
       const proc = spawn(this.codexExePath, sandboxArgs, {
@@ -1104,27 +1603,43 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         stdio: ["ignore", "pipe", "pipe"]
       })
 
+      console.log(`[LocalSandbox] spawned pid=${proc.pid}`)
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+      let timedOut = false
+      let aborted = false
+      let drainTimerId: ReturnType<typeof setTimeout> | null = null
 
       const killProc = (): void => {
         void LocalSandbox.killTree(proc, () => exited)
       }
 
       const timeoutId = setTimeout(() => {
-        if (!resolved) {
-          resolved = true
-          LocalSandbox.activeProcesses.delete(proc)
-          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          killProc()
-          resolve({
-            output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
-            exitCode: null,
-            truncated: false
-          })
-        }
+        if (resolved || timedOut || aborted) return
+        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${this.timeout}ms`)
+        timedOut = true
+        killProc()
+        drainTimerId = setTimeout(() => {
+          console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }, this.timeout)
+
+      const abortHandler = (): void => {
+        if (resolved || timedOut || aborted) return
+        console.log(`[LocalSandbox] abort: pid=${proc.pid}, killing immediately`)
+        aborted = true
+        clearTimeout(timeoutId)
+        killProc()
+        drainTimerId = setTimeout(() => {
+          console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
+      }
+      if (this.abortSignal) {
+        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      }
 
       proc.stdout?.on("data", (chunk: Buffer) => {
         if (totalBytes < this.maxOutputBytes) {
@@ -1141,12 +1656,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       const collectAndResolve = (code: number | null, signal: string | null): void => {
-        if (resolved) return
+        if (resolved) {
+          console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
+          return
+        }
+        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
         resolved = true
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
@@ -1168,7 +1690,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         }
         if (!output.trim()) output = "<no output>"
 
-        resolve({ output, exitCode: signal ? null : code, truncated })
+        if (aborted) {
+          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 130, truncated })
+        } else if (timedOut) {
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 124, truncated })
+        } else {
+          resolve({ output, exitCode: signal ? null : code, truncated })
+        }
       }
 
       proc.on("exit", (code, signal) => {
@@ -1189,7 +1719,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const errno = err as NodeJS.ErrnoException
         if (errno.code === "EPERM" && attempt <= LocalSandbox.SPAWN_RETRY_COUNT) {
@@ -1197,7 +1729,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
             `[LocalSandbox] codex.exe EPERM attempt ${attempt}/${LocalSandbox.SPAWN_RETRY_COUNT + 1}, retrying in ${LocalSandbox.SPAWN_RETRY_DELAY_MS}ms…`
           )
           setTimeout(() => {
-            resolve(this.executeInWindowsSandbox(command, attempt + 1))
+            resolve(this.executeInWindowsSandbox(command, attempt + 1, sandboxModeOverride))
           }, LocalSandbox.SPAWN_RETRY_DELAY_MS)
           return
         }
@@ -1210,6 +1742,39 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         })
       })
     })
+
+    // Elevated mode: if "setup refresh failed", run elevated setup for this workspace (one-time UAC) and retry
+    if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed")) {
+      console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC...`)
+      const { runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } = await import("../ipc/sandbox")
+      const setupResult = await runElevatedSetupForPaths([this.workingDir])
+      if (setupResult.success) {
+        markWorkspaceElevatedSetupDone(this.workingDir)
+        // Retry the command now that ACLs are in place
+        return this.executeInWindowsSandbox(command, attempt, sandboxModeOverride)
+      }
+      return {
+        output: `沙箱工作目录配置失败: ${setupResult.error || "未知错误"}。\n请在设置中切换沙箱模式或以管理员身份运行应用。`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
+    if (
+      isElevatedSandbox
+      && result.exitCode !== 0
+      && sandboxModeOverride !== "unelevated"
+      && LocalSandbox.shouldFallbackToUnelevatedForNetworkAuth(result.output)
+    ) {
+      console.warn("[LocalSandbox] elevated network auth failed; blocking instead of auto-fallback")
+      return {
+        output: `⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。\n\n如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
+        exitCode: 1,
+        truncated: false
+      }
+    }
+
+    return result
     } finally {
       if (aclDirs.length > 0) {
         await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
@@ -1242,6 +1807,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // stdin in non-interactive mode and executes the command correctly.
       // Note: stdin was already "ignore" (commands couldn't read stdin anyway),
       // so changing to "pipe" has no practical side effects.
+
+      // Early return if already aborted — avoid spawning a process just to kill it.
+      if (this.abortSignal?.aborted) {
+        resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
+        return
+      }
+
       const shellBase = path.basename(shell).replace(/\.exe$/i, "")
       const isBashOnWin = isWindows && ["bash", "sh", "zsh"].includes(shellBase)
 
@@ -1269,26 +1841,38 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+      let timedOut = false
+      let aborted = false
+      /** After kill, if close doesn't fire within 2s, force-resolve (like Codex IO_DRAIN_TIMEOUT). */
+      let drainTimerId: ReturnType<typeof setTimeout> | null = null
 
-      // Intentionally fire-and-forget: timeout/error already resolved,
-      // kill is best-effort cleanup (same pattern as OpenCode's abort handler).
       const killProc = (): void => {
         void LocalSandbox.killTree(proc, () => exited)
       }
 
       const timeoutId = setTimeout(() => {
-        if (!resolved) {
-          resolved = true
-          LocalSandbox.activeProcesses.delete(proc)
-          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          killProc()
-          resolve({
-            output: `Error: Command timed out after ${(this.timeout / 1000).toFixed(1)} seconds.`,
-            exitCode: null,
-            truncated: false
-          })
-        }
+        if (resolved || timedOut || aborted) return
+        timedOut = true
+        killProc()
+        // Give close event up to 2s to fire (drain remaining output).
+        // If it doesn't come, force-resolve with whatever we have.
+        drainTimerId = setTimeout(() => {
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }, this.timeout)
+
+      const abortHandler = (): void => {
+        if (resolved || timedOut || aborted) return
+        aborted = true
+        clearTimeout(timeoutId)
+        killProc()
+        drainTimerId = setTimeout(() => {
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
+      }
+      if (this.abortSignal) {
+        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      }
 
       proc.stdout.on("data", (chunk: Buffer) => {
         if (byteCapReached) return
@@ -1305,12 +1889,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       const collectAndResolve = (code: number | null, signal: string | null): void => {
-        if (resolved) return
+        if (resolved) {
+          console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
+          return
+        }
+        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
         resolved = true
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
@@ -1350,7 +1941,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           output = "<no output>"
         }
 
-        resolve({ output, exitCode: signal ? null : code, truncated })
+        // Add metadata prefix for abort/timeout, override exitCode
+        if (aborted) {
+          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 130, truncated })
+        } else if (timedOut) {
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 124, truncated })
+        } else {
+          resolve({ output, exitCode: signal ? null : code, truncated })
+        }
       }
 
       // On Windows, .bat files may spawn child processes that inherit pipe handles.
@@ -1376,6 +1976,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
+        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
         resolve({
           output: `Error: Failed to execute command: ${err.message}`,
           exitCode: 1,

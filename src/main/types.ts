@@ -198,6 +198,7 @@ export interface McpConnectorConfig {
   url: string
   enabled: boolean
   advanced?: McpConnectorAdvanced
+  lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
   createdAt: string
   updatedAt: string
 }
@@ -207,19 +208,24 @@ export interface McpConnectorUpsert {
   url: string
   enabled?: boolean
   advanced?: McpConnectorAdvanced
+  lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
 }
 
 // Scheduled Task types
-export type ScheduledTaskFrequency = "once" | "manual" | "hourly" | "daily" | "weekdays" | "weekly"
+export type ScheduledTaskFrequency = "once" | "manual" | "hourly" | "daily" | "weekdays" | "weekly" | "interval"
+export type ScheduledTaskType = "action" | "reminder"
 
 export interface ScheduledTask {
   id: string
   name: string
   description: string
   prompt: string
+  taskType: ScheduledTaskType       // "action" = agent 执行操作, "reminder" = 暖心提醒
   modelId: string | null
   workDir: string | null
+  chatxRobotChatId: string | null // 关联的机器人会话ID，执行完后 HTTP 回复
   frequency: ScheduledTaskFrequency
+  intervalMinutes: number | null    // 仅 interval 类型使用，如 5 表示每5分钟
   runAt: string | null            // ISO 时间戳，仅 once 类型使用
   runAtTime: string | null       // "HH:mm" 格式，如 "09:00"
   weekday: number | null          // 0=周日, 1=周一, ..., 6=周六 (仅 weekly 使用)
@@ -236,9 +242,12 @@ export interface ScheduledTaskUpsert {
   name: string
   description: string
   prompt: string
+  taskType?: ScheduledTaskType
   modelId: string | null
   workDir: string | null
+  chatxRobotChatId?: string | null
   frequency: ScheduledTaskFrequency
+  intervalMinutes?: number | null
   runAt?: string | null
   runAtTime?: string | null
   weekday?: number | null
@@ -300,6 +309,57 @@ export interface PluginMcpServerConfig {
   url?: string
   transport?: "sse" | "streamable-http"
   headers?: Record<string, string>
+}
+
+// ── Approval / Sandbox Policy Types ──
+
+/** Review decision for command approval */
+export type ReviewDecision =
+  | "approved"            // approve this invocation only
+  | "approved_session"    // approve for the remainder of this session (cached)
+  | "approved_permanent"  // always allow this command pattern (persisted)
+  | "denied"              // reject
+  | "abort"               // abort the entire run
+
+/** Command safety classification */
+export type ExecSafetyLevel = "safe" | "needs_approval" | "forbidden"
+
+/** Fine-grained approval request sent to the renderer */
+export interface ApprovalRequest extends HITLRequest {
+  safety_level: ExecSafetyLevel
+  command: string
+  cwd: string
+  reason?: string           // why approval is needed
+  retry_reason?: string     // sandbox-failure retry context
+  allowed_approval_types: ApprovalDecisionType[]
+}
+
+export type ApprovalDecisionType = "approve" | "approve_session" | "approve_permanent" | "reject"
+
+/** Fine-grained approval decision from the renderer */
+export interface ApprovalDecision {
+  type: ApprovalDecisionType
+  tool_call_id: string
+}
+
+// ChatX types
+export interface ChatXRobotConfig {
+  chatId: string
+  httpUrl: string
+  fromId: string
+  clientId: string
+  clientSecret: string
+  channel: string
+  toUserList: string[]
+  modelId: string | null
+  workDir: string | null
+}
+
+export interface ChatXConfig {
+  enabled: boolean
+  wsUrl: string
+  userIp: string
+  robots: ChatXRobotConfig[]
 }
 
 // Skills types

@@ -71,16 +71,41 @@ import { registerGitHandlers } from "./ipc/git"
 import { registerPluginHandlers } from "./ipc/plugins"
 import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
+import { registerChatXHandlers } from "./ipc/chatx"
+import { registerHooksHandlers } from "./ipc/hooks"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
+import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
+import  os from "os";
 
 let mainWindow: BrowserWindow | null = null
+let loginWindow: BrowserWindow | null = null
 
 // Simple dev check - replaces @electron-toolkit/utils is.dev
 const isDev = !app.isPackaged
+
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  let localIP = '';
+
+  // 遍历所有网卡
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // 过滤掉 IPv6、回环地址（127.0.0.1）、内部地址
+      if (iface.family === 'IPv4' && !iface.internal) {
+        localIP = iface.address;
+        // 如果你有多个网卡（比如同时连WiFi和网线），可以根据需求选择第一个/指定网卡的IP
+        break;
+      }
+    }
+    if (localIP) break;
+  }
+
+  return localIP || '127.0.0.1';
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -130,6 +155,16 @@ function createWindow(): void {
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     console.error("[Main] Renderer process gone:", details)
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    const version = app.getVersion()
+    console.log('version---------------', version)
+    console.log('getLocalIP', getLocalIP())
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('version', version)
+      mainWindow.webContents.send('ip', getLocalIP())
+    }
   })
 
   // HMR for renderer based on electron-vite cli
@@ -211,10 +246,20 @@ if (!gotTheLock) {
     registerPluginHandlers(ipcMain)
     registerSandboxHandlers(ipcMain)
     registerOptimizerHandlers(ipcMain)
+    registerChatXHandlers(ipcMain)
+    registerHooksHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
       return process.platform
+    })
+
+    ipcMain.handle("get-local-ip", async () => {
+      return getLocalIP()
+    })
+
+    ipcMain.handle("get-version", async () => {
+      return app.getVersion()
     })
 
     ipcMain.handle("open-folder", async (_, folderPath: string) => {
@@ -247,11 +292,41 @@ if (!gotTheLock) {
       }
     })
 
+    ipcMain.handle("open-login-window", async () => {
+      if (!loginWindow) {
+        loginWindow = new BrowserWindow({
+          width: 1280,
+          height: 800,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            webviewTag: true,
+            preload: join(__dirname, "../preload/index.js"),
+          },
+        })
+      }
+      loginWindow.loadURL("https://oa-auth.paas.twf.com/auth/sso-login" +
+        "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+        "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.twf.cn/login.html`) +
+        "&response_type=code")
+    })
+
+    ipcMain.handle("close-login-window", async () => {
+      if (loginWindow && !loginWindow.isDestroyed()) {
+        loginWindow.close()
+        loginWindow = null
+      }
+      if(mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.reload()
+      }
+    })
+
     createWindow()
 
     // Start scheduled task scheduler and heartbeat service
     startScheduler()
     startHeartbeat()
+    startChatX()
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -270,6 +345,7 @@ if (!gotTheLock) {
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()
+    stopChatX()
     closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
     flush()
   })

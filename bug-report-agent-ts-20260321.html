@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bug 修复报告 - src/main/ipc/agent.ts</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      padding: 40px 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 {
+      font-size: 2.5em;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: #1d1d1f;
+    }
+    .subtitle {
+      color: #86868b;
+      font-size: 1.1em;
+      margin-bottom: 40px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .severity {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.75em;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .severity.critical { background: #fee2e2; color: #dc2626; }
+    .severity.medium { background: #fef3c7; color: #d97706; }
+    .severity.low { background: #dbeafe; color: #2563eb; }
+    .bug-id {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.85em;
+      color: #86868b;
+    }
+    h2 {
+      font-size: 1.3em;
+      font-weight: 600;
+      margin: 20px 0 12px;
+      color: #1d1d1f;
+    }
+    h3 {
+      font-size: 1.05em;
+      font-weight: 600;
+      margin: 16px 0 8px;
+      color: #424245;
+    }
+    p { margin-bottom: 12px; }
+    code {
+      font-family: 'SF Mono', Monaco, Consolas, monospace;
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #1d1d1f;
+      color: #f8f8f2;
+      padding: 16px 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85em;
+      line-height: 1.5;
+      margin: 12px 0;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+    .comment { color: #6a9955; }
+    .keyword { color: #569cd6; }
+    .string { color: #ce9178; }
+    .function { color: #dcdcaa; }
+    .old-code {
+      background: #fef2f2;
+      border-left: 4px solid #dc2626;
+      padding: 12px 16px;
+      margin: 12px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .new-code {
+      background: #f0fdf4;
+      border-left: 4px solid #16a34a;
+      padding: 12px 16px;
+      margin: 12px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .code-label {
+      font-size: 0.75em;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      color: #6b7280;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    th { background: #f9f9f9; font-weight: 600; }
+    .footer {
+      text-align: center;
+      color: #86868b;
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e5e5e5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Bug 修复报告</h1>
+    <p class="subtitle">src/main/ipc/agent.ts · 发现 8 个潜在问题 · 2026-03-21</p>
+
+    <!-- Bug 1 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity critical">严重</span>
+        <span class="bug-id">BUG-001</span>
+      </div>
+      <h2>并发竞态条件 - activeRuns 未正确清理</h2>
+      <p>当外部调用 <code>agent:cancel</code> 时，可能在流结束但 <code>finally</code> 未执行时就删除 <code>activeRuns</code>，导致后续流程状态不一致。</p>
+
+      <h3>修复方案：添加状态标记和双重检查</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:403-415</span>
+<span class="keyword">const</span> existingController = activeRuns.<span class="function">get</span>(threadId)
+<span class="keyword">if</span> (existingController) {
+  existingController.<span class="function">abort</span>()
+  activeRuns.<span class="function">delete</span>(threadId)
+}
+
+<span class="keyword">const</span> abortController = <span class="keyword">new</span> <span class="function">AbortController</span>()
+activeRuns.<span class="function">set</span>(threadId, abortController)</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 在 finally 中确保正确清理</span>
+<span class="keyword">let</span> isOwnRun = <span class="keyword">true</span>
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> existingController = activeRuns.<span class="function">get</span>(threadId)
+  <span class="keyword">if</span> (existingController) {
+    existingController.<span class="function">abort</span>()
+  }
+
+  <span class="keyword">const</span> abortController = <span class="keyword">new</span> <span class="function">AbortController</span>()
+  activeRuns.<span class="function">set</span>(threadId, abortController)
+
+  <span class="comment">// ... 执行逻辑 ...</span>
+} <span class="keyword">finally</span> {
+  <span class="comment">// 只删除自己设置的控制器</span>
+  <span class="keyword">if</span> (activeRuns.<span class="function">get</span>(threadId) === abortController) {
+    activeRuns.<span class="function">delete</span>(threadId)
+  }
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 2 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity medium">中等</span>
+        <span class="bug-id">BUG-002</span>
+      </div>
+      <h2>窗口关闭事件监听器未正确管理</h2>
+      <p>使用 <code>once("closed")</code> 看似安全，但如果窗口在 abort 之前关闭，事件会触发；之后若再次触发 close 事件，监听器仍可能被执行（虽然概率低）。</p>
+
+      <h3>修复方案：显式移除监听器</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:420-425</span>
+<span class="keyword">const</span> onWindowClosed = (): <span class="keyword">void</span> => {
+  abortController.<span class="function">abort</span>()
+}
+window.<span class="function">once</span>(<span class="string">"closed"</span>, onWindowClosed)</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="keyword">const</span> onWindowClosed = (): <span class="keyword">void</span> => {
+  console.<span class="function">log</span>(<span class="string">"[Agent] Window closed, aborting stream for thread:"</span>, threadId)
+  abortController.<span class="function">abort</span>()
+}
+window.<span class="function">once</span>(<span class="string">"closed"</span>, onWindowClosed)
+
+<span class="keyword">try</span> {
+  <span class="comment">// ... 执行逻辑 ...</span>
+} <span class="keyword">finally</span> {
+  window.<span class="function">removeListener</span>(<span class="string">"closed"</span>, onWindowClosed)
+  activeRuns.<span class="function">delete</span>(threadId)
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 3 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity medium">中等</span>
+        <span class="bug-id">BUG-003</span>
+      </div>
+      <h2>工具调用去重逻辑不完整</h2>
+      <p><code>messages</code> 模式和 <code>values</code> 模式各有一套去重集合，可能导致同一工具调用被重复计数。</p>
+
+      <h3>修复方案：统一去重逻辑</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:528-532</span>
+<span class="keyword">const</span> _countedAiMsgIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()
+<span class="keyword">const</span> _countedModelMsgIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()
+<span class="keyword">const</span> _countedToolResultMsgIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 统一的消息 ID 去重集合</span>
+<span class="keyword">const</span> _countedMessageIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()
+<span class="keyword">const</span> _countedToolResultMsgIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()
+<span class="keyword">const</span> _countedToolCallIds = <span class="keyword">new</span> <span class="function">Set</span>&lt;<span class="keyword">string</span>&gt;()
+
+<span class="comment">// 辅助函数：检查并标记消息已处理</span>
+<span class="keyword">const</span> markMessageProcessed = (msgId: <span class="keyword">string</span>): <span class="keyword">boolean</span> => {
+  <span class="keyword">if</span> (_countedMessageIds.<span class="function">has</span>(msgId)) <span class="keyword">return false</span>
+  _countedMessageIds.<span class="function">add</span>(msgId)
+  <span class="keyword">return true</span>
+}
+
+<span class="comment">// 在两种模式中都使用统一的去重检查</span>
+<span class="comment">// messages 模式:</span>
+<span class="keyword">if</span> (msgId && !<span class="function">markMessageProcessed</span>(msgId)) <span class="keyword">continue</span>
+
+<span class="comment">// values 模式:</span>
+<span class="keyword">if</span> (aiMsgId && !<span class="function">markMessageProcessed</span>(aiMsgId)) <span class="keyword">continue</span></code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 4 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity low">轻微</span>
+        <span class="bug-id">BUG-004</span>
+      </div>
+      <h2>read_file 工具参数名不一致</h2>
+      <p>代码同时检查 <code>path</code> 和 <code>file_path</code> 两个参数名，说明接口设计不统一。</p>
+
+      <h3>修复方案：统一参数名，添加警告日志</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:746-750</span>
+<span class="keyword">const</span> readPathRaw =
+  (<span class="keyword">typeof</span> tc.args?.path === <span class="string">"string"</span> && tc.args.path) ||
+  (<span class="keyword">typeof</span> tc.args?.file_path === <span class="string">"string"</span> && tc.args.file_path) ||
+  <span class="string">""</span></code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 统一使用 file_path，并在发现旧参数时警告</span>
+<span class="keyword">const</span> readPathRaw = ((): <span class="keyword">string</span> => {
+  <span class="keyword">const</span> filePath = <span class="keyword">typeof</span> tc.args?.file_path === <span class="string">"string"</span> ? tc.args.file_path : <span class="keyword">null</span>
+  <span class="keyword">const</span> oldPath = <span class="keyword">typeof</span> tc.args?.path === <span class="string">"string"</span> ? tc.args.path : <span class="keyword">null</span>
+
+  <span class="comment">// 兼容旧参数，但记录警告</span>
+  <span class="keyword">if</span> (oldPath && !filePath) {
+    console.<span class="function">warn</span>(
+      <span class="string">`[Agent] Tool 'read_file' 使用了旧参数 'path'，请迁移到 'file_path'. toolCallId=${tc?.id}`</span>
+    )
+    <span class="keyword">return</span> oldPath
+  }
+  <span class="keyword">return</span> filePath ?? <span class="string">""</span>
+})()</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 5 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity medium">中等</span>
+        <span class="bug-id">BUG-005</span>
+      </div>
+      <h2>interrupt 处理器缺少 Trace 收集</h2>
+      <p>当用户批准/拒绝中断后恢复执行时，没有追踪这个恢复过程，导致 Trace 数据不完整。</p>
+
+      <h3>修复方案：添加 TraceCollector</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:1097 - interrupt 处理器缺少 tracer</span>
+<span class="comment">// 直接执行 agent.stream() 而没有追踪</span>
+<span class="keyword">const</span> stream = <span class="keyword">await</span> agent.<span class="function">stream</span>(<span class="keyword">null</span>, config)</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 重新创建 tracer 来追踪恢复过程</span>
+<span class="keyword">const</span> tracer = <span class="keyword">new</span> <span class="function">TraceCollector</span>(
+  threadId,
+  <span class="string">`[Resume after ${decision.type}]`</span>,
+  modelId ?? <span class="string">"unknown"</span>
+)
+
+<span class="comment">// 添加恢复节点到 trace</span>
+tracer.<span class="function">beginLlmNode</span>({
+  messageId: <span class="string">`interrupt-resume-${Date.now()}`</span>,
+  startedAt: <span class="keyword">new</span> <span class="function">Date</span>().<span class="function">toISOString</span>(),
+  input: [{ role: <span class="string">"system"</span>, content: <span class="string">`User decision: ${decision.type}`</span> }],
+  metadata: { type: <span class="string">"interrupt_resume"</span>, decision: decision.type }
+})
+
+<span class="comment">// ... 执行流 ...</span>
+
+<span class="keyword">await</span> tracer.<span class="function">finish</span>(<span class="string">"success"</span>)</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 6 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity medium">中等</span>
+        <span class="bug-id">BUG-006</span>
+      </div>
+      <h2>resume 处理器缺少工具调用追踪</h2>
+      <p><code>resume</code> 流程中不会提取和记录工具调用，导致 Skill Evolution 和工具使用统计不准确。</p>
+
+      <h3>修复方案：复用 invoke 中的工具追踪逻辑</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:1023-1033</span>
+<span class="keyword">for await</span> (<span class="keyword">const</span> chunk <span class="keyword">of</span> stream) {
+  <span class="comment">// 只做了简单的数据转发</span>
+  window.webContents.<span class="function">send</span>(channel, { type: <span class="string">"stream"</span>, mode, data })
+}</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 在 resume 处理器中复用相同的工具追踪逻辑</span>
+<span class="keyword">const</span> resumeTracer = <span class="keyword">new</span> <span class="function">TraceCollector</span>(threadId, <span class="string">"[Resume]"</span>, modelId ?? <span class="string">"unknown"</span>)
+<span class="keyword">const</span> skillUsageDetector = <span class="keyword">new</span> <span class="function">SkillUsageDetector</span>()
+<span class="keyword">const</span> toolCallCounter = <span class="keyword">new</span> <span class="function">ToolCallCounter</span>()
+
+<span class="keyword">for await</span> (<span class="keyword">const</span> chunk <span class="keyword">of</span> stream) {
+  <span class="keyword">if</span> (abortController.signal.aborted) <span class="keyword">break</span>
+
+  <span class="keyword">const</span> [mode, data] = chunk <span class="keyword">as</span> [<span class="keyword">unknown</span>, <span class="keyword">unknown</span>]
+  <span class="keyword">const</span> serialized = JSON.<span class="function">parse</span>(JSON.<span class="function">stringify</span>(data))
+
+  <span class="comment">// 复用 invoke 中的工具调用提取逻辑...</span>
+  <span class="comment">// (提取 tool_calls, 记录到 tracer, 更新 skillUsageDetector)</span>
+
+  window.webContents.<span class="function">send</span>(channel, { type: <span class="string">"stream"</span>, mode, data: serialized })
+}
+
+<span class="comment">// 更新 skill evolution</span>
+<span class="keyword">if</span> (isOnlineSkillEvolutionEnabled()) {
+  <span class="comment">// 同样触发 autoProposeSKill 检查</span>
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 7 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity low">轻微</span>
+        <span class="bug-id">BUG-007</span>
+      </div>
+      <h2>错误处理中的类型断言可能失败</h2>
+      <p>用字符串匹配错误消息来判断是否中止错误不可靠，可能误判其他包含这些字符串的真实错误。</p>
+
+      <h3>修复方案：使用更可靠的错误检测方法</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:930-934</span>
+<span class="keyword">const</span> isAbortError =
+  error <span class="keyword">instanceof</span> Error &&
+  (error.name === <span class="string">"AbortError"</span> ||
+    error.message.<span class="function">includes</span>(<span class="string">"aborted"</span>) ||
+    error.message.<span class="function">includes</span>(<span class="string">"Controller is already closed"</span>))</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 提取公共的错误检测函数</span>
+<span class="keyword">function</span> <span class="function">isAbortError</span>(error: <span class="keyword">unknown</span>): <span class="keyword">boolean</span> {
+  <span class="keyword">if</span> (!(error <span class="keyword">instanceof</span> Error)) <span class="keyword">return false</span>
+
+  <span class="comment">// 1. 直接检查 DOMException</span>
+  <span class="keyword">if</span> (error <span class="keyword">instanceof</span> DOMException && error.name === <span class="string">"AbortError"</span>) {
+    <span class="keyword">return true</span>
+  }
+
+  <span class="comment">// 2. 检查错误类型名称</span>
+  <span class="keyword">if</span> (error.name === <span class="string">"AbortError"</span>) <span class="keyword">return true</span>
+
+  <span class="comment">// 3. 只在确定是 AbortError 类型时匹配简化字符串</span>
+  <span class="keyword">if</span> (error.<span class="function">constructor</span>.name === <span class="string">"AbortError"</span>) {
+    <span class="keyword">return true</span>
+  }
+  <span class="comment">// 使用精确匹配而不是 includes</span>
+  <span class="keyword">const</span> abortMessages = [
+    <span class="string">"The operation was aborted"</span>,
+    <span class="string">"Controller is already closed"</span>
+  ]
+  <span class="keyword">return</span> abortMessages.<span class="function">some</span>(m => error.message === m)
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- Bug 8 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="severity medium">中等</span>
+        <span class="bug-id">BUG-008</span>
+      </div>
+      <h2>window 为 undefined 导致静默失败</h2>
+      <p>多个处理器的早期返回没有清理 <code>tracer</code> 等资源，可能导致内存泄漏或状态不一致。</p>
+
+      <h3>修复方案：统一使用资源清理函数</h3>
+      <div class="old-code">
+        <div class="code-label">❌ 修复前</div>
+        <pre><code><span class="comment">// agent.ts:403-406</span>
+<span class="keyword">if</span> (!window) {
+  console.<span class="function">error</span>(<span class="string">"[Agent] No window found"</span>)
+  <span class="keyword">return</span> <span class="comment">// ← 直接返回，没有清理资源</span>
+}</code></pre>
+      </div>
+      <div class="new-code">
+        <div class="code-label">✅ 修复后</div>
+        <pre><code><span class="comment">// 在函数开头统一初始化资源清理</span>
+<span class="keyword">let</span> tracer: TraceCollector | <span class="keyword">null</span> = <span class="keyword">null</span>
+<span class="keyword">let</span> abortController: AbortController | <span class="keyword">null</span> = <span class="keyword">null</span>
+
+<span class="comment">// 统一清理函数</span>
+<span class="keyword">const</span> cleanup = <span class="keyword">async</span> (status?: <span class="keyword">string</span>, message?: <span class="keyword">string</span>) => {
+  <span class="keyword">if</span> (abortController) {
+    <span class="keyword">const</span> existing = activeRuns.<span class="function">get</span>(threadId)
+    <span class="keyword">if</span> (existing === abortController) {
+      activeRuns.<span class="function">delete</span>(threadId)
+    }
+  }
+  <span class="keyword">if</span> (tracer) {
+    <span class="keyword">await</span> tracer.<span class="function">finish</span>(status ?? <span class="string">"cancelled"</span>, message)
+  }
+}
+
+<span class="keyword">try</span> {
+  tracer = <span class="keyword">new</span> <span class="function">TraceCollector</span>(threadId, message, modelId ?? <span class="string">"unknown"</span>)
+  abortController = <span class="keyword">new</span> <span class="function">AbortController</span>()
+  activeRuns.<span class="function">set</span>(threadId, abortController)
+
+  <span class="comment">// 提前检查 window</span>
+  <span class="keyword">if</span> (!window) {
+    console.<span class="function">error</span>(<span class="string">"[Agent] No window found"</span>)
+    <span class="keyword">await</span> <span class="function">cleanup</span>(<span class="string">"error"</span>, <span class="string">"No window found"</span>)
+    <span class="keyword">return</span>
+  }
+
+  <span class="comment">// ... 业务逻辑 ...</span>
+} <span class="keyword">finally</span> {
+  <span class="comment">// 最终保护性清理</span>
+  <span class="keyword">await</span> <span class="function">cleanup</span>()
+}</code></pre>
+      </div>
+    </div>
+
+    <!-- 总结表格 -->
+    <div class="card">
+      <h2>修复优先级总结</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Bug ID</th>
+            <th>严重程度</th>
+            <th>问题</th>
+            <th>修复复杂度</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>BUG-001</code></td>
+            <td><span class="severity critical">严重</span></td>
+            <td>并发竞态条件</td>
+            <td>中等</td>
+          </tr>
+          <tr>
+            <td><code>BUG-005</code></td>
+            <td><span class="severity medium">中等</span></td>
+            <td>interrupt 缺少 Trace</td>
+            <td>中等</td>
+          </tr>
+          <tr>
+            <td><code>BUG-006</code></td>
+            <td><span class="severity medium">中等</span></td>
+            <td>resume 缺少工具追踪</td>
+            <td>中等</td>
+          </tr>
+          <tr>
+            <td><code>BUG-008</code></td>
+            <td><span class="severity medium">中等</span></td>
+            <td>资源未清理</td>
+            <td>简单</td>
+          </tr>
+          <tr>
+            <td><code>BUG-002</code></td>
+            <td><span class="severity medium">中等</span></td>
+            <td>事件监听器管理</td>
+            <td>简单</td>
+          </tr>
+          <tr>
+            <td><code>BUG-003</code></td>
+            <td><span class="severity medium">中等</span></td>
+            <td>去重逻辑不完整</td>
+            <td>简单</td>
+          </tr>
+          <tr>
+            <td><code>BUG-004</code></td>
+            <td><span class="severity low">轻微</span></td>
+            <td>参数名不一致</td>
+            <td>简单</td>
+          </tr>
+          <tr>
+            <td><code>BUG-007</code></td>
+            <td><span class="severity low">轻微</span></td>
+            <td>错误检测不可靠</td>
+            <td>简单</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footer">
+      <p>报告生成于 2026-03-21 · CMB Cowork Agent</p>
+    </div>
+  </div>
+</body>
+</html>

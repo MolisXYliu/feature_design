@@ -224,6 +224,7 @@ export function CustomModelDialog({
       }
       onModelSaved?.(`custom:${result.id}`)
       setFormError(null)
+      onOpenChange(false)
     } catch (e) {
       console.error("[CustomModelDialog] Failed to save:", e)
       setFormError(e instanceof Error ? e.message : "保存失败，请稍后重试")

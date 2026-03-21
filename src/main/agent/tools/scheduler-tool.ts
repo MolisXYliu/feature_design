@@ -25,8 +25,10 @@ const ACTIONS = [
 ] as const
 
 const FREQUENCIES = [
-  "once", "manual", "hourly", "daily", "weekdays", "weekly"
+  "once", "manual", "hourly", "daily", "weekdays", "weekly", "interval"
 ] as const
+
+const TASK_TYPES = ["action", "reminder"] as const
 
 const CONTEXT_MESSAGES_MAX = 10
 const CONTEXT_PER_MSG_MAX = 220
@@ -45,13 +47,25 @@ const schedulerSchema = z.object({
   description: z.string().optional().describe(
     "Task description (create/update)"
   ),
+  taskType: z.enum(TASK_TYPES).optional().describe(
+    "REQUIRED for create. Task type: " +
+    "'action' = agent executes real work (fix code, scan files, run commands); " +
+    "'reminder' = warm reminder message (prompt is just the reminder content, system auto-wraps with template). " +
+    "DEFAULT RULE: if user wants something DONE (fix/check/scan/build/deploy/review), use 'action'; " +
+    "if user just wants to be REMINDED, use 'reminder'."
+  ),
   prompt: z.string().optional().describe(
     "Prompt text sent to the agent when the task fires (create/update). " +
-    "Write it so it reads like an actionable instruction at trigger time."
+    "For taskType='action': write a detailed, self-contained instruction (include workspace path, specific operations). " +
+    "For taskType='reminder': just write the reminder content (e.g. '该喝水了'), system auto-wraps with warm template."
   ),
   frequency: z.enum(FREQUENCIES).optional().describe(
     "Schedule frequency (create/update). " +
-    "Use 'once' with runAt for one-shot reminders, or hourly/daily/weekdays/weekly for recurring tasks."
+    "Use 'once' with runAt for one-shot tasks, 'interval' with intervalMinutes for minute-level recurring, " +
+    "or hourly/daily/weekdays/weekly for standard recurring tasks."
+  ),
+  intervalMinutes: z.number().int().min(1).optional().describe(
+    "Interval in minutes for 'interval' frequency (e.g. 5 = every 5 minutes). Required when frequency='interval'."
   ),
   runAt: z.string().optional().describe(
     "ISO-8601 timestamp with timezone offset for one-shot 'once' tasks (e.g. '2026-03-08T23:30:00+08:00'). " +
@@ -80,6 +94,7 @@ interface SchedulerToolContext {
   workspacePath: string
   modelId?: string
   threadId?: string
+  chatxRobotChatId?: string | null
 }
 
 /**
@@ -175,7 +190,9 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             id: t.id,
             name: t.name,
             description: t.description,
+            taskType: t.taskType ?? "action",
             frequency: t.frequency,
+            intervalMinutes: t.intervalMinutes,
             enabled: t.enabled,
             running: isTaskRunning(t.id),
             nextRunAt: t.nextRunAt,
@@ -192,6 +209,11 @@ export function createSchedulerTool(context: SchedulerToolContext) {
           if (freq === "once" && !input.runAt) {
             return "Error: runAt (ISO timestamp) is required for once frequency"
           }
+          if (freq === "interval" && (!input.intervalMinutes || input.intervalMinutes < 1)) {
+            return "Error: intervalMinutes (>= 1) is required for interval frequency"
+          }
+          const taskType = input.taskType ?? "action"
+          // 存储原始 prompt，执行时再根据 taskType 动态包装
           let prompt = input.prompt
           let contextAttached = false
           if (input.contextMessages && input.contextMessages > 0) {
@@ -203,9 +225,12 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             name: input.name,
             description: input.description ?? input.name,
             prompt,
+            taskType,
             modelId: context.modelId ?? null,
             workDir: context.workspacePath,
+            chatxRobotChatId: context.chatxRobotChatId ?? null,
             frequency: freq,
+            intervalMinutes: input.intervalMinutes ?? null,
             runAt,
             runAtTime: input.runAtTime ?? null,
             weekday: input.weekday ?? null,
@@ -217,6 +242,7 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             success: true,
             id,
             name: input.name,
+            taskType,
             frequency: freq,
             nextRunAt: task?.nextRunAt ?? null,
             contextAttached
@@ -228,6 +254,8 @@ export function createSchedulerTool(context: SchedulerToolContext) {
           const tasks = getScheduledTasks()
           const existing = tasks.find((t) => t.id === input.taskId)
           if (!existing) return `Error: task not found: ${input.taskId}`
+          const taskType = input.taskType ?? existing.taskType
+          // 存储原始 prompt，执行时再根据 taskType 动态包装
           let prompt = input.prompt ?? existing.prompt
           let contextAttached = false
           if (input.prompt && input.contextMessages && input.contextMessages > 0) {
@@ -239,9 +267,12 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             name: input.name ?? existing.name,
             description: input.description ?? existing.description,
             prompt,
+            taskType,
             modelId: existing.modelId,
             workDir: existing.workDir,
+            chatxRobotChatId: existing.chatxRobotChatId ?? null,
             frequency: input.frequency ?? existing.frequency,
+            intervalMinutes: input.intervalMinutes ?? existing.intervalMinutes,
             runAt: input.runAt ? fixRunAtTimezone(input.runAt) : existing.runAt,
             runAtTime: input.runAtTime ?? existing.runAtTime,
             weekday: input.weekday ?? existing.weekday,
@@ -253,6 +284,7 @@ export function createSchedulerTool(context: SchedulerToolContext) {
             success: true,
             id,
             name: updated?.name,
+            taskType,
             nextRunAt: updated?.nextRunAt,
             contextAttached
           })
@@ -350,23 +382,28 @@ export function createSchedulerTool(context: SchedulerToolContext) {
       description:
         "Manage scheduled tasks and heartbeat wake events. Use for reminders and recurring automated tasks.\n\n" +
         "IMPORTANT: When a scheduled task fires, a separate agent executes the prompt in an independent thread. " +
+        "The agent has full tool access (file read/write, execute commands, etc.) and can perform real work. " +
         "After completion, a desktop notification is sent with the agent's output. " +
         "Do NOT write the prompt as 'remind the user' or 'notify the user' — the agent cannot push notifications directly.\n\n" +
-        "PROMPT TEMPLATE FOR REMINDERS:\n" +
-        "For simple reminder tasks (e.g. 'remind me to drink water'), use this warm-reminder template as the prompt:\n" +
-        "\"你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：{提醒内容}。\\n要求：\\n(1) 不要解释你是谁\\n(2) 直接输出一条暖心的提醒消息\\n(3) 可以加一句简短的鸡汤或关怀的话\\n(4) 控制在2-3句话以内\\n(5) 用emoji点缀\"\n" +
-        "Replace {提醒内容} with the actual reminder content. This makes each reminder feel warm and different.\n" +
-        "For automated tasks (e.g. 'check git status'), write the prompt as a direct instruction instead.\n\n" +
+        "CRITICAL — taskType FIELD (REQUIRED for create):\n" +
+        "You MUST set taskType when creating a task. This determines how the prompt is processed:\n" +
+        "- taskType='action': The prompt is sent AS-IS to the agent as an operational instruction. " +
+        "Use when user wants something DONE (fix/check/scan/build/deploy/review/refactor). " +
+        "Write detailed instructions with workspace path and specific operations.\n" +
+        "- taskType='reminder': The prompt is just the reminder CONTENT (e.g. '该喝水了'). " +
+        "System auto-wraps it with a warm-reminder template. Use only when user wants to be REMINDED.\n" +
+        "DEFAULT RULE: If in doubt, use 'action'. Only use 'reminder' when the user explicitly says '提醒我' without requesting actual work.\n\n" +
         "ACTIONS: list | create | update | delete | enable | disable | run | runs | status | wake\n\n" +
         "USAGE GUIDE:\n" +
         "- The prompt field is sent to a separate agent as its sole input. Write it as a self-contained instruction or message.\n" +
         '- For "remind me in N minutes/hours" requests, use frequency="once" with runAt set to an ISO-8601 timestamp with timezone offset (e.g. 2026-03-08T23:32:00+08:00). NEVER use Z suffix.\n' +
         '- For recurring tasks (e.g. "every day at 9am"), use frequency="daily"/"hourly"/"weekdays"/"weekly" with runAtTime="HH:mm".\n' +
+        '- For minute-level recurring (e.g. "every 5 minutes"), use frequency="interval" with intervalMinutes.\n' +
         '- For weekly tasks, set weekday (0=Sun, 1=Mon, ..., 6=Sat).\n' +
         "- Use the wake action to immediately trigger a heartbeat check.\n" +
         '- Use "list" to show existing tasks, "status" to check scheduler and heartbeat state.\n' +
         '- Use "runs" with a taskId to view execution history for a specific task.\n' +
-        "- Use contextMessages (1-10) when creating/updating reminders to automatically attach recent conversation messages as context to the prompt. If the response contains contextAttached=false but you passed contextMessages, inform the user that context retrieval failed and the task was created without conversation context.\n" +
+        "- Use contextMessages (1-10) when creating/updating tasks to automatically attach recent conversation messages as context to the prompt. If the response contains contextAttached=false but you passed contextMessages, inform the user that context retrieval failed and the task was created without conversation context.\n" +
         "- Before creating or managing scheduled tasks for the first time in a conversation, read the scheduler-assistant skill for detailed guidance.",
       schema: schedulerSchema
     }

@@ -10,12 +10,17 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsert,
   HeartbeatConfig,
+  ChatXConfig,
   PluginMetadata,
   PluginManifest
 } from "../main/types"
 import {UserInfoConfig} from '../main/storage'
+import type { HookConfig, HookUpsert } from "../main/hooks/types"
 
 interface ElectronAPI {
+  openExternal: Promise
+  openLoginWindow:()=>void
+  closeLoginWindow:()=>void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void
@@ -241,11 +246,25 @@ interface CustomAPI {
     setEnabled: (id: string, enabled: boolean) => Promise<void>
     getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
+  chatx: {
+    getConfig: () => Promise<ChatXConfig>
+    saveConfig: (updates: Partial<ChatXConfig>) => Promise<void>
+    restart: () => Promise<void>
+    cancelByThread: (threadId: string) => Promise<boolean>
+  }
   sandbox: {
-    getMode: () => Promise<"none" | "unelevated">
-    setMode: (mode: "none" | "unelevated") => Promise<void>
+    getMode: () => Promise<"none" | "unelevated" | "readonly" | "elevated">
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated") => Promise<void>
+    checkElevatedSetup: () => Promise<{ setupComplete: boolean }>
+    runElevatedSetup: (workspacePaths?: string[]) => Promise<{ success: boolean; error?: string }>
     getYoloMode: () => Promise<boolean>
     setYoloMode: (yolo: boolean) => Promise<void>
+    isNuxNeeded: () => Promise<boolean>
+    completeNux: (mode: "elevated" | "unelevated" | "none") => Promise<void>
+    getApprovalRules: () => Promise<Array<{ pattern: string; decision: string }>>
+    deleteApprovalRule: (pattern: string) => Promise<void>
+    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
+    onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {
@@ -415,6 +434,13 @@ interface CustomAPI {
     setAutoPropose: (enabled: boolean) => Promise<void>
     getThreshold: () => Promise<number>
     setThreshold: (value: number) => Promise<void>
+  }
+  hooks: {
+    list: () => Promise<HookConfig[]>
+    create: (config: HookUpsert) => Promise<{ id: string }>
+    update: (config: HookUpsert & { id: string }) => Promise<{ id: string }>
+    delete: (id: string) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<void>
   }
 }
 

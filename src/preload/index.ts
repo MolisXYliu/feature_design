@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron"
+import { contextBridge, ipcRenderer,shell } from "electron"
 import type {
   Thread,
   ModelConfig,
@@ -12,15 +12,22 @@ import type {
   ScheduledTaskUpsert,
   HeartbeatConfig,
   PluginMetadata,
-  PluginManifest
+  PluginManifest,
+  ChatXConfig
 } from "../main/types"
+import type { HookConfig, HookUpsert } from "../main/hooks/types"
 import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
+  openExternal: (url: string) => shell.openExternal(url),
+  openLoginWindow:()=>ipcRenderer.invoke('open-login-window'),
+  closeLoginWindow:()=>ipcRenderer.invoke('close-login-window'),
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {
+
+
       ipcRenderer.on(channel, (_event, ...args) => listener(...args))
       return () => ipcRenderer.removeListener(channel, listener)
     },
@@ -537,15 +544,53 @@ const api = {
     getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   },
+  chatx: {
+    getConfig: (): Promise<ChatXConfig> =>
+      ipcRenderer.invoke("chatx:get-config") as Promise<ChatXConfig>,
+    saveConfig: (updates: Partial<ChatXConfig>): Promise<void> =>
+      ipcRenderer.invoke("chatx:save-config", updates) as Promise<void>,
+    restart: (): Promise<void> =>
+      ipcRenderer.invoke("chatx:restart") as Promise<void>,
+    cancelByThread: (threadId: string): Promise<boolean> =>
+      ipcRenderer.invoke("chatx:cancel-by-thread", threadId) as Promise<boolean>
+  },
   sandbox: {
-    getMode: (): Promise<"none" | "unelevated" | "readonly"> =>
-      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly">,
-    setMode: (mode: "none" | "unelevated" | "readonly"): Promise<void> =>
+    getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>
+      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly" | "elevated">,
+    setMode: (mode: "none" | "unelevated" | "readonly" | "elevated"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
+    checkElevatedSetup: (): Promise<{ setupComplete: boolean }> =>
+      ipcRenderer.invoke("sandbox:checkElevatedSetup") as Promise<{ setupComplete: boolean }>,
+    runElevatedSetup: (workspacePaths?: string[]): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("sandbox:runElevatedSetup", workspacePaths) as Promise<{ success: boolean; error?: string }>,
     getYoloMode: (): Promise<boolean> =>
       ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,
     setYoloMode: (yolo: boolean): Promise<void> =>
       ipcRenderer.invoke("sandbox:setYoloMode", yolo) as Promise<void>,
+    // NUX (first-run sandbox setup)
+    isNuxNeeded: (): Promise<boolean> =>
+      ipcRenderer.invoke("sandbox:isNuxNeeded") as Promise<boolean>,
+    completeNux: (mode: "elevated" | "unelevated" | "none"): Promise<void> =>
+      ipcRenderer.invoke("sandbox:completeNux", mode) as Promise<void>,
+    // Approval rules management
+    getApprovalRules: (): Promise<Array<{ pattern: string; decision: string }>> =>
+      ipcRenderer.invoke("sandbox:getApprovalRules") as Promise<Array<{ pattern: string; decision: string }>>,
+    deleteApprovalRule: (pattern: string): Promise<void> =>
+      ipcRenderer.invoke("sandbox:deleteApprovalRule", pattern) as Promise<void>,
+    // Approval decision from renderer → main
+    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }): void => {
+      ipcRenderer.send("sandbox:approvalDecision", decision)
+    },
+    // Listen for approval requests from main → renderer
+    onApprovalRequest: (
+      threadId: string,
+      callback: (request: unknown) => void
+    ): (() => void) => {
+      const channel = `approval:request:${threadId}`
+      const handler = (_: unknown, data: unknown): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
     onChanged: (callback: () => void): (() => void) => {
       const handler = (): void => { callback() }
       ipcRenderer.on("sandbox:changed", handler)
@@ -839,6 +884,16 @@ const api = {
       ipcRenderer.invoke("optimizer:getThreshold") as Promise<number>,
     setThreshold: (value: number): Promise<void> =>
       ipcRenderer.invoke("optimizer:setThreshold", value) as Promise<void>
+  },
+  hooks: {
+    list: (): Promise<HookConfig[]> => ipcRenderer.invoke("hooks:list"),
+    create: (config: HookUpsert): Promise<{ id: string }> =>
+      ipcRenderer.invoke("hooks:create", config),
+    update: (config: HookUpsert & { id: string }): Promise<{ id: string }> =>
+      ipcRenderer.invoke("hooks:update", config),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke("hooks:delete", id),
+    setEnabled: (id: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("hooks:setEnabled", { id, enabled })
   }
 }
 
