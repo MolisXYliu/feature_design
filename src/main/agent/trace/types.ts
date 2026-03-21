@@ -141,8 +141,8 @@ export interface AgentTrace {
   outcome: TraceOutcome
   /** Any error message if outcome === 'error' */
   errorMessage?: string
-  /** Which skills were active/loaded for this run */
-  activeSkills: string[]
+  /** Which skills were actually used during this run */
+  usedSkills: string[]
   /**
    * Optional free-form metadata.
    * Future: workspacePath, git branch, session tags, etc.

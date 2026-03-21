@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 import {
   Activity,
   AlertCircle,
@@ -10,8 +11,8 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Coins,
   Cpu,
-  GitBranch,
   Hash,
   Info,
   Loader2,
@@ -51,8 +52,11 @@ interface TraceEntry {
   durationMs: number
   userMessage: string
   totalToolCalls: number
+  totalInputTokens?: number
+  totalOutputTokens?: number
+  totalTokens?: number
   outcome: string
-  activeSkills: string[]
+  usedSkills: string[]
 }
 
 interface TraceThreadGroup {
@@ -61,6 +65,10 @@ interface TraceThreadGroup {
   traces: TraceEntry[]
   latestStartedAt: string
   totalToolCalls: number
+  totalDurationMs: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
   successCount: number
   errorCount: number
 }
@@ -190,6 +198,26 @@ function buildFallbackNodes(detail: TraceDetail): TraceNode[] {
 function fmt(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(2)}s`
+}
+
+/** Format a token count: ≥1000 → "1.2k", otherwise plain number. */
+function fmtTokens(tokens: number): string {
+  if (tokens >= 1000) {
+    const k = tokens / 1000
+    return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`
+  }
+  return String(tokens)
+}
+
+/** Format a cumulative duration for thread-level summary: e.g. "2m30s", "1h5m" */
+function fmtDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h${minutes}m`
+  return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`
 }
 
 function isSameIdSet(a: Set<string>, b: Set<string>): boolean {
@@ -339,7 +367,11 @@ function TraceDetailView({ detail, onClose }: { detail: TraceDetail; onClose: ()
         <Stat icon={<Timer className="size-3.5" />} label="耗时" value={fmt(detail.durationMs)} />
         <Stat icon={<Hash className="size-3.5" />} label="工具调用" value={String(detail.totalToolCalls)} />
         <Stat icon={<Cpu className="size-3.5" />} label="模型" value={detail.modelId.split("/").pop() ?? detail.modelId} />
-        <Stat icon={<GitBranch className="size-3.5" />} label="节点" value={String(nodes.length)} />
+        <Stat
+          icon={<Sparkles className="size-3.5" />}
+          label="使用技能"
+          value={detail.usedSkills.length > 0 ? detail.usedSkills.join(", ") : "未使用"}
+        />
       </div>
 
       <div className="flex-1 overflow-hidden">
@@ -361,7 +393,7 @@ function Stat({ icon, label, value }: { icon: React.JSX.Element; label: string; 
       <span className="text-muted-foreground/60 shrink-0">{icon}</span>
       <div className="min-w-0">
         <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider">{label}</p>
-        <p className="text-[12px] font-semibold truncate">{value}</p>
+        <p className="text-[12px] font-semibold truncate" title={value}>{value}</p>
       </div>
     </div>
   )
@@ -426,6 +458,14 @@ function TraceCard({
           <span>{new Date(trace.startedAt).toLocaleString()}</span>
           <span className="inline-flex items-center gap-0.5"><Timer className="size-3" />{fmt(trace.durationMs)}</span>
           <span className="inline-flex items-center gap-0.5"><Wrench className="size-3" />{trace.totalToolCalls}</span>
+          {(trace.totalTokens ?? 0) > 0 ? (
+            <span className="inline-flex items-center gap-1" title="输入 token / 输出 token">
+              <Coins className="size-3" />
+              <span>↑{fmtTokens(trace.totalInputTokens ?? 0)}</span>
+              <span className="text-muted-foreground/30">/</span>
+              <span>↓{fmtTokens(trace.totalOutputTokens ?? 0)}</span>
+            </span>
+          ) : null}
         </p>
       </div>
     </div>
@@ -477,6 +517,15 @@ function TraceThreadGroupCard({
           <p className="text-[11px] text-muted-foreground mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <span>最近运行：{new Date(group.latestStartedAt).toLocaleString()}</span>
             <span className="inline-flex items-center gap-1"><Wrench className="size-3" />{group.totalToolCalls}</span>
+            <span className="inline-flex items-center gap-1"><Clock className="size-3" />总耗时 {fmtDuration(group.totalDurationMs)}</span>
+            {group.totalTokens > 0 ? (
+              <span className="inline-flex items-center gap-1" title="输入 token / 输出 token">
+                <Coins className="size-3" />
+                <span>↑{fmtTokens(group.totalInputTokens)}</span>
+                <span className="text-muted-foreground/30">/</span>
+                <span>↓{fmtTokens(group.totalOutputTokens)}</span>
+              </span>
+            ) : null}
             <span className="inline-flex items-center gap-1 text-emerald-600"><CheckCircle2 className="size-3" />{group.successCount}</span>
             {group.errorCount > 0 ? (
               <span className="inline-flex items-center gap-1 text-red-500"><AlertCircle className="size-3" />{group.errorCount}</span>
@@ -534,6 +583,52 @@ function CandidateCard({
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [oldContent, setOldContent] = useState<string | null>(null)
+  const [oldContentStatus, setOldContentStatus] = useState<"idle" | "loading" | "ready" | "failed">("idle")
+  // Use a ref to track load state inside the effect without adding it to the dependency array,
+  // preventing the infinite loop caused by cleanup resetting state that re-triggers the effect.
+  const loadInitiatedRef = useRef(false)
+
+  // Load the existing SKILL.md content when a patch candidate is first expanded.
+  // candidate.skillId equals skill.name (from SkillUsageDetector), so match by name.
+  useEffect(() => {
+    if (!expanded || candidate.action !== "patch" || loadInitiatedRef.current) return
+
+    loadInitiatedRef.current = true
+    setOldContentStatus("loading")
+
+    let cancelled = false
+
+    const load = async (): Promise<void> => {
+      try {
+        const skills = await window.api.skills.list()
+        const matched = skills.find((s) => s.name === candidate.skillId)
+        if (!matched) throw new Error(`Skill not found: ${candidate.skillId}`)
+
+        const result = await window.api.skills.read(matched.path)
+        if (!result.success || typeof result.content !== "string") {
+          throw new Error(result.error ?? "Failed to read skill content")
+        }
+
+        if (!cancelled) {
+          setOldContent(result.content)
+          setOldContentStatus("ready")
+        }
+      } catch {
+        if (!cancelled) setOldContentStatus("failed")
+      }
+    }
+
+    void load()
+    return () => { cancelled = true }
+  }, [expanded, candidate.action, candidate.skillId])
+
+  // Reset all load state when the candidate changes
+  useEffect(() => {
+    loadInitiatedRef.current = false
+    setOldContent(null)
+    setOldContentStatus("idle")
+  }, [candidate.candidateId])
 
   const approve = async (): Promise<void> => {
     setLoading(true)
@@ -609,13 +704,37 @@ function CandidateCard({
             </div>
           )}
           <div>
-            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">SKILL.md 预览</p>
-            <div className="rounded border border-border bg-background p-3 max-h-64 overflow-y-auto">
-              <div className="prose prose-sm dark:prose-invert max-w-none text-xs">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {candidate.proposedContent}
-                </ReactMarkdown>
-              </div>
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+              SKILL.md {candidate.action === "patch" ? "变更" : "预览"}
+            </p>
+            <div className="rounded border border-border bg-background max-h-80 overflow-y-auto">
+              {candidate.action === "patch" && (oldContentStatus === "idle" || oldContentStatus === "loading") && (
+                <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  正在加载旧版内容…
+                </div>
+              )}
+              {candidate.action === "patch" && oldContentStatus === "ready" && oldContent !== null && (
+                <ReactDiffViewer
+                  oldValue={oldContent}
+                  newValue={candidate.proposedContent}
+                  splitView={false}
+                  compareMethod={DiffMethod.LINES}
+                  useDarkTheme={false}
+                  styles={{
+                    contentText: { fontSize: "12px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", wordBreak: "break-all" }
+                  }}
+                />
+              )}
+              {(candidate.action === "create" || candidate.action === "patch" && oldContentStatus === "failed") && (
+                <div className="p-3">
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-xs">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {candidate.proposedContent}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -859,14 +978,29 @@ export function EvolutionPanel(): React.JSX.Element {
     return Array.from(grouped.entries())
       .map(([threadId, threadTraces]) => {
         const sortedTraces = [...threadTraces].sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        const totals = threadTraces.reduce(
+          (acc, t) => {
+            acc.totalToolCalls += t.totalToolCalls
+            acc.totalDurationMs += t.durationMs
+            acc.totalInputTokens += t.totalInputTokens ?? 0
+            acc.totalOutputTokens += t.totalOutputTokens ?? 0
+            acc.totalTokens += t.totalTokens ?? 0
+            return acc
+          },
+          { totalToolCalls: 0, totalDurationMs: 0, totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 }
+        )
         return {
           threadId,
           threadTitle: threadTitleById.get(threadId) ?? `会话 ${threadId.slice(0, 8)}`,
           traces: sortedTraces,
           latestStartedAt: sortedTraces[0]?.startedAt ?? "",
-          totalToolCalls: sortedTraces.reduce((sum, trace) => sum + trace.totalToolCalls, 0),
-          successCount: sortedTraces.filter((trace) => trace.outcome === "success").length,
-          errorCount: sortedTraces.filter((trace) => trace.outcome === "error").length
+          totalToolCalls: totals.totalToolCalls,
+          totalDurationMs: totals.totalDurationMs,
+          totalInputTokens: totals.totalInputTokens,
+          totalOutputTokens: totals.totalOutputTokens,
+          totalTokens: totals.totalTokens,
+          successCount: sortedTraces.filter((t) => t.outcome === "success").length,
+          errorCount: sortedTraces.filter((t) => t.outcome === "error").length
         }
       })
       .sort((a, b) => b.latestStartedAt.localeCompare(a.latestStartedAt))
@@ -1190,9 +1324,11 @@ export function EvolutionPanel(): React.JSX.Element {
                 desc="请先切换到「执行 Traces」，分析会话或选中的 trace"
               />
             ) : (
-              candidates.map((candidate) => (
-                <CandidateCard key={candidate.candidateId} candidate={candidate} onApprove={handleApprove} onReject={handleReject} />
-              ))
+              [...candidates]
+                .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
+                .map((candidate) => (
+                  <CandidateCard key={candidate.candidateId} candidate={candidate} onApprove={handleApprove} onReject={handleReject} />
+                ))
             )
           ) : tracesLoading ? (
             <div className="flex justify-center py-16"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>

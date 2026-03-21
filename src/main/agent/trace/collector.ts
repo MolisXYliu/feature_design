@@ -82,6 +82,13 @@ function writeTraceFile(trace: AgentTrace): void {
   }
 }
 
+function normalizeTrace(parsed: AgentTrace): AgentTrace {
+  return {
+    ...parsed,
+    usedSkills: Array.isArray(parsed.usedSkills) ? parsed.usedSkills : []
+  }
+}
+
 // ─────────────────────────────────────────────────────────
 // TraceCollector class
 // ─────────────────────────────────────────────────────────
@@ -94,7 +101,7 @@ export class TraceCollector {
   private modelId: string
 
   private steps: TraceStep[] = []
-  private activeSkills: string[] = []
+  private usedSkills: string[] = []
   private modelCalls: TraceModelCall[] = []
   private nodes: TraceNode[] = []
   private nodeIndexById = new Map<string, number>()
@@ -140,12 +147,12 @@ export class TraceCollector {
     }
   }
 
-  /** Set which skills were loaded for this run. */
-  setActiveSkills(skills: string[]): void {
-    this.activeSkills = [...skills]
+  /** Set which skills were actually used for this run. */
+  setUsedSkills(skills: string[]): void {
+    this.usedSkills = [...skills]
     const root = this.getNode(this.rootNodeId)
     if (root) {
-      root.metadata = { ...(root.metadata ?? {}), activeSkills: [...skills] }
+      root.metadata = { ...(root.metadata ?? {}), usedSkills: [...skills] }
     }
   }
 
@@ -358,7 +365,7 @@ export class TraceCollector {
       totalToolCalls,
       outcome,
       ...(errorMessage ? { errorMessage } : {}),
-      activeSkills: this.activeSkills
+      usedSkills: this.usedSkills
     }
 
     writeTraceFile(trace)
@@ -421,7 +428,7 @@ export class TraceCollector {
       }
       root.metadata = {
         ...(root.metadata ?? {}),
-        activeSkills: [...this.activeSkills]
+        usedSkills: [...this.usedSkills]
       }
     }
 
@@ -476,7 +483,7 @@ export function readThreadTraces(threadId: string): AgentTrace[] {
       for (const line of raw.trim().split("\n")) {
         if (!line.trim()) continue
         try {
-          traces.push(JSON.parse(line) as AgentTrace)
+          traces.push(normalizeTrace(JSON.parse(line) as AgentTrace))
         } catch { /* skip malformed lines */ }
       }
     }
@@ -494,7 +501,7 @@ export function readTraceById(traceId: string): AgentTrace | null {
     const raw = readFileSync(location.filePath, "utf-8")
     for (const line of raw.trim().split("\n")) {
       if (!line.trim()) continue
-      const parsed = JSON.parse(line) as AgentTrace
+      const parsed = normalizeTrace(JSON.parse(line) as AgentTrace)
       if (parsed.traceId === traceId) return parsed
     }
   } catch {
@@ -528,7 +535,7 @@ function findTraceLocation(traceId: string): { threadId: string; filePath: strin
         const lines = raw.split("\n").filter((line) => line.trim().length > 0)
         for (const line of lines) {
           try {
-            const parsed = JSON.parse(line) as AgentTrace
+            const parsed = normalizeTrace(JSON.parse(line) as AgentTrace)
             if (parsed.traceId === traceId) return { threadId, filePath }
           } catch {
             // skip malformed lines
@@ -554,7 +561,7 @@ export function deleteTraceById(traceId: string): { success: boolean; threadId?:
     for (const line of lines) {
       if (!line.trim()) continue
       try {
-        const parsed = JSON.parse(line) as AgentTrace
+        const parsed = normalizeTrace(JSON.parse(line) as AgentTrace)
         if (parsed.traceId === traceId) {
           removed = true
           continue

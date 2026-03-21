@@ -1,80 +1,56 @@
+import { posix as pathPosix } from "path"
+
 export interface SkillMetadataLite {
   name?: string
   path?: string
 }
 
-const DEFAULT_ALWAYS_ON_SKILLS = new Set(["scheduler-assistant", "skill-creator"])
-
 function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "")
 }
 
-function isLikelySkillDocRead(path: string): boolean {
-  const lower = path.toLowerCase()
-  return (
-    lower === "skill.md" ||
-    lower.endsWith("/skill.md") ||
-    lower.includes("/.cmbcoworkagent/sk") ||
-    lower.includes("/enabled-skills")
-  )
-}
-
-function pathMatchesLoadedSkill(readPath: string, loadedPath: string): boolean {
-  return (
-    loadedPath === readPath ||
-    loadedPath.endsWith(readPath) ||
-    readPath.endsWith(loadedPath)
-  )
-}
-
 export class SkillUsageDetector {
-  private readonly activeSkillNames = new Set<string>()
-  private readonly loadedSkillPaths = new Set<string>()
-  private readonly readPaths: string[] = []
-  private sawLikelySkillDocRead = false
-  private usedLoadedSkill = false
-
-  private hasNonDefaultSkillsLoaded(): boolean {
-    return Array.from(this.activeSkillNames).some((name) => !DEFAULT_ALWAYS_ON_SKILLS.has(name))
-  }
-
-  private recomputeUsage(): void {
-    if (this.usedLoadedSkill || !this.hasNonDefaultSkillsLoaded()) return
-    if (this.sawLikelySkillDocRead) {
-      this.usedLoadedSkill = true
-      return
-    }
-    this.usedLoadedSkill = this.readPaths.some((readPath) =>
-      Array.from(this.loadedSkillPaths).some((loaded) => pathMatchesLoadedSkill(readPath, loaded))
-    )
-  }
+  private readonly loadedSkillsByDocPath = new Map<string, string>()
+  private readonly loadedSkillsByRootDir = new Map<string, string>()
+  private readonly usedSkillNames = new Set<string>()
 
   onSkillsMetadata(skills: SkillMetadataLite[]): void {
     for (const skill of skills) {
-      if (typeof skill.name === "string" && skill.name.trim()) {
-        this.activeSkillNames.add(skill.name.trim())
-      }
-      if (typeof skill.path === "string" && skill.path.trim()) {
-        this.loadedSkillPaths.add(normalizePath(skill.path.trim()))
+      const skillName = typeof skill.name === "string" ? skill.name.trim() : ""
+      const skillPath = typeof skill.path === "string" ? normalizePath(skill.path.trim()) : ""
+      if (!skillName || !skillPath) continue
+
+      this.loadedSkillsByDocPath.set(skillPath, skillName)
+      const rootDir = normalizePath(pathPosix.dirname(skillPath))
+      if (rootDir && rootDir !== ".") {
+        this.loadedSkillsByRootDir.set(rootDir, skillName)
       }
     }
-    this.recomputeUsage()
   }
 
   onReadFilePath(rawPath: string): void {
     const normalized = normalizePath(rawPath.trim())
     if (!normalized) return
-    this.readPaths.push(normalized)
-    if (isLikelySkillDocRead(normalized)) this.sawLikelySkillDocRead = true
-    this.recomputeUsage()
+
+    const exactMatch = this.loadedSkillsByDocPath.get(normalized)
+    if (exactMatch) {
+      this.usedSkillNames.add(exactMatch)
+      return
+    }
+
+    for (const [rootDir, skillName] of this.loadedSkillsByRootDir.entries()) {
+      if (normalized === rootDir || normalized.startsWith(`${rootDir}/`)) {
+        this.usedSkillNames.add(skillName)
+      }
+    }
   }
 
-  getActiveSkillNames(): string[] {
-    return Array.from(this.activeSkillNames)
+  getUsedSkillNames(): string[] {
+    return Array.from(this.usedSkillNames)
   }
 
-  wasSkillUsed(): boolean {
-    return this.usedLoadedSkill
+  hasUsedSkills(): boolean {
+    return this.usedSkillNames.size > 0
   }
 }
 
@@ -84,4 +60,3 @@ export class SkillUsageDetector {
 export function getAutoProposeToolCallCount(turnToolCallCount: number): number {
   return turnToolCallCount
 }
-

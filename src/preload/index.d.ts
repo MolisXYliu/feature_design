@@ -330,8 +330,11 @@ interface CustomAPI {
       durationMs: number
       userMessage: string
       totalToolCalls: number
+      totalInputTokens: number
+      totalOutputTokens: number
+      totalTokens: number
       outcome: string
-      activeSkills: string[]
+      usedSkills: string[]
     }>>
     onAutoTriggered: (cb: (payload: { threadId: string; toolCallCount: number }) => void) => () => void
     getTraceDetail: (traceId: string) => Promise<{
@@ -345,7 +348,7 @@ interface CustomAPI {
       totalToolCalls: number
       outcome: string
       errorMessage?: string
-      activeSkills: string[]
+      usedSkills: string[]
       nodes?: Array<{
         id: string
         type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"

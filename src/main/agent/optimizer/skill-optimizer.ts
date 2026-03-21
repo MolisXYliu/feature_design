@@ -178,7 +178,7 @@ function summarizeTrace(trace: AgentTrace): string {
   return `Trace ${trace.traceId.slice(0, 8)} | ${trace.outcome} | ${trace.totalToolCalls} tool calls
 User message: ${trace.userMessage.slice(0, 150)}
 Tools used: ${toolList}
-Active skills: ${trace.activeSkills.join(", ") || "(none)"}
+Used skills: ${trace.usedSkills.join(", ") || "(none)"}
 Steps:
 ${stepSummaries}`
 }
@@ -216,11 +216,11 @@ function formatSkillRecords(skills: CustomSkillRecord[], slice: number): string 
     .join("\n\n")
 }
 
-function getUniqueActiveSkillIds(traces: AgentTrace[]): string[] {
+function getUniqueUsedSkillIds(traces: AgentTrace[]): string[] {
   return Array.from(
     new Set(
       traces
-        .flatMap((trace) => trace.activeSkills)
+        .flatMap((trace) => trace.usedSkills)
         .map((skillId) => skillId.trim())
         .filter(Boolean)
     )
@@ -355,7 +355,7 @@ export class SkillOptimizer {
         .sort((a, b) => b.score - a.score)
         .slice(0, 10) // cap at 10 traces to avoid huge prompts
         .map(({ trace }) => trace)
-    const usedSkillIds = getUniqueActiveSkillIds(interesting.length > 0 ? interesting : rawTraces)
+    const usedSkillIds = getUniqueUsedSkillIds(interesting.length > 0 ? interesting : rawTraces)
 
     if (interesting.length === 0) {
       return {
@@ -470,7 +470,7 @@ Output JSON array only.`
     }
 
     const sourceTraceIds = sourceTraces.map((t) => t.traceId)
-    const usedSkillIds = new Set(getUniqueActiveSkillIds(sourceTraces))
+    const usedSkillIds = new Set(getUniqueUsedSkillIds(sourceTraces))
     const now = new Date().toISOString()
 
     return proposals

@@ -441,8 +441,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         toolCallCount: toolCallCounter.getCount(),
         status,
         errorMessage,
-        usedLoadedSkill: skillUsageDetector.wasSkillUsed(),
-        activeSkillNames: skillUsageDetector.getActiveSkillNames(),
+        usedSkills: skillUsageDetector.getUsedSkillNames(),
         finishedAt: new Date().toISOString()
       })
 
@@ -452,8 +451,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         currentTurnToolCallCount: toolCallCounter.getCount(),
         windowTurnCount: context.turnCount,
         windowToolCallCount: context.toolCallCount,
-        windowSkillUsed: context.usedLoadedSkill,
-        activeSkills: context.activeSkillNames
+        usedSkills: context.usedSkills
       })}`)
       return context
     }
@@ -633,7 +631,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             const skillsMetadata = Array.isArray(state.skillsMetadata) ? state.skillsMetadata : []
             if (skillsMetadata.length > 0) {
               skillUsageDetector.onSkillsMetadata(skillsMetadata)
-              tracer.setActiveSkills(skillUsageDetector.getActiveSkillNames())
+              tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
             }
 
             // Values mode usually carries fuller tool-call args than messages mode.
@@ -867,7 +865,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         notifyIfBackground("✅ 任务完成", assistantText.trim() || "对话已完成")
 
         // Finish trace
-        tracer.setActiveSkills(skillUsageDetector.getActiveSkillNames())
+        tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         await tracer.finish("success")
 
         if (isOnlineSkillEvolutionEnabled()) {
@@ -883,19 +881,18 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               windowToolCallCount: proposalContext.toolCallCount,
               threshold,
               mode,
-              skillUsed: proposalContext.usedLoadedSkill,
-              activeSkills: proposalContext.activeSkillNames,
+              usedSkills: proposalContext.usedSkills,
               turnCount: proposalContext.turnCount,
               errorCount: proposalContext.errorCount,
               toolCallSummary: proposalContext.toolCallSummary
             })}`)
-            if (proposalContext.usedLoadedSkill) {
-              const names = proposalContext.activeSkillNames.length > 0 ? ` [${proposalContext.activeSkillNames.join(", ")}]` : ""
+            if (proposalContext.usedSkills.length > 0) {
+              const names = ` [${proposalContext.usedSkills.join(", ")}]`
               console.log(
-                `[SkillEvolution][${threadId}] Threshold skip because loaded skill was used${names}`
+                `[SkillEvolution][${threadId}] Threshold skip because used skills were detected${names}`
               )
             } else {
-              console.log(`[SkillEvolution][${threadId}] Threshold passed without loaded skill usage, evaluating proposal mode`)
+              console.log(`[SkillEvolution][${threadId}] Threshold passed without used skills, evaluating proposal mode`)
               await autoProposeSKill(threadId, proposalContext).catch((e) =>
                 console.warn("[Agent] autoProposeSKill failed:", e)
               )
@@ -949,8 +946,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         } else {
           resetSkillEvolutionSession(threadId)
         }
+        tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         tracer.finish("error", errMsg).catch(() => {})
       } else {
+        tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         tracer.finish("cancelled").catch(() => {})
       }
     } finally {

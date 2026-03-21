@@ -654,8 +654,11 @@ const api = {
       durationMs: number
       userMessage: string
       totalToolCalls: number
+      totalInputTokens: number
+      totalOutputTokens: number
+      totalTokens: number
       outcome: string
-      activeSkills: string[]
+      usedSkills: string[]
     }>> =>
       ipcRenderer.invoke("optimizer:traces", opts) as Promise<Array<{
         traceId: string
@@ -664,8 +667,11 @@ const api = {
         durationMs: number
         userMessage: string
         totalToolCalls: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalTokens: number
         outcome: string
-        activeSkills: string[]
+        usedSkills: string[]
       }>>,
     /** Listen for auto-triggered skill evolution (main process fires this after threshold) */
     onAutoTriggered: (
@@ -687,7 +693,7 @@ const api = {
       totalToolCalls: number
       outcome: string
       errorMessage?: string
-      activeSkills: string[]
+      usedSkills: string[]
       nodes?: Array<{
         id: string
         type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
@@ -752,7 +758,7 @@ const api = {
         totalToolCalls: number
         outcome: string
         errorMessage?: string
-        activeSkills: string[]
+        usedSkills: string[]
         nodes?: Array<{
           id: string
           type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"

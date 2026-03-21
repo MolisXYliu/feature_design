@@ -5,8 +5,7 @@ export interface SkillProposalWindowTurn {
   toolCallCount: number
   status: "success" | "error"
   errorMessage?: string
-  usedLoadedSkill: boolean
-  activeSkillNames: string[]
+  usedSkills: string[]
   finishedAt: string
 }
 
@@ -19,8 +18,7 @@ export interface SkillProposalWindowContext {
   turnCount: number
   successCount: number
   errorCount: number
-  usedLoadedSkill: boolean
-  activeSkillNames: string[]
+  usedSkills: string[]
 }
 
 const MAX_USER_MESSAGE_CHARS = 500
@@ -37,7 +35,7 @@ function cloneTurn(turn: SkillProposalWindowTurn): SkillProposalWindowTurn {
   return {
     ...turn,
     toolCallNames: [...turn.toolCallNames],
-    activeSkillNames: [...turn.activeSkillNames]
+    usedSkills: [...turn.usedSkills]
   }
 }
 
@@ -59,8 +57,8 @@ function buildTranscript(turns: SkillProposalWindowTurn[]): string {
         parts.push(`Error:\n${clip(turn.errorMessage, MAX_ERROR_CHARS)}`)
       }
 
-      if (turn.usedLoadedSkill && turn.activeSkillNames.length > 0) {
-        parts.push(`Loaded skills during turn: ${turn.activeSkillNames.join(", ")}`)
+      if (turn.usedSkills.length > 0) {
+        parts.push(`Used skills during turn: ${turn.usedSkills.join(", ")}`)
       }
 
       return parts.join("\n")
@@ -103,9 +101,7 @@ export function buildSkillProposalWindowContext(
 ): SkillProposalWindowContext {
   const clonedTurns = turns.map(cloneTurn)
   const toolCallNames = clonedTurns.flatMap((turn) => turn.toolCallNames)
-  const activeSkillNames = Array.from(
-    new Set(clonedTurns.flatMap((turn) => turn.activeSkillNames))
-  )
+  const usedSkills = Array.from(new Set(clonedTurns.flatMap((turn) => turn.usedSkills)))
 
   return {
     turns: clonedTurns,
@@ -116,7 +112,6 @@ export function buildSkillProposalWindowContext(
     turnCount: clonedTurns.length,
     successCount: clonedTurns.filter((turn) => turn.status === "success").length,
     errorCount: clonedTurns.filter((turn) => turn.status === "error").length,
-    usedLoadedSkill: clonedTurns.some((turn) => turn.usedLoadedSkill),
-    activeSkillNames
+    usedSkills
   }
 }

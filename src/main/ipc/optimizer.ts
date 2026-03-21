@@ -50,6 +50,33 @@ function notifyRenderer(channel: string, payload?: unknown): void {
   }
 }
 
+/**
+ * Sum token usage across all model calls in a trace.
+ * Returns zeros when modelCalls is absent or empty.
+ */
+function summarizeTraceTokenUsage(modelCalls: AgentTrace["modelCalls"]): {
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
+} {
+  if (!Array.isArray(modelCalls) || modelCalls.length === 0) {
+    return { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 }
+  }
+  return modelCalls.reduce(
+    (acc, call) => {
+      const input = call?.tokenUsage?.inputTokens ?? 0
+      const output = call?.tokenUsage?.outputTokens ?? 0
+      // Prefer explicit totalTokens from API; fall back to input + output
+      const total = call?.tokenUsage?.totalTokens ?? input + output
+      acc.totalInputTokens += input
+      acc.totalOutputTokens += output
+      acc.totalTokens += total
+      return acc
+    },
+    { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 }
+  )
+}
+
 function getDefaultModel(): ChatOpenAI | null {
   const configs = getCustomModelConfigs()
   const config = configs[0]
@@ -63,14 +90,26 @@ function getDefaultModel(): ChatOpenAI | null {
   })
 }
 
+/**
+ * Merge new candidates from a run into the existing pending list.
+ * Each pending candidate is preserved individually — no deduplication by
+ * skillId — so that multiple analysis runs on the same skill remain visible
+ * until they are approved, rejected, or cleared.
+ */
 function mergePendingCandidates(newCandidates: OptimizationRunResult["candidates"]): OptimizationRunResult["candidates"] {
-  if (newCandidates.length === 0) return getCandidates().filter((c) => c.status === "pending")
+  const existingPending = getCandidates().filter((c) => c.status === "pending")
+  const incomingPending = newCandidates.filter((c) => c.status === "pending")
 
-  const existing = getCandidates().filter((c) => c.status === "pending")
-  const existingIds = new Set(existing.map((c) => c.skillId))
-  const fresh = newCandidates.filter((c) => !existingIds.has(c.skillId))
-  setCandidates([...existing, ...fresh])
-  return getCandidates().filter((c) => c.status === "pending")
+  if (incomingPending.length !== newCandidates.length) {
+    console.warn("[Optimizer] Ignoring non-pending candidates returned from optimizer run")
+  }
+
+  // Nothing new to add — return what we already have
+  if (incomingPending.length === 0) return existingPending
+
+  const merged = [...existingPending, ...incomingPending]
+  setCandidates(merged)
+  return merged
 }
 
 function applyCandidate(skillId: string, content: string): { success: boolean; error?: string } {
@@ -211,24 +250,33 @@ export function registerOptimizerHandlers(ipcMain: IpcMain): void {
         durationMs: number
         userMessage: string
         totalToolCalls: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalTokens: number
         outcome: string
-        activeSkills: string[]
+        usedSkills: string[]
       }>
     > => {
       const traces = opts?.threadId
         ? readThreadTraces(opts.threadId)
         : readRecentTraces(opts?.limit ?? 20)
 
-      return traces.map(({ traceId, threadId, startedAt, durationMs, userMessage, totalToolCalls, outcome, activeSkills }) => ({
-        traceId,
-        threadId,
-        startedAt,
-        durationMs,
-        userMessage,
-        totalToolCalls,
-        outcome,
-        activeSkills
-      }))
+      return traces.map((trace) => {
+        const { totalInputTokens, totalOutputTokens, totalTokens } = summarizeTraceTokenUsage(trace.modelCalls)
+        return {
+          traceId: trace.traceId,
+          threadId: trace.threadId,
+          startedAt: trace.startedAt,
+          durationMs: trace.durationMs,
+          userMessage: trace.userMessage,
+          totalToolCalls: trace.totalToolCalls,
+          totalInputTokens,
+          totalOutputTokens,
+          totalTokens,
+          outcome: trace.outcome,
+          usedSkills: trace.usedSkills
+        }
+      })
     }
   )
 

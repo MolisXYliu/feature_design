@@ -90,7 +90,7 @@ function summarizeTrace(trace: AgentTrace): string {
   return `Trace ${trace.traceId}
 Outcome: ${trace.outcome}
 Tool calls: ${trace.totalToolCalls}
-Active skills: ${trace.activeSkills.join(", ") || "(none)"}
+Used skills: ${trace.usedSkills.join(", ") || "(none)"}
 User message: ${trace.userMessage.slice(0, 200)}
 Steps:
 ${stepSummaries || "(none)"}`
