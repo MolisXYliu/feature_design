@@ -9,6 +9,7 @@ release
 resources/bin/win32/codex.exe
 .idea/
 .env
+.playwright-browsers/
 
 # Codex local files
 .codex/
