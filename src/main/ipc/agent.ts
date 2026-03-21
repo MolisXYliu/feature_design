@@ -88,7 +88,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
-        modelId: effectiveModelId
+        modelId: effectiveModelId,
+        abortSignal: abortController.signal
       })
       const humanMessage = new HumanMessage(message)
 
@@ -269,7 +270,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
-        modelId: effectiveModelId
+        modelId: effectiveModelId,
+        abortSignal: abortController.signal
       })
       const config = {
         configurable: { thread_id: threadId },
@@ -365,7 +367,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     window.once("closed", onWindowClosed)
 
     try {
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId })
+      const agent = await createAgentRuntime({ threadId, workspacePath, modelId, abortSignal: abortController.signal })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
@@ -420,9 +422,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   // Handle cancellation
   ipcMain.handle("agent:cancel", async (_event, { threadId }: AgentCancelParams) => {
     const controller = activeRuns.get(threadId)
+    console.log(`[Agent] cancel: threadId=${threadId}, hasController=${!!controller}, activeRuns=[${Array.from(activeRuns.keys()).join(", ")}]`)
     if (controller) {
       controller.abort()
       activeRuns.delete(threadId)
+      console.log(`[Agent] cancel: aborted controller for thread ${threadId}`)
+    } else {
+      console.warn(`[Agent] cancel: no active run found for thread ${threadId}`)
     }
   })
 }

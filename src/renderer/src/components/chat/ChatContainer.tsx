@@ -759,7 +759,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         console.error("[ChatContainer] Failed to cancel ChatX thread:", err)
       }
     } else {
-      await stream?.stop()
+      // Stop frontend stream and kill backend child processes in parallel
+      await Promise.all([
+        stream?.stop(),
+        window.api.agent.cancel(threadId)
+      ])
     }
   }
 

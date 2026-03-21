@@ -519,6 +519,8 @@ export interface CreateAgentRuntimeOptions {
   extraSystemPrompt?: string
   /** Skip the manage_scheduler tool (used by scheduled task / heartbeat execution to prevent recursive scheduling) */
   noSchedulerTool?: boolean
+  /** AbortSignal — when signalled, any running child process is killed immediately. */
+  abortSignal?: AbortSignal
 }
 
 // Create agent runtime with configured model and checkpointer
@@ -597,7 +599,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     windowsSandbox,
     codexExePath: codexExists ? codexExePath : undefined,
     // Pass a getter so hooks are always read fresh from storage at call time
-    hooks: getEnabledHooks
+    hooks: getEnabledHooks,
+    abortSignal: options.abortSignal
   })
 
   // ── Wire up the approval orchestrator ──

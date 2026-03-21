@@ -96,6 +96,10 @@ export interface LocalSandboxOptions {
   /** Hook configurations for PreToolUse/PostToolUse lifecycle events.
    *  Accepts a getter function so hooks are always read fresh from storage. */
   hooks?: HookConfig[] | (() => HookConfig[])
+  /** AbortSignal for cancelling running child processes when the user aborts.
+   *  When signalled, any in-flight execute() will kill its child process immediately
+   *  (SIGTERM → 200ms → SIGKILL), matching OpenCode/Codex abort behaviour. */
+  abortSignal?: AbortSignal
 }
 
 /**
@@ -132,6 +136,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly _elevatedMavenTempDir: string
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
+  /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
+  private abortSignal?: AbortSignal
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
   private readonly _virtualMode: boolean
@@ -228,6 +234,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const h = options.hooks
     this.getHooks = typeof h === "function" ? h : () => h ?? []
     this._elevatedMavenTempDir = baseEnv.TEMP || baseEnv.TMP || tmpdir()
+    this.abortSignal = options.abortSignal
 
     // Eagerly cache the elevation check during construction to avoid blocking
     // the event loop on the first file-write hot path (execSync("net session")).
@@ -1283,6 +1290,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   private static readonly SIGKILL_TIMEOUT_MS = 200
+  /** Max time (ms) to wait for stdout/stderr to drain after killing a process (matches Codex IO_DRAIN_TIMEOUT_MS). */
+  private static readonly IO_DRAIN_TIMEOUT_MS = 2_000
 
   /**
    * Kill a process tree in a platform-aware manner.
@@ -1291,7 +1300,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    */
   private static async killTree(proc: ChildProcess, exited: () => boolean): Promise<void> {
     const pid = proc.pid
-    if (!pid || exited()) return
+    if (!pid || exited()) {
+      console.log(`[LocalSandbox] killTree: skip (pid=${pid}, exited=${exited()})`)
+      return
+    }
+    console.log(`[LocalSandbox] killTree: killing pid=${pid}, platform=${process.platform}`)
 
     if (process.platform === "win32") {
       await new Promise<void>((res) => {
@@ -1303,15 +1316,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     try {
+      console.log(`[LocalSandbox] killTree: SIGTERM → pid=${pid}`)
       process.kill(-pid, "SIGTERM")
     } catch {
       try { proc.kill("SIGTERM") } catch { /* already exited */ }
     }
     await new Promise<void>((res) => setTimeout(res, LocalSandbox.SIGKILL_TIMEOUT_MS))
     if (!exited()) {
+      console.log(`[LocalSandbox] killTree: SIGKILL → pid=${pid} (not exited after ${LocalSandbox.SIGKILL_TIMEOUT_MS}ms)`)
       try { process.kill(-pid, "SIGKILL") } catch {
         try { proc.kill("SIGKILL") } catch { /* already exited */ }
       }
+    } else {
+      console.log(`[LocalSandbox] killTree: pid=${pid} exited after SIGTERM, no SIGKILL needed`)
     }
   }
 
@@ -1570,6 +1587,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let resolved = false
       let exited = false
 
+      // Early return if already aborted — avoid spawning a process just to kill it.
+      if (this.abortSignal?.aborted) {
+        resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
+        return
+      }
+
       console.log(`[LocalSandbox] spawn: ${this.codexExePath} ${JSON.stringify(sandboxArgs)}`)
       console.log(`[LocalSandbox] cwd: ${this.workingDir}`)
 
@@ -1584,42 +1607,39 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+      let timedOut = false
+      let aborted = false
+      let drainTimerId: ReturnType<typeof setTimeout> | null = null
 
       const killProc = (): void => {
         void LocalSandbox.killTree(proc, () => exited)
       }
 
       const timeoutId = setTimeout(() => {
-        if (!resolved) {
-          resolved = true
-          LocalSandbox.activeProcesses.delete(proc)
-          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          killProc()
-          const stdoutBuf = Buffer.concat(stdoutChunks)
-          const stderrBuf = Buffer.concat(stderrChunks)
-          const enc = this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
-          let existingOutput = ""
-          if (stdoutBuf.length > 0) existingOutput += iconv.decode(stdoutBuf, enc)
-          if (stderrBuf.length > 0) {
-            const errText = iconv.decode(stderrBuf, enc)
-              .split("\n").filter((l) => l.length > 0)
-              .map((l) => `[stderr] ${l}`).join("\n")
-            if (errText) existingOutput += (existingOutput ? "\n" : "") + errText
-          }
-          let truncated = false
-          if (existingOutput.length > this.maxOutputBytes) {
-            existingOutput = existingOutput.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
-            truncated = true
-          }
-          if (!existingOutput.trim()) existingOutput = "<no output>"
-          const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
-          resolve({
-            output: metadata + existingOutput,
-            exitCode: 124,
-            truncated
-          })
-        }
+        if (resolved || timedOut || aborted) return
+        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${this.timeout}ms`)
+        timedOut = true
+        killProc()
+        drainTimerId = setTimeout(() => {
+          console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }, this.timeout)
+
+      const abortHandler = (): void => {
+        if (resolved || timedOut || aborted) return
+        console.log(`[LocalSandbox] abort: pid=${proc.pid}, killing immediately`)
+        aborted = true
+        clearTimeout(timeoutId)
+        killProc()
+        drainTimerId = setTimeout(() => {
+          console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
+      }
+      if (this.abortSignal) {
+        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      }
 
       proc.stdout?.on("data", (chunk: Buffer) => {
         if (totalBytes < this.maxOutputBytes) {
@@ -1636,12 +1656,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       const collectAndResolve = (code: number | null, signal: string | null): void => {
-        if (resolved) return
+        if (resolved) {
+          console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
+          return
+        }
+        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
         resolved = true
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
@@ -1663,7 +1690,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         }
         if (!output.trim()) output = "<no output>"
 
-        resolve({ output, exitCode: signal ? null : code, truncated })
+        if (aborted) {
+          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 130, truncated })
+        } else if (timedOut) {
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 124, truncated })
+        } else {
+          resolve({ output, exitCode: signal ? null : code, truncated })
+        }
       }
 
       proc.on("exit", (code, signal) => {
@@ -1684,7 +1719,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const errno = err as NodeJS.ErrnoException
         if (errno.code === "EPERM" && attempt <= LocalSandbox.SPAWN_RETRY_COUNT) {
@@ -1770,6 +1807,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // stdin in non-interactive mode and executes the command correctly.
       // Note: stdin was already "ignore" (commands couldn't read stdin anyway),
       // so changing to "pipe" has no practical side effects.
+
+      // Early return if already aborted — avoid spawning a process just to kill it.
+      if (this.abortSignal?.aborted) {
+        resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
+        return
+      }
+
       const shellBase = path.basename(shell).replace(/\.exe$/i, "")
       const isBashOnWin = isWindows && ["bash", "sh", "zsh"].includes(shellBase)
 
@@ -1797,47 +1841,38 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
+      let timedOut = false
+      let aborted = false
+      /** After kill, if close doesn't fire within 2s, force-resolve (like Codex IO_DRAIN_TIMEOUT). */
+      let drainTimerId: ReturnType<typeof setTimeout> | null = null
 
-      // Intentionally fire-and-forget: timeout/error already resolved,
-      // kill is best-effort cleanup (same pattern as OpenCode's abort handler).
       const killProc = (): void => {
         void LocalSandbox.killTree(proc, () => exited)
       }
 
       const timeoutId = setTimeout(() => {
-        if (!resolved) {
-          resolved = true
-          LocalSandbox.activeProcesses.delete(proc)
-          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          killProc()
-          const stdoutBuf = Buffer.concat(stdoutChunks)
-          const stderrBuf = Buffer.concat(stderrChunks)
-          const enc = isWindows
-            ? this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
-            : "utf-8"
-          let existingOutput = ""
-          if (stdoutBuf.length > 0) existingOutput += iconv.decode(stdoutBuf, enc)
-          if (stderrBuf.length > 0) {
-            const stderrText = iconv.decode(stderrBuf, enc)
-            const prefixed = stderrText
-              .split("\n").filter((l) => l.length > 0)
-              .map((l) => `[stderr] ${l}`).join("\n")
-            if (prefixed) existingOutput += (existingOutput ? "\n" : "") + prefixed + (stderrText.endsWith("\n") ? "\n" : "")
-          }
-          let truncated = false
-          if (existingOutput.length > this.maxOutputBytes) {
-            existingOutput = existingOutput.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
-            truncated = true
-          }
-          if (!existingOutput.trim()) existingOutput = "<no output>"
-          const metadata = `<execute_metadata>\nexecute tool terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
-          resolve({
-            output: metadata + existingOutput,
-            exitCode: 124,
-            truncated
-          })
-        }
+        if (resolved || timedOut || aborted) return
+        timedOut = true
+        killProc()
+        // Give close event up to 2s to fire (drain remaining output).
+        // If it doesn't come, force-resolve with whatever we have.
+        drainTimerId = setTimeout(() => {
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }, this.timeout)
+
+      const abortHandler = (): void => {
+        if (resolved || timedOut || aborted) return
+        aborted = true
+        clearTimeout(timeoutId)
+        killProc()
+        drainTimerId = setTimeout(() => {
+          collectAndResolve(null, "SIGKILL")
+        }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
+      }
+      if (this.abortSignal) {
+        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      }
 
       proc.stdout.on("data", (chunk: Buffer) => {
         if (byteCapReached) return
@@ -1854,12 +1889,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       const collectAndResolve = (code: number | null, signal: string | null): void => {
-        if (resolved) return
+        if (resolved) {
+          console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
+          return
+        }
+        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
         resolved = true
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
         const stdoutBuf = Buffer.concat(stdoutChunks)
         const stderrBuf = Buffer.concat(stderrChunks)
@@ -1899,7 +1941,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           output = "<no output>"
         }
 
-        resolve({ output, exitCode: signal ? null : code, truncated })
+        // Add metadata prefix for abort/timeout, override exitCode
+        if (aborted) {
+          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 130, truncated })
+        } else if (timedOut) {
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          resolve({ output: metadata + output, exitCode: 124, truncated })
+        } else {
+          resolve({ output, exitCode: signal ? null : code, truncated })
+        }
       }
 
       // On Windows, .bat files may spawn child processes that inherit pipe handles.
@@ -1925,6 +1976,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         exited = true
         LocalSandbox.activeProcesses.delete(proc)
         clearTimeout(timeoutId)
+        if (drainTimerId) clearTimeout(drainTimerId)
+        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
         resolve({
           output: `Error: Failed to execute command: ${err.message}`,
           exitCode: 1,

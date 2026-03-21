@@ -138,7 +138,8 @@ async function executeTask(taskId: string): Promise<void> {
       threadId,
       workspacePath,
       modelId: task.modelId || undefined,
-      noSchedulerTool: true
+      noSchedulerTool: true,
+      abortSignal: abortController.signal
     })
 
     const converter = new StreamConverter()

@@ -220,7 +220,8 @@ async function handleInbound(msg: ChatXInboundMessage): Promise<void> {
     const agent = await createAgentRuntime({
       threadId,
       workspacePath,
-      modelId: robot.modelId || undefined
+      modelId: robot.modelId || undefined,
+      abortSignal: abortController.signal
     })
 
     const converter = new StreamConverter()
