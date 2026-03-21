@@ -9,3 +9,6 @@ release
 resources/bin/win32/codex.exe
 .idea/
 .env
+
+# Codex local files
+.codex/

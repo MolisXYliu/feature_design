@@ -23,14 +23,13 @@ import {
   Minus,
   Plus
 } from "lucide-react"
-import { memo, useState } from "react";
+import { memo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import { GitFileOperationPrompt } from "./GitPush/GitFileOperationPrompt"
-import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview";
-import { GitFileOperationPromptWithProps } from "@/components/chat/GitPush/GitFileOperationPromptWithProps"
+import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview"
+import { GitPush } from "@/components/chat/GitPush/GitPush"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -38,7 +37,9 @@ interface ToolCallRendererProps {
   isError?: boolean
   needsApproval?: boolean
   showApprovalButtons?: boolean
-  onApprovalDecision?: (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit") => void
+  onApprovalDecision?: (
+    decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"
+  ) => void
   /** Sandbox retry context — shown when sandbox blocked the command */
   retryReason?: string
   /** Which approval button types to show */
@@ -368,7 +369,11 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
     if (lines.length <= maxLines) return content
     return (
       lines.slice(0, maxLines).join("\n") +
-      "\n...(显示前 " + maxLines + " 行，共 " + lines.length + " 行)"
+      "\n...(显示前 " +
+      maxLines +
+      " 行，共 " +
+      lines.length +
+      " 行)"
     )
   }
 
@@ -385,7 +390,32 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
       oldValue={oldValue || displayOldContent}
       newValue={newValue || displayNewContent}
       splitView={fullscreen}
-      hideLineNumbers={false}
+      hideLineNumbers={!fullscreen}
+      renderGutter={
+        !fullscreen
+          ? (data) => {
+              const { lineNumber, additionalLineNumber, type, styles } = data
+              const displayLineNumber = lineNumber ?? additionalLineNumber
+              const added = type === 1
+              const removed = type === 2
+              const changed = type === 3
+
+              return (
+                <td
+                  className={cn(
+                    styles.gutter,
+                    !displayLineNumber && styles.emptyGutter,
+                    added && styles.diffAdded,
+                    removed && styles.diffRemoved,
+                    changed && styles.diffChanged
+                  )}
+                >
+                  <pre className={styles.lineNumber}>{displayLineNumber ?? ""}</pre>
+                </td>
+              )
+            }
+          : undefined
+      }
       useDarkTheme={false}
       loadingElement={() => (
         <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
@@ -421,7 +451,7 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
             codeFoldContentColor: "#A8A29E",
             diffViewerTitleBackground: "#F0EEE9",
             diffViewerTitleColor: "#44403C",
-            diffViewerTitleBorderColor: "#EEECE7",
+            diffViewerTitleBorderColor: "#EEECE7"
           }
         },
         diffContainer: {
@@ -429,19 +459,19 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
           minHeight: fullscreen ? "100%" : "80px",
           overflow: "auto",
           height: fullscreen ? "100%" : undefined,
-          borderRadius: "0",
+          borderRadius: "0"
         },
         line: {
           lineHeight: "1.65",
-          fontSize: "0.75rem",
+          fontSize: "0.75rem"
         },
         contentText: {
-          fontFamily: "'Consolas', 'JetBrains Mono', 'Fira Code', monospace",
+          fontFamily: "'Consolas', 'JetBrains Mono', 'Fira Code', monospace"
           // fontSize: "0.75rem",
         },
         gutter: {
           minWidth: "2.5rem",
-          padding: "0 0.5rem",
+          padding: "0 0.5rem"
         }
       }}
     />
@@ -472,9 +502,7 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
                 </span>
               )}
               {isLargeDiff && (
-                <span className="text-[10px] text-muted-foreground">
-                  共 {totalLines} 行
-                </span>
+                <span className="text-[10px] text-muted-foreground">共 {totalLines} 行</span>
               )}
             </div>
           )}
@@ -504,13 +532,19 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
       )}
 
       {/* Diff content */}
-      <div className="relative font-mono bg-background overflow-auto w-full" style={{ maxHeight: "22rem", minHeight: "5rem" }}>
+      <div
+        className="relative font-mono bg-background overflow-auto w-full"
+        style={{ maxHeight: "22rem", minHeight: "5rem" }}
+      >
         {makeDiffViewer(false)}
       </div>
 
       {/* Fullscreen modal */}
       {isFullscreen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur-sm" style={{ marginTop: "40px" }}>
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-background/98 backdrop-blur-sm"
+          style={{ marginTop: "40px" }}
+        >
           {/* Modal header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/40 shrink-0">
             <div className="flex items-center gap-3">
@@ -541,14 +575,23 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
                   className="inline-flex items-center gap-1.5 cursor-pointer px-3 py-1.5 text-xs font-medium bg-background hover:bg-muted border border-border rounded transition-colors"
                 >
                   {renderMode === "preview" ? (
-                    <><Eye className="size-3" />展开全部代码</>
+                    <>
+                      <Eye className="size-3" />
+                      展开全部代码
+                    </>
                   ) : (
-                    <><EyeOff className="size-3" />精简预览</>
+                    <>
+                      <EyeOff className="size-3" />
+                      精简预览
+                    </>
                   )}
                 </button>
               )}
               <button
-                onClick={() => { setIsFullscreen(false); setRenderMode("preview") }}
+                onClick={() => {
+                  setIsFullscreen(false)
+                  setRenderMode("preview")
+                }}
                 className="inline-flex items-center gap-1.5 cursor-pointer px-3 py-1.5 text-xs font-medium hover:bg-muted border border-border rounded transition-colors"
                 title="退出全屏"
               >
@@ -809,6 +852,8 @@ export function ToolCallRenderer({
         const path = (args.path || args.file_path) as string
         const content = args.content as string | undefined
         const newStr = args.new_str as string | undefined
+        const oldString = (args.old_string as string) || (args.old_str as string) || ""
+        const newString = (args.new_string as string) || (args.new_str as string) || ""
         const isMarkdownFile = path && (path.endsWith(".md") || path.endsWith(".markdown"))
 
         // For edit_file, we want to show the new content (new_str)
@@ -836,24 +881,20 @@ export function ToolCallRenderer({
         if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
           return (
             <div className="space-y-2">
-              <div className={'overflow-scroll'}>
-                <DiffDisplay
-                  oldValue={args.old_string as string || ""}
-                  newValue={args.new_string as string || ""}
-                />
-              </div>
               <div className="text-xs text-status-nominal flex items-center gap-1.5">
                 <CheckCircle2 className="size-3" />
-                <span>File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}</span>
+                <span>
+                  File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}
+                </span>
               </div>
-              <GitFileOperationPrompt
-                filePath={path}
+              <GitPush
                 operation={toolCall.name}
                 operationId={toolCall.id}
                 threadId={threadId}
-                oldValue={(args.old_string as string) || ""}
-                newValue={(args.new_string as string) || ""}
-                onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+                filePath={path}
+                oldValue={oldString}
+                newValue={newString || content || ""}
+                onSkip={() => setSkippedGitPrompts((prev) => new Set(prev).add(toolCall.id))}
               />
             </div>
           )
@@ -901,8 +942,8 @@ export function ToolCallRenderer({
       }
 
       case "git_workflow": {
-        // Git workflow operation with GitFileOperationPrompt for display
-        if (!result || typeof result !== 'string') {
+        // Git workflow operation with GitPush for display
+        if (!result || typeof result !== "string") {
           return (
             <div className="text-xs text-status-critical flex items-center gap-1.5">
               <XCircle className="size-3" />
@@ -915,7 +956,7 @@ export function ToolCallRenderer({
         try {
           gitResult = JSON.parse(result as string)
         } catch (error) {
-          console.error('Failed to parse git result:', error)
+          console.error("Failed to parse git result:", error)
           return (
             <div className="text-xs text-status-critical flex items-center gap-1.5">
               <XCircle className="size-3" />
@@ -924,9 +965,9 @@ export function ToolCallRenderer({
           )
         }
 
-        const branch = gitResult.branch as string || ""
-        const remoteUrl = gitResult.remoteUrl as string || ""
-        const commitMessage = gitResult.commitMessage as string || ""
+        const branch = (gitResult.branch as string) || ""
+        const remoteUrl = (gitResult.remoteUrl as string) || ""
+        const commitMessage = (gitResult.commitMessage as string) || ""
         const changedFiles = gitResult.changedFiles || []
         const workspacePath = gitResult.workspacePath || ""
 
@@ -941,7 +982,7 @@ export function ToolCallRenderer({
 
         return (
           <div className="space-y-2">
-            <GitFileOperationPromptWithProps
+            <GitPush
               workspacePath={workspacePath}
               remoteUrl={remoteUrl}
               branch={branch}
@@ -950,7 +991,7 @@ export function ToolCallRenderer({
               operation="git_workflow"
               operationId={toolCall.id}
               threadId={threadId}
-              onSkip={() => setSkippedGitPrompts(prev => new Set(prev).add(toolCall.id))}
+              onSkip={() => setSkippedGitPrompts((prev) => new Set(prev).add(toolCall.id))}
             />
           </div>
         )
