@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react"
-import { Cpu, FolderOpen, Plus, Trash2, Pencil, Radio } from "lucide-react"
+import { Cpu, FolderOpen, Plus, Trash2, Pencil, Radio, Copy, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -161,13 +161,85 @@ function RobotEditDialog(props: {
 
 // ── Robot Detail View ────────────────────────────────────────────────────────
 
+function CallbackUrlBuilder(props: {
+  chatIds: string[]
+  userIp: string
+}): React.JSX.Element {
+  const { chatIds, userIp } = props
+  const [selectedChatId, setSelectedChatId] = useState("")
+  const [copied, setCopied] = useState(false)
+
+  const callbackBase = (import.meta.env.VITE_CHATX_CALLBACK_URL as string) || ""
+  const ip = userIp
+
+  const chatId = (selectedChatId && chatIds.includes(selectedChatId))
+    ? selectedChatId
+    : chatIds[0] || ""
+  const callbackUrl = callbackBase && ip && chatId
+    ? `${callbackBase}?ip=${encodeURIComponent(ip)}&chatid=${encodeURIComponent(chatId)}`
+    : ""
+
+  const handleCopy = (): void => {
+    if (!callbackUrl) return
+    navigator.clipboard.writeText(callbackUrl).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {})
+  }
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-foreground/70">回调地址</p>
+        {chatIds.length > 1 && (
+          <select
+            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            value={chatId}
+            onChange={(e) => setSelectedChatId(e.target.value)}
+          >
+            {chatIds.map((id) => (
+              <option key={id} value={id}>{id}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      <p className="text-[12px] text-muted-foreground">
+        将以下地址配置到机器人后台，远端消息将转发到本机处理
+      </p>
+      {callbackUrl ? (
+        <div className="flex items-start gap-2 rounded-lg bg-background/80 border border-border/40 p-2.5">
+          <code className="flex-1 text-[12px] break-all select-all text-foreground/80 leading-relaxed">
+            {callbackUrl}
+          </code>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 shrink-0 text-xs gap-1"
+            onClick={handleCopy}
+          >
+            {copied ? <><Check className="size-3 text-green-500" />已复制</> : <><Copy className="size-3" />复制</>}
+          </Button>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-background/80 border border-border/40 p-2.5">
+          <p className="text-[12px] text-muted-foreground">
+            {!callbackBase ? "回调地址未配置，请联系管理员" : !ip ? "请先开启服务以获取 IP" : "请先添加机器人"}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function RobotDetail(props: {
   robot: ChatXRobotConfig | null
   models: Array<{ id: string; name: string }>
+  chatIds: string[]
+  userIp: string
   onEdit: () => void
   onDelete: () => void
 }): React.JSX.Element {
-  const { robot, models, onEdit, onDelete } = props
+  const { robot, models, chatIds, userIp, onEdit, onDelete } = props
 
   if (!robot) {
     return (
@@ -179,20 +251,22 @@ function RobotDetail(props: {
             </div>
             <h3 className="text-lg font-semibold text-foreground/80">机器人管理</h3>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              通过 WebSocket 接收远端消息，自动调用 AI 处理后将结果通过 HTTP 回复。支持配置多个独立的机器人，每个机器人拥有独立的会话、模型和工作目录。
+              接收远端消息并自动调用 AI 处理后回复。支持配置多个独立的机器人，每个机器人拥有独立的会话、模型和工作目录。
             </p>
           </div>
 
           <div className="space-y-3">
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
-              <p className="text-sm font-medium text-foreground/70">如何使用？</p>
+              <p className="text-sm font-medium text-foreground/70">快速开始</p>
               <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>填写用户 IP，开启服务</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>点击 <span className="font-medium text-foreground/60">+</span> 添加机器人，配置会话 ID、认证信息等参数</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>远端消息通过 WS 推送到本地，AI 自动处理并通过 HTTP 回复</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>也可在侧边栏主动创建机器人对话，回复同样发送到远端</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>点击 <span className="font-medium text-foreground/60">+</span> 添加机器人，配置认证信息与工作目录</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>开启服务，确认 IP 后自动连接</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>复制下方回调地址，配置到机器人后台</li>
+                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>收到远端消息后 AI 自动处理并回复</li>
               </ul>
             </div>
+
+            <CallbackUrlBuilder chatIds={chatIds} userIp={userIp} />
 
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">适用场景</p>
@@ -251,7 +325,84 @@ function RobotDetail(props: {
   )
 }
 
+// ── IP Confirm Dialog ─────────────────────────────────────────────────────────
+
+function IpConfirmDialog(props: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: (ip: string) => void
+}): React.JSX.Element {
+  const { open, onOpenChange, onConfirm } = props
+  const [ip, setIp] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setIp("")
+    setError(null)
+    setLoading(true)
+    window.electron.ipcRenderer
+      .invoke("get-local-ip")
+      .then((detectedIp: unknown) => {
+        setIp(typeof detectedIp === "string" ? detectedIp : "")
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [open])
+
+  const handleConfirm = (): void => {
+    const trimmed = ip.trim()
+    if (!trimmed) { setError("IP 不能为空"); return }
+    if (!IPV4_RE.test(trimmed)) { setError("IP 格式无效"); return }
+    onConfirm(trimmed)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>确认用户 IP</DialogTitle>
+          <DialogDescription>
+            启用前请确认本机 IP 地址，系统已自动检测，如不正确可手动修改。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Input
+            value={ip}
+            onChange={(e) => { setError(null); setIp(e.target.value) }}
+            placeholder={loading ? "正在检测..." : "192.168.1.100"}
+            disabled={loading}
+            className={cn("h-9 text-sm", error && "border-destructive focus-visible:ring-destructive")}
+          />
+          {error && <p className="text-[11px] text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button onClick={handleConfirm} disabled={loading}>确认启用</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ── Main Panel ───────────────────────────────────────────────────────────────
+
+type ChatXStatus = "disconnected" | "connecting" | "connected" | "reconnecting"
+
+const statusLabel: Record<ChatXStatus, string> = {
+  disconnected: "未连接",
+  connecting: "连接中",
+  connected: "已连接",
+  reconnecting: "重连中"
+}
+
+const statusColor: Record<ChatXStatus, string> = {
+  disconnected: "bg-muted-foreground/40",
+  connecting: "bg-yellow-500",
+  connected: "bg-green-500",
+  reconnecting: "bg-yellow-500"
+}
 
 export function ChatXPanel(): React.JSX.Element {
   const [config, setConfig] = useState<ChatXConfig | null>(null)
@@ -259,15 +410,28 @@ export function ChatXPanel(): React.JSX.Element {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editIndex, setEditIndex] = useState<number | null>(null)
-  const [ipError, setIpError] = useState<string | null>(null)
+  const [ipConfirmOpen, setIpConfirmOpen] = useState(false)
+  const [wsStatus, setWsStatus] = useState<ChatXStatus>("disconnected")
   const mountedRef = useRef(true)
-  const globalSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     mountedRef.current = true
+    const { ipcRenderer } = window.electron
+    const validStatuses = new Set<string>(["disconnected", "connecting", "connected", "reconnecting"])
+    const removeListener = ipcRenderer.on("chatx:status", (status: unknown) => {
+      if (mountedRef.current && typeof status === "string" && validStatuses.has(status)) {
+        setWsStatus(status as ChatXStatus)
+      }
+    })
+    // 挂载时主动查询一次当前状态
+    ipcRenderer.invoke("chatx:get-status").then((status: unknown) => {
+      if (mountedRef.current && typeof status === "string" && validStatuses.has(status)) {
+        setWsStatus(status as ChatXStatus)
+      }
+    }).catch(() => {})
     return () => {
       mountedRef.current = false
-      if (globalSaveTimerRef.current) clearTimeout(globalSaveTimerRef.current)
+      removeListener()
     }
   }, [])
 
@@ -297,34 +461,24 @@ export function ChatXPanel(): React.JSX.Element {
 
   const handleToggleEnabled = useCallback(async (enabled: boolean) => {
     if (!enabled && config?.enabled) {
-      if (!window.confirm("禁用后将断开 WebSocket 连接并中止所有运行中的机器人对话，确定禁用吗？")) {
+      if (!window.confirm("禁用后将断开连接并中止所有运行中的机器人对话，确定禁用吗？")) {
         return
       }
-    }
-    // Flush pending debounced save to avoid stale userIp
-    if (globalSaveTimerRef.current && config) {
-      clearTimeout(globalSaveTimerRef.current)
-      globalSaveTimerRef.current = null
-      await saveConfig({ userIp: config.userIp })
+      setConfig((prev) => prev ? { ...prev, enabled: false } : prev)
+      setWsStatus("disconnected")
+      await saveConfig({ enabled: false })
+      try { await window.api.chatx.restart() } catch { /* ignore */ }
+      return
     }
     if (enabled && config) {
       if (!import.meta.env.VITE_CHATX_WS_URL && !config.wsUrl?.trim()) {
-        alert("WebSocket 地址未配置，请联系管理员检查 .env 配置")
-        return
-      }
-      if (!config.userIp.trim()) {
-        alert("请先填写用户 IP")
-        return
-      }
-      if (!IPV4_RE.test(config.userIp.trim())) {
-        alert("用户 IP 格式无效")
+        alert("服务地址未配置，请联系管理员检查配置")
         return
       }
       if (config.robots.length === 0) {
         alert("请先添加至少一个机器人")
         return
       }
-      // Check all robots have required fields
       for (let i = 0; i < config.robots.length; i++) {
         const r = config.robots[i]
         if (!r.chatId || !r.fromId || !r.clientId || !r.clientSecret || !r.workDir || r.toUserList.length === 0) {
@@ -332,34 +486,16 @@ export function ChatXPanel(): React.JSX.Element {
           return
         }
       }
+      // 弹出 IP 确认弹窗
+      setIpConfirmOpen(true)
     }
-    setConfig((prev) => prev ? { ...prev, enabled } : prev)
-    await saveConfig({ enabled })
-    try { await window.api.chatx.restart() } catch { /* ignore */ }
   }, [saveConfig, config])
 
-  const updateGlobal = useCallback((field: "userIp", value: string) => {
-    setConfig((prev) => {
-      if (!prev) return prev
-      const next = { ...prev, [field]: value }
-      if (globalSaveTimerRef.current) clearTimeout(globalSaveTimerRef.current)
-      globalSaveTimerRef.current = setTimeout(async () => {
-        const ip = next.userIp.trim()
-        if (!ip) {
-          setIpError(null)
-          await saveConfig({ userIp: "" })
-        } else if (IPV4_RE.test(ip)) {
-          setIpError(null)
-          await saveConfig({ userIp: ip })
-          if (next.enabled) {
-            try { await window.api.chatx.restart() } catch { /* ignore */ }
-          }
-        } else {
-          setIpError("IP 格式无效")
-        }
-      }, 500)
-      return next
-    })
+  const handleIpConfirmed = useCallback(async (ip: string) => {
+    setIpConfirmOpen(false)
+    setConfig((prev) => prev ? { ...prev, userIp: ip, enabled: true } : prev)
+    await saveConfig({ userIp: ip, enabled: true })
+    try { await window.api.chatx.restart() } catch { /* ignore */ }
   }, [saveConfig])
 
   const handleAddRobot = useCallback(() => {
@@ -374,7 +510,7 @@ export function ChatXPanel(): React.JSX.Element {
     }
   }, [selectedIndex])
 
-  const handleSaveRobot = useCallback((robot: ChatXRobotConfig) => {
+  const handleSaveRobot = useCallback(async (robot: ChatXRobotConfig) => {
     if (!config) return
     const robots = [...config.robots]
     if (editIndex !== null) {
@@ -384,24 +520,34 @@ export function ChatXPanel(): React.JSX.Element {
       setSelectedIndex(robots.length - 1)
     }
     setConfig((prev) => prev ? { ...prev, robots } : prev)
-    saveConfig({ robots })
+    await saveConfig({ robots })
   }, [editIndex, saveConfig, config])
 
-  const handleDeleteRobot = useCallback(() => {
+  const handleDeleteRobot = useCallback(async () => {
     if (selectedIndex === null || !config) return
     const robot = config.robots[selectedIndex]
     if (!robot) return
 
-    const msg = config.enabled
-      ? `确定删除机器人「${robot.chatId || "未命名"}」吗？\n\n该机器人当前处于启用状态，删除后将无法接收对应会话的消息。`
-      : `确定删除机器人「${robot.chatId || "未命名"}」吗？`
+    const isLast = config.robots.length === 1
+    const msg = config.enabled && isLast
+      ? `确定删除机器人「${robot.chatId || "未命名"}」吗？\n\n这是最后一个机器人，删除后服务将自动关闭。`
+      : config.enabled
+        ? `确定删除机器人「${robot.chatId || "未命名"}」吗？\n\n该机器人当前处于启用状态，删除后将无法接收对应会话的消息。`
+        : `确定删除机器人「${robot.chatId || "未命名"}」吗？`
 
     if (!window.confirm(msg)) return
 
     const robots = config.robots.filter((_, i) => i !== selectedIndex)
     setSelectedIndex(robots.length > 0 ? Math.min(selectedIndex, robots.length - 1) : null)
-    setConfig((prev) => prev ? { ...prev, robots } : prev)
-    saveConfig({ robots })
+    if (robots.length === 0 && config.enabled) {
+      setConfig((prev) => prev ? { ...prev, robots, enabled: false } : prev)
+      setWsStatus("disconnected")
+      await saveConfig({ robots, enabled: false })
+      try { await window.api.chatx.restart() } catch { /* ignore */ }
+    } else {
+      setConfig((prev) => prev ? { ...prev, robots } : prev)
+      await saveConfig({ robots })
+    }
   }, [selectedIndex, saveConfig, config])
 
   if (!config) {
@@ -420,7 +566,15 @@ export function ChatXPanel(): React.JSX.Element {
       <div className="w-[330px] shrink-0 border-r border-border flex flex-col">
         <div className="p-3 border-b border-border space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold">机器人管理</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold">机器人管理</h2>
+              {config.enabled && (
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <span className={cn("size-1.5 rounded-full", statusColor[wsStatus], (wsStatus === "connecting" || wsStatus === "reconnecting") && "animate-pulse")} />
+                  {statusLabel[wsStatus]}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <label className="flex items-center gap-1.5 cursor-pointer">
                 <span className="text-xs text-muted-foreground">
@@ -448,17 +602,6 @@ export function ChatXPanel(): React.JSX.Element {
                 <Plus className="size-4" />
               </Button>
             </div>
-          </div>
-
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">用户 IP</label>
-            <Input
-              value={config.userIp}
-              onChange={(e) => { setIpError(null); updateGlobal("userIp", e.target.value) }}
-              placeholder="192.168.1.100"
-              className={cn("h-8 text-sm", ipError && "border-destructive focus-visible:ring-destructive")}
-            />
-            {ipError && <p className="text-[11px] text-destructive mt-1">{ipError}</p>}
           </div>
         </div>
 
@@ -494,6 +637,8 @@ export function ChatXPanel(): React.JSX.Element {
       <RobotDetail
         robot={selectedRobot}
         models={models}
+        chatIds={config.robots.map((r) => r.chatId).filter(Boolean)}
+        userIp={config.userIp}
         onEdit={handleEditRobot}
         onDelete={handleDeleteRobot}
       />
@@ -506,6 +651,13 @@ export function ChatXPanel(): React.JSX.Element {
         editRobot={editIndex !== null ? config.robots[editIndex] ?? null : null}
         models={models}
         existingChatIds={config.robots.map((r) => r.chatId)}
+      />
+
+      {/* IP Confirm Dialog */}
+      <IpConfirmDialog
+        open={ipConfirmOpen}
+        onOpenChange={setIpConfirmOpen}
+        onConfirm={handleIpConfirmed}
       />
     </>
   )
