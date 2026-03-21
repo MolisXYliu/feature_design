@@ -8,14 +8,14 @@ function notifyChanged(): void {
 }
 
 export function registerSandboxHandlers(ipcMain: IpcMain): void {
-  ipcMain.handle("sandbox:getMode", async (): Promise<"none" | "unelevated"> => {
+  ipcMain.handle("sandbox:getMode", async (): Promise<"none" | "unelevated" | "readonly"> => {
     return getWindowsSandboxMode()
   })
 
   ipcMain.handle(
     "sandbox:setMode",
-    async (_event, mode: "none" | "unelevated"): Promise<void> => {
-      if (mode !== "none" && mode !== "unelevated") {
+    async (_event, mode: "none" | "unelevated" | "readonly"): Promise<void> => {
+      if (mode !== "none" && mode !== "unelevated" && mode !== "readonly") {
         throw new Error(`Invalid sandbox mode: ${mode}`)
       }
       setWindowsSandboxMode(mode)

@@ -14,6 +14,7 @@ import type {
   PluginMetadata,
   PluginManifest
 } from "../main/types"
+import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
@@ -223,6 +224,12 @@ const api = {
       maxTokens?: number
     }): Promise<{ id: string }> => {
       return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
+    },
+    upsertUserInfo: (config: UserInfoConfig): Promise<{ id: string }> => {
+      return ipcRenderer.invoke("models:upsertUserInfo", config) as Promise<{ id: string }>
+    },
+    getUserInfo: (): Promise<UserInfoConfig | null> => {
+      return ipcRenderer.invoke("models:getUserInfo") as Promise<UserInfoConfig | null>
     },
     deleteCustomConfig: (id: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>
@@ -531,9 +538,9 @@ const api = {
       ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   },
   sandbox: {
-    getMode: (): Promise<"none" | "unelevated"> =>
-      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated">,
-    setMode: (mode: "none" | "unelevated"): Promise<void> =>
+    getMode: (): Promise<"none" | "unelevated" | "readonly"> =>
+      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly">,
+    setMode: (mode: "none" | "unelevated" | "readonly"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
     getYoloMode: (): Promise<boolean> =>
       ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,

@@ -52,7 +52,7 @@ export function ThreadKanbanCard({ thread, status, onClick }: ThreadCardProps): 
               </span>
               {status === "done" && (
                 <Badge variant="nominal" className="shrink-0 text-[9px]">
-                  DONE
+                  完成
                 </Badge>
               )}
             </div>
@@ -98,7 +98,7 @@ export function SubagentKanbanCard({
                   variant={subagent.status === "failed" ? "critical" : "nominal"}
                   className="shrink-0 text-[9px]"
                 >
-                  {subagent.status === "failed" ? "FAILED" : "DONE"}
+                  {subagent.status === "failed" ? "失败" : "完成"}
                 </Badge>
               )}
             </div>

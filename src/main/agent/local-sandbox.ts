@@ -9,14 +9,15 @@
  * handled via HITL configuration.
  */
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, execSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { constants as fsConstants, existsSync } from "node:fs"
+import { constants as fsConstants, existsSync, realpathSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
   FilesystemBackend,
   type EditResult,
+  type WriteResult,
   type ExecuteResponse,
   type SandboxBackendProtocol,
   type GrepMatch,
@@ -44,8 +45,8 @@ export interface LocalSandboxOptions {
   maxOutputBytes?: number
   /** Environment variables to pass to commands (default: process.env) */
   env?: Record<string, string>
-  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'none' runs directly (default: 'none') */
-  windowsSandbox?: "none" | "unelevated"
+  /** Windows sandbox mode: 'unelevated' uses Codex restricted-token sandbox, 'readonly' uses Codex read-only sandbox, 'none' runs directly (default: 'none') */
+  windowsSandbox?: "none" | "unelevated" | "readonly"
   /** Full path to codex.exe for Windows sandbox. Falls back to 'codex' on PATH if not provided. */
   codexExePath?: string
 }
@@ -77,7 +78,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly maxOutputBytes: number
   private readonly env: Record<string, string>
   private readonly workingDir: string
-  private readonly windowsSandbox: "none" | "unelevated"
+  private readonly windowsSandbox: "none" | "unelevated" | "readonly"
   private readonly codexExePath: string
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
@@ -107,6 +108,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     this.windowsSandbox = options.windowsSandbox ?? "none"
     this.codexExePath = options.codexExePath ?? "codex"
 
+    // Eagerly cache the elevation check during construction to avoid blocking
+    // the event loop on the first file-write hot path (execSync("net session")).
+    if (process.platform === "win32" && this.windowsSandbox === "readonly") {
+      LocalSandbox.isElevated()
+    }
+
+    // Redirect deepagents' virtual eviction paths (e.g. /large_tool_results/)
+    // to workspace-local dirs, since virtualMode=false treats "/" as absolute
+    // and writing to system root fails on macOS (SIP) and Windows (permissions).
+    // MUST run before caching _resolvePath below, so the cache captures the patched version.
+    this.patchResolvePath()
+
     // Cache parent's private fields once to avoid scattered (this as any) casts
     this._resolvePath = ((this as any).resolvePath as (key: string) => string).bind(this)
     this._virtualMode = ((this as any).virtualMode as boolean) ?? false
@@ -119,34 +132,30 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       console.warn("[LocalSandbox] parent cwd not found, falling back to workingDir")
     }
 
-    // TODO: patchResolvePath 暂时禁用，实测 /large_tool_results 在 Mac/Linux/Windows 均可直接写入
-    // 若后续 deepagents 开放 eviction 路径配置，可直接删除此段代码
-    // this.patchResolvePath()
-
   }
 
-  // private patchResolvePath(): void {
-  //   if (typeof (this as any).resolvePath !== "function") {
-  //     console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
-  //     return
-  //   }
-  //   const original = (this as any).resolvePath.bind(this)
-  //   const workingDir = this.workingDir
-  //   const redirects: Record<string, string> = {
-  //     "/large_tool_results/": ".cmbcoworkagent/large_tool_results"
-  //   }
-  //   ;(this as any).resolvePath = (key: string): string => {
-  //     for (const [prefix, localDir] of Object.entries(redirects)) {
-  //       if (key.startsWith(prefix)) {
-  //         const redirected = join(workingDir, localDir, key.slice(prefix.length))
-  //         console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
-  //         key = redirected
-  //         break
-  //       }
-  //     }
-  //     return original(key)
-  //   }
-  // }
+  private patchResolvePath(): void {
+    if (typeof (this as any).resolvePath !== "function") {
+      console.warn("[LocalSandbox] resolvePath not found on FilesystemBackend — skipping path patch")
+      return
+    }
+    const original = (this as any).resolvePath.bind(this)
+    const workingDir = this.workingDir
+    const redirects: Record<string, string> = {
+      "/large_tool_results/": ".cmbdevclaw/large_tool_results"
+    }
+    ;(this as any).resolvePath = (key: string): string => {
+      for (const [prefix, localDir] of Object.entries(redirects)) {
+        if (key.startsWith(prefix)) {
+          const redirected = path.join(workingDir, localDir, key.slice(prefix.length))
+          console.log("[LocalSandbox] Redirecting path:", key, "→", redirected)
+          key = redirected
+          break
+        }
+      }
+      return original(key)
+    }
+  }
 
   private static readonly MAX_GREP_MATCHES = 200
   private static readonly MAX_GREP_CHARS = 24_000
@@ -511,6 +520,85 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   /**
+   * Check if a file write should be blocked by the sandbox.
+   * - readonly + non-admin: block all writes
+   * - readonly + admin: only allow writes within the working directory
+   * - unelevated / none: allow all writes (shell sandbox handles restriction)
+   *
+   * Uses realpathSync to resolve symlinks and toLowerCase for Windows
+   * case-insensitive path comparison.
+   */
+  private isWriteBlocked(filePath: string): boolean {
+    if (this.windowsSandbox !== "readonly") return false
+    if (!LocalSandbox.isElevated()) return true
+    // Admin readonly: restrict to working directory only (matches disk-write-cwd)
+    try {
+      const resolved = path.resolve(this.workingDir, filePath)
+      // Resolve symlinks to prevent traversal via symlinked directories.
+      // If the file doesn't exist yet, resolve its parent directory instead.
+      let realTarget: string
+      try {
+        realTarget = realpathSync(resolved)
+      } catch {
+        // File doesn't exist yet — resolve parent dir + basename
+        const parentReal = realpathSync(path.dirname(resolved))
+        realTarget = path.join(parentReal, path.basename(resolved))
+      }
+      const realCwd = realpathSync(this.workingDir)
+      // Windows paths are case-insensitive
+      const normalizedTarget = realTarget.toLowerCase()
+      const normalizedCwd = realCwd.toLowerCase()
+      const cwdPrefix = normalizedCwd + path.sep
+      return !normalizedTarget.startsWith(cwdPrefix) && normalizedTarget !== normalizedCwd
+    } catch {
+      return true
+    }
+  }
+
+  /** Build a readonly-sandbox block error message for the given file and action verb. */
+  private readonlyBlockedError(filePath: string, action: string): string {
+    return LocalSandbox.isElevated()
+      ? `只读沙箱模式下仅允许${action}工作目录内的文件。'${filePath}' 不在工作目录 '${this.workingDir}' 内。`
+      : `只读沙箱模式下禁止${action}文件 '${filePath}'。如需${action}请以管理员身份运行或切换沙箱模式。`
+  }
+
+  /**
+   * Override write to enforce readonly sandbox restrictions.
+   */
+  async write(filePath: string, content: string): Promise<WriteResult> {
+    if (this.isWriteBlocked(filePath)) {
+      return { error: this.readonlyBlockedError(filePath, "写入") }
+    }
+    return super.write(filePath, content)
+  }
+
+  /**
+   * Override uploadFiles to enforce readonly sandbox restrictions on each file.
+   */
+  async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
+    if (this.windowsSandbox !== "readonly") return super.uploadFiles(files)
+
+    // Separate blocked files from allowed files, preserving original order
+    const indexed = files.map(([filePath, content], i) => ({ filePath, content, i, blocked: this.isWriteBlocked(filePath) }))
+    const allowed = indexed.filter((e) => !e.blocked)
+
+    // Batch-delegate all allowed files in one call
+    const allowedResults = allowed.length > 0
+      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, string | Buffer]))
+      : []
+
+    // Merge results back in original order
+    const results: { path: string; error: string | null }[] = new Array(files.length)
+    let ai = 0
+    for (const entry of indexed) {
+      results[entry.i] = entry.blocked
+        ? { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
+        : allowedResults[ai++]
+    }
+    return results
+  }
+
+  /**
    * Override edit to:
    * 1. Auto-detect file encoding (GBK, Shift_JIS, etc.) — same as read()
    * 2. Use OpenCode's 9-layer progressive string replacement for better
@@ -523,6 +611,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     newString: string,
     replaceAll = false
   ): Promise<EditResult> {
+    if (this.isWriteBlocked(filePath)) {
+      return { error: this.readonlyBlockedError(filePath, "编辑") }
+    }
     try {
       const { buffer, resolvedPath } = await this.readFileBuffer(filePath)
       const ext = path.extname(resolvedPath).toLowerCase()
@@ -787,6 +878,25 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   // Use SID *S-1-1-0 instead of "Everyone" to avoid locale issues on non-English Windows.
   private static readonly EVERYONE_SID = "*S-1-1-0"
 
+  /** Cached result of admin elevation check. */
+  private static _isElevated: boolean | null = null
+
+  /** Check if the current process is running with administrator privileges (Windows only). Cached after first call. */
+  static isElevated(): boolean {
+    if (LocalSandbox._isElevated !== null) return LocalSandbox._isElevated
+    if (process.platform !== "win32") {
+      LocalSandbox._isElevated = false
+      return false
+    }
+    try {
+      execSync("net session", { stdio: "ignore" })
+      LocalSandbox._isElevated = true
+    } catch {
+      LocalSandbox._isElevated = false
+    }
+    return LocalSandbox._isElevated
+  }
+
   /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done. */
   private static grantSandboxWriteAcl(dir: string): Promise<void> {
     // (OI)(CI) = inherit to files & subdirs so the restricted token can
@@ -879,7 +989,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
-    if (process.platform === "win32" && this.windowsSandbox === "unelevated") {
+    if (process.platform === "win32" && this.windowsSandbox !== "none") {
       return this.executeInWindowsSandbox(command)
     }
 
@@ -916,8 +1026,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   }
 
   /**
-   * Execute a command inside the Codex Windows unelevated sandbox.
-   * Uses restricted token + NTFS ACL for isolation (no admin required).
+   * Execute a command inside the Codex Windows sandbox.
+   * - unelevated: restricted token + NTFS ACL (workdir writable, network blocked)
+   * - readonly: read-only for normal users; admin allows cwd write
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
   private async executeInWindowsSandbox(command: string, attempt = 1): Promise<ExecuteResponse> {
@@ -925,10 +1036,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
     // Force UTF-8 for all output streams (stdout + stderr).
-    // - chcp 65001: sets console code page so external programs output UTF-8
-    // - [Console]::OutputEncoding: controls .NET stdout encoding (affects cmdlet output)
-    // - [Console]::InputEncoding: ensures stderr error messages use UTF-8 for paths
-    // - $OutputEncoding: controls how PS encodes strings sent to native commands
     const shellBase = path.basename(shell).replace(/\.exe$/i, "").toLowerCase()
     const psUtf8Preamble = [
       "chcp 65001 >$null",
@@ -941,18 +1048,43 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ? `${psUtf8Preamble}; ${command}`
         : command
 
-    const sandboxArgs = [
-      "sandbox", "windows",
-      "--full-auto",
-      "--",
-      shell, ...shellFlags, effectiveCommand
-    ]
+    const isReadonly = this.windowsSandbox === "readonly"
+    const elevated = isReadonly && LocalSandbox.isElevated()
 
-    // Grant Everyone Modify ACL on writable roots so the restricted-token
-    // sandbox process can actually write to cwd and TMPDIR.
-    const aclDirs = [this.workingDir]
+    // readonly + admin: grant full read + cwd write so admin can work in workspace
+    // readonly + non-admin: read only, all writes blocked
+    // unelevated: workdir writable via --full-auto + ACL
+    const sandboxArgs = isReadonly
+      ? elevated
+        ? [
+            "sandbox", "windows",
+            "-c", 'sandbox_permissions=["disk-full-read-access","disk-write-cwd"]',
+            "--",
+            shell, ...shellFlags, effectiveCommand
+          ]
+        : [
+            "sandbox", "windows",
+            "-c", 'sandbox_permissions=["disk-full-read-access"]',
+            "--",
+            shell, ...shellFlags, effectiveCommand
+          ]
+      : [
+          "sandbox", "windows",
+          "--full-auto",
+          "--",
+          shell, ...shellFlags, effectiveCommand
+        ]
+
+    // ACL grant/revoke needed for unelevated mode and readonly+admin (restricted token still needs NTFS permission).
+    // Readonly non-admin also needs TEMP writable so commands (git, python, etc.) that write temp files don't fail.
+    const aclDirs: string[] = []
+    if (!isReadonly || elevated) {
+      aclDirs.push(this.workingDir)
+    }
+    // Always grant TEMP write for all sandbox modes — even readonly non-admin
+    // needs it for commands that create temp files.
     const tmpDir = process.env.TEMP || process.env.TMP
-    if (tmpDir && tmpDir !== this.workingDir) {
+    if (tmpDir && !aclDirs.includes(tmpDir)) {
       aclDirs.push(tmpDir)
     }
     await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
@@ -1079,7 +1211,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
     })
     } finally {
-      await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
+      if (aclDirs.length > 0) {
+        await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
+      }
     }
   }
 

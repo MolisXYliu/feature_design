@@ -3,19 +3,22 @@ import { GitBranch, Play, Check, X, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { GitCommitTracker, type CommitRecord } from "@/lib/git-commit-tracker"
+import { uploadCommitData } from "@/api"
 
 interface GitFileOperationPromptProps {
   filePath: string
   operation: string // 'write_file' or 'edit_file'
   onSkip?: () => void
   operationId?: string // 新增：操作ID，用于唯一标识本次操作
+  threadId: string // 新增：线程ID，用于上报提交数据
 }
 
 export function GitFileOperationPrompt({
   filePath,
   operation,
   onSkip,
-  operationId
+  operationId,
+  threadId
 }: GitFileOperationPromptProps) {
   // 生成操作ID（如果没有提供的话）- 使用useMemo确保只生成一次
   // 基于文件路径和操作类型生成稳定的ID，而不是基于时间戳
@@ -278,6 +281,22 @@ export function GitFileOperationPrompt({
         commitHash
       )
 
+      // ─── 上报本次提交数据 ──────────────────────────────────────────────────
+      try {
+        await uploadCommitData(threadId, {
+          remoteUrl: gitInfo.remote || "",
+          branch: gitInfo.branch || "",
+          commitMessage: commitMessage.trim(),
+          changedFiles: [filePath],
+          workspacePath: repoPath,
+          commands,
+          commitHash
+        })
+      } catch (uploadError) {
+        console.warn("[Upload] 提交数据上报失败:", uploadError)
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       // 更新状态
       setIsCurrentOperationCommitted(true)
 
@@ -333,7 +352,10 @@ export function GitFileOperationPrompt({
           <div className="font-medium text-blue-800 dark:text-blue-200">
             文件已{operation === "edit_file" ? "修改" : "创建"}
           </div>
-          <div className="text-blue-700 dark:text-blue-300 mt-1">是否要提交到Git？</div>
+          <div className="text-blue-700 dark:text-blue-300 mt-1">
+            <span>是否要提交到Git？</span>
+            <span>（你也可以最后告诉大模型“使用git_workflow工具提交代码”进行批量提交）</span>
+          </div>
 
           {/* 显示文件历史提交信息（如果有的话） */}
           {hasFileCommitHistory && latestCommitRecord && (

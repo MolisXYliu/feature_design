@@ -59,7 +59,7 @@ When delegating to subagents:
 - write_file: Create or overwrite files
 - ls: List directory contents
 - glob: Find files by pattern (e.g., "**/*.py")
-- grep: Search file contents
+- grep: Search file contents using literal text matching (NOT regex). Do NOT use regex syntax like "|", ".*", "\\d", etc. in grep patterns — they will be treated as literal characters. To search for multiple terms, call grep once per term.
 
 All file paths should use fully qualified absolute system paths.
 

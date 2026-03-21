@@ -1,5 +1,6 @@
 import { ipcMain } from "electron"
 import { execSync } from "child_process"
+import { platform } from "os"
 
 interface GitStatus {
   hasChanges: boolean
@@ -8,13 +9,36 @@ interface GitStatus {
   stagedFiles: string[]
 }
 
+// Check Git version and capabilities
+function checkGitVersion(): { version: string; supportsLFS: boolean } {
+  try {
+    const versionOutput = execSync("git --version", {
+      encoding: "utf-8",
+      shell: platform() === 'win32' ? 'cmd.exe' : '/bin/bash'
+    }).trim()
+
+    const versionMatch = versionOutput.match(/git version (\d+\.\d+\.\d+)/)
+    const version = versionMatch ? versionMatch[1] : "unknown"
+
+    // Check if version is >= 1.8.2 for LFS support
+    const [major, minor, patch] = version.split('.').map(Number)
+    const supportsLFS = major > 1 || (major === 1 && minor > 8) || (major === 1 && minor === 8 && patch >= 2)
+
+    return { version, supportsLFS }
+  } catch (error) {
+    console.warn("Failed to check Git version:", error)
+    return { version: "unknown", supportsLFS: false }
+  }
+}
+
 // 获取当前工作目录
 function getCurrentWorkingDirectory(): string {
   try {
     // 尝试获取Git仓库根目录
     const gitRoot = execSync("git rev-parse --show-toplevel", {
       encoding: "utf-8",
-      cwd: process.cwd()
+      cwd: process.cwd(),
+      shell: platform() === 'win32' ? 'cmd.exe' : '/bin/bash'
     }).trim()
     return gitRoot
   } catch {
@@ -27,20 +51,54 @@ function getCurrentWorkingDirectory(): string {
 function executeGitCommand(command: string, cwd?: string): string {
   try {
     const workingDir = cwd || getCurrentWorkingDirectory()
-    const result = execSync(command, {
+
+    // Windows-specific command handling
+    let processedCommand = command
+    if (platform() === 'win32') {
+      // Handle Windows path issues and ensure proper quoting
+      processedCommand = command.replace(/([a-zA-Z]:[\\/][^\s"]*)/g, '"$1"')
+    }
+
+    const result = execSync(processedCommand, {
       encoding: "utf-8",
       cwd: workingDir,
-      timeout: 30000 // 30秒超时
+      timeout: 30000, // 30秒超时
+      shell: platform() === 'win32' ? 'cmd.exe' : '/bin/bash',
+      env: {
+        ...process.env,
+        // Disable Git LFS for operations that don't need it
+        GIT_LFS_SKIP_SMUDGE: "1"
+      }
     })
     return result.trim()
   } catch (error: any) {
+    // Enhanced error handling for common Windows Git issues
+    let errorMessage = error.message
+
     if (error.stderr) {
-      throw new Error(error.stderr.toString().trim())
+      const stderr = error.stderr.toString().trim()
+
+      // Handle Git LFS version errors
+      if (stderr.includes("git version >= 1.8.2 is required for Git LFS")) {
+        const gitInfo = checkGitVersion()
+        errorMessage = `Git LFS error: Current Git version ${gitInfo.version} may not support LFS. Consider updating Git or disabling LFS for this operation.`
+      }
+      // Handle push ref errors
+      else if (stderr.includes("failed to push some refs")) {
+        errorMessage = `Push failed: ${stderr}. Try pulling the latest changes first with 'git pull' before pushing.`
+      }
+      // Handle Windows path issues
+      else if (stderr.includes("does not appear to be a git repository")) {
+        errorMessage = `Repository error: ${stderr}. Ensure you're in a valid Git repository directory.`
+      }
+      else {
+        errorMessage = stderr
+      }
     } else if (error.stdout) {
       return error.stdout.toString().trim()
-    } else {
-      throw new Error(`命令执行失败: ${error.message}`)
     }
+
+    throw new Error(errorMessage)
   }
 }
 
