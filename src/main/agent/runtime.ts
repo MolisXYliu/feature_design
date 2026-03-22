@@ -686,7 +686,7 @@ ${subagentShellGuidance}
 - glob: find files matching a pattern (e.g., "**/*.py")
 - grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
-- browser_playwright: open and automate a real browser with Playwright (launch/goto/click/type/press/wait/text/screenshot/close). On Windows, you can use launch channel "msedge" or "chrome".
+- browser_playwright: open and automate a real browser with Playwright (launch/goto/click/type/press/wait/text/screenshot/close), plus URL RAG keyword mapping from file resources/browser-playwright-rag.json (e.g. "访问克难系统" -> configured URL). On Windows, you can use launch channel "msedge" or "chrome".
 
 The workspace root is: ${workspacePath}`
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto"
-import { existsSync, mkdirSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import path from "path"
 import { tool } from "langchain"
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright"
@@ -15,6 +15,10 @@ const ACTIONS = [
   "wait_for_selector",
   "text_content",
   "screenshot",
+  "rag_list",
+  "rag_upsert",
+  "rag_delete",
+  "rag_resolve",
   "set_active",
   "list_sessions",
   "close",
@@ -36,14 +40,21 @@ interface PlaywrightSession {
 const sessions = new Map<string, PlaywrightSession>()
 let activeSessionId: string | null = null
 
+const DEFAULT_BROWSER_RAG_SEED: Record<string, string> = {
+  "克难系统": "http://haha.com"
+}
+
 const playwrightSchema = z.object({
   action: z.enum(ACTIONS).describe(
-    "Browser action: launch/goto/click/fill/type/press/wait_for_selector/text_content/screenshot/set_active/list_sessions/close/close_all"
+    "Browser action: launch/goto/click/fill/type/press/wait_for_selector/text_content/screenshot/rag_list/rag_upsert/rag_delete/rag_resolve/set_active/list_sessions/close/close_all"
   ),
   sessionId: z.string().optional().describe(
     "Playwright session ID. Optional: if omitted, uses active session."
   ),
   url: z.string().optional().describe("Target URL for goto or optional initial URL for launch."),
+  query: z.string().optional().describe(
+    "Natural language target for URL RAG (e.g. '访问克难系统'). Used by rag_* actions and launch/goto resolution."
+  ),
   selector: z.string().optional().describe("DOM selector used by click/fill/type/wait_for_selector/text_content."),
   text: z.string().optional().describe("Input text for fill/type."),
   key: z.string().optional().describe("Keyboard key for press, e.g. Enter, Escape, Control+A."),
@@ -103,6 +114,91 @@ function resolveExecutablePath(workspacePath: string, executablePath?: string): 
   return path.isAbsolute(executablePath)
     ? executablePath
     : path.resolve(workspacePath, executablePath)
+}
+
+function normalizeRagText(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[“”"'`]/g, "")
+}
+
+function looksLikeUrl(text: string): boolean {
+  const value = text.trim()
+  return /^https?:\/\//i.test(value) || /^www\./i.test(value)
+}
+
+function normalizeUrl(text: string): string {
+  const value = text.trim()
+  if (/^https?:\/\//i.test(value)) return value
+  if (/^www\./i.test(value)) return `http://${value}`
+  return value
+}
+
+function getBrowserRagFilePath(workspacePath: string): string {
+  return path.join(workspacePath, "resources", "browser-playwright-rag.json")
+}
+
+function ensureBrowserRagFile(workspacePath: string): string {
+  const ragPath = getBrowserRagFilePath(workspacePath)
+  if (!existsSync(ragPath)) {
+    mkdirSync(path.dirname(ragPath), { recursive: true })
+    writeFileSync(ragPath, JSON.stringify(DEFAULT_BROWSER_RAG_SEED, null, 2), "utf-8")
+  }
+  return ragPath
+}
+
+function readBrowserRagMap(workspacePath: string): Record<string, string> {
+  const ragPath = ensureBrowserRagFile(workspacePath)
+  const fallback = { ...DEFAULT_BROWSER_RAG_SEED }
+  try {
+    const raw = readFileSync(ragPath, "utf-8")
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback
+    const result: Record<string, string> = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof key === "string" && typeof value === "string") {
+        result[key] = value
+      }
+    }
+    return Object.keys(result).length > 0 ? result : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeBrowserRagMap(workspacePath: string, map: Record<string, string>): void {
+  const ragPath = ensureBrowserRagFile(workspacePath)
+  mkdirSync(path.dirname(ragPath), { recursive: true })
+  writeFileSync(ragPath, JSON.stringify(map, null, 2), "utf-8")
+}
+
+function resolveUrlByRag(workspacePath: string, input: string): { url: string; matchedKey: string; direct: boolean } | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+  if (looksLikeUrl(trimmed)) {
+    return { url: normalizeUrl(trimmed), matchedKey: trimmed, direct: true }
+  }
+
+  const normalizedInput = normalizeRagText(trimmed)
+  if (!normalizedInput) return null
+
+  const ragMap = readBrowserRagMap(workspacePath)
+  const sortedKeys = Object.keys(ragMap).sort((a, b) => normalizeRagText(b).length - normalizeRagText(a).length)
+
+  for (const key of sortedKeys) {
+    const normalizedKey = normalizeRagText(key)
+    if (!normalizedKey) continue
+    if (normalizedInput === normalizedKey || normalizedInput.includes(normalizedKey) || normalizedKey.includes(normalizedInput)) {
+      return {
+        url: normalizeUrl(ragMap[key]),
+        matchedKey: key,
+        direct: false
+      }
+    }
+  }
+  return null
 }
 
 function getMissingBrowserHelp(): string {
@@ -220,14 +316,27 @@ export function createPlaywrightTool(workspacePath: string) {
               lastUsedAt: now
             })
             activeSessionId = sessionId
-            if (input.url) {
-              await page.goto(input.url, { waitUntil, timeout })
+            const navigationQuery = input.url ?? input.query
+            let resolvedUrl: string | null = null
+            let resolvedKey: string | null = null
+            if (navigationQuery) {
+              const resolved = resolveUrlByRag(workspacePath, navigationQuery)
+              if (!resolved) {
+                return buildError(
+                  `Failed to resolve URL from '${navigationQuery}'. Add mapping with action=rag_upsert, query='<keyword>', url='<url>'. RAG file: ${getBrowserRagFilePath(workspacePath)}`
+                )
+              }
+              resolvedUrl = resolved.url
+              resolvedKey = resolved.direct ? null : resolved.matchedKey
+              await page.goto(resolved.url, { waitUntil, timeout })
             }
             const title = await page.title().catch(() => "")
             return JSON.stringify({
               success: true,
               sessionId,
               launchMode,
+              resolvedUrl,
+              resolvedByRagKey: resolvedKey,
               url: page.url(),
               title,
               active: true
@@ -235,14 +344,22 @@ export function createPlaywrightTool(workspacePath: string) {
           }
 
           case "goto": {
-            if (!input.url) return buildError("url is required for goto")
+            const navigationQuery = input.url ?? input.query
+            if (!navigationQuery) return buildError("url or query is required for goto")
+            const resolved = resolveUrlByRag(workspacePath, navigationQuery)
+            if (!resolved) {
+              return buildError(
+                `Failed to resolve URL from '${navigationQuery}'. Add mapping with action=rag_upsert, query='<keyword>', url='<url>'. RAG file: ${getBrowserRagFilePath(workspacePath)}`
+              )
+            }
             const target = resolveSession(input.sessionId)
             if (!target) return buildError("No active session. Call action=launch first.")
-            const response = await target.session.page.goto(input.url, { waitUntil, timeout })
+            const response = await target.session.page.goto(resolved.url, { waitUntil, timeout })
             touchSession(target.session)
             return JSON.stringify({
               success: true,
               sessionId: target.id,
+              resolvedByRagKey: resolved.direct ? null : resolved.matchedKey,
               status: response?.status() ?? null,
               url: target.session.page.url(),
               title: await target.session.page.title().catch(() => "")
@@ -341,6 +458,74 @@ export function createPlaywrightTool(workspacePath: string) {
             })
           }
 
+          case "rag_list": {
+            const ragFilePath = ensureBrowserRagFile(workspacePath)
+            const ragMap = readBrowserRagMap(workspacePath)
+            return JSON.stringify({
+              success: true,
+              ragFilePath,
+              entries: ragMap
+            })
+          }
+
+          case "rag_upsert": {
+            if (!input.query) return buildError("query is required for rag_upsert")
+            if (!input.url) return buildError("url is required for rag_upsert")
+            const query = input.query.trim()
+            const resolvedUrl = normalizeUrl(input.url)
+            if (!query) return buildError("query cannot be empty for rag_upsert")
+            if (!/^https?:\/\//i.test(resolvedUrl)) {
+              return buildError("url must start with http:// or https:// (or use www.*)")
+            }
+            const ragMap = readBrowserRagMap(workspacePath)
+            ragMap[query] = resolvedUrl
+            writeBrowserRagMap(workspacePath, ragMap)
+            return JSON.stringify({
+              success: true,
+              action: "rag_upsert",
+              query,
+              url: resolvedUrl,
+              ragFilePath: getBrowserRagFilePath(workspacePath)
+            })
+          }
+
+          case "rag_delete": {
+            if (!input.query) return buildError("query is required for rag_delete")
+            const query = input.query.trim()
+            if (!query) return buildError("query cannot be empty for rag_delete")
+            const ragMap = readBrowserRagMap(workspacePath)
+            const existed = Object.prototype.hasOwnProperty.call(ragMap, query)
+            if (existed) {
+              delete ragMap[query]
+              writeBrowserRagMap(workspacePath, ragMap)
+            }
+            return JSON.stringify({
+              success: true,
+              action: "rag_delete",
+              query,
+              removed: existed,
+              ragFilePath: getBrowserRagFilePath(workspacePath)
+            })
+          }
+
+          case "rag_resolve": {
+            if (!input.query) return buildError("query is required for rag_resolve")
+            const resolved = resolveUrlByRag(workspacePath, input.query)
+            if (!resolved) {
+              return JSON.stringify({
+                success: false,
+                resolved: null
+              })
+            }
+            return JSON.stringify({
+              success: true,
+              query: input.query,
+              resolvedUrl: resolved.url,
+              direct: resolved.direct,
+              matchedKey: resolved.matchedKey
+            })
+          }
+
           case "set_active": {
             if (!input.sessionId) return buildError("sessionId is required for set_active")
             const target = resolveSession(input.sessionId)
@@ -402,7 +587,7 @@ export function createPlaywrightTool(workspacePath: string) {
     {
       name: "browser_playwright",
       description:
-        "Open and automate a real browser with Playwright. Supports launching browser sessions, navigation, clicking, typing, key presses, waiting for selectors, reading text content, and screenshots.",
+        "Open and automate a real browser with Playwright. Supports launching browser sessions, navigation, clicking, typing, key presses, waiting for selectors, reading text content, screenshots, and URL RAG keyword mapping (e.g. natural language query -> URL).",
       schema: playwrightSchema
     }
   )
