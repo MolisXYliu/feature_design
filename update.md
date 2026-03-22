@@ -1,8 +1,16 @@
 # 打包更新记录
 
-> 该文件会在执行 `npm run dist`（含 dist:win / dist:mac）时自动更新。
+> 该文件可通过 `npm run generate:update-md` 命令单独更新。
 
 <!-- update-log:sections -->
+
+<!-- version:0.1.7:start -->
+## v0.1.7
+
+- 本次版本主要围绕通用能力与工程改进等方向进行了集中迭代。
+- 通用能力与工程改进方面，重点包括修改des，升级版本。
+
+<!-- version:0.1.7:end -->
 
 <!-- version:0.1.6:start -->
 ## v0.1.6

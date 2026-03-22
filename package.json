@@ -37,10 +37,9 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "generate:update-md": "node scripts/generate-update-md.js",
-    "dist:prepare": "npm run generate:update-md && npm run build",
-    "dist": "npm run dist:prepare && electron-builder",
-    "dist:win": "npm run dist:prepare && electron-builder --win",
-    "dist:mac": "npm run dist:prepare && electron-builder --mac"
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "com.cmbdevclaw.com",

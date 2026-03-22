@@ -262,7 +262,7 @@ function ensureFileTemplate(content) {
   const header = [
     '# 打包更新记录',
     '',
-    '> 该文件会在执行 `npm run dist`（含 dist:win / dist:mac）时自动更新。',
+    '> 该文件可通过 `npm run generate:update-md` 命令单独更新。',
     '',
     SECTION_MARKER,
     ''
