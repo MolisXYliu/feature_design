@@ -1,7 +1,7 @@
 {
   "name": "CMBDevClaw",
-  "version": "0.1.4",
-  "description": "A tactical agent interface for deepagentsjs",
+  "version": "0.1.6",
+  "description": "CMBDevClaw",
   "main": "./out/main/index.js",
   "files": [
     "out/",
@@ -14,16 +14,7 @@
   "bin": {
     "openwork": "./bin/cli.js"
   },
-  "author": "LangChain",
   "license": "MIT",
-  "homepage": "https://github.com/langchain-ai/openwork",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/langchain-ai/openwork.git"
-  },
-  "bugs": {
-    "url": "https://github.com/langchain-ai/openwork/issues"
-  },
   "keywords": [
     "ai",
     "agent",
@@ -45,12 +36,14 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "generate:update-md": "node scripts/generate-update-md.js",
+    "dist:prepare": "npm run generate:update-md && npm run build",
+    "dist": "npm run dist:prepare && electron-builder",
+    "dist:win": "npm run dist:prepare && electron-builder --win",
+    "dist:mac": "npm run dist:prepare && electron-builder --mac"
   },
   "build": {
-    "appId": "com.langchain.openwork",
+    "appId": "com.cmbdevclaw.com",
     "productName": "CMBDevClaw",
     "directories": {
       "output": "dist"
