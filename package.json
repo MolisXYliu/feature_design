@@ -1,7 +1,7 @@
 {
   "name": "CMBDevClaw",
-  "version": "0.1.6",
-  "description": "CMBDevClaw",
+  "version": "0.1.7",
+  "description": "CMBDevClaw description",
   "main": "./out/main/index.js",
   "files": [
     "out/",
