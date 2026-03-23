@@ -283,17 +283,17 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
       const result = (filesystemBackend as LocalSandbox).getTaskOutput(input.task_id)
       if (!result) return `Error: No background task found with id "${input.task_id}".`
       if (!result.completed) {
-        return `Task ${input.task_id} is still running. Try again later.`
+        return `Task ${input.task_id} is still running (elapsed: ${result.elapsedSeconds}s, command: ${result.command}). Try again in a few seconds.`
       }
       const status = result.exitCode === 0 ? "succeeded" : "failed"
       const parts = [result.output ?? "<no output>"]
       if (result.exitCode !== null && result.exitCode !== undefined) {
-        parts.push(`\n[Command ${status} with exit code ${result.exitCode}]`)
+        parts.push(`\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`)
       }
       return parts.join("")
     }, {
       name: "task_output",
-      description: "Retrieve the output of a background task started with execute(run_in_background=true).",
+      description: "Retrieve the output of a background task started with execute(run_in_background=true). When the task is still running, returns elapsed time. Poll every 5-10 seconds until completion. Tell the user the elapsed time so they know the build is still in progress.",
       schema: z.object({
         task_id: z.string().describe("The task ID returned by execute when run_in_background was true")
       })
@@ -422,6 +422,23 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
+  const backgroundExecSection = `
+### 长时间命令执行
+
+**重要提示：** execute 工具默认超时 60 秒。对于可能超过 60 秒的命令，**必须**使用 \`run_in_background: true\` 参数：
+- 项目编译/构建：mvn, gradle, npm run build, dotnet build, cargo build, make 等
+- 依赖安装：mvn dependency:resolve, npm install, pip install, go mod download 等
+- 测试套件：mvn test, npm test, pytest, cargo test 等
+- 代码生成、Docker 构建等耗时操作
+
+使用方法：
+1. 调用 execute({ command: "mvn clean package -DskipTests", run_in_background: true })
+2. 获得 task_id 后，用 task_output({ task_id: "..." }) 轮询结果
+3. 如果 task_output 返回 "still running"，等待几秒后再次轮询
+
+**切勿**对编译、安装依赖等命令使用前台执行，否则会因超时被终止。
+`
+
   const sandboxSection = windowsSandbox === "readonly"
     ? `
 ### 只读沙箱模式
@@ -445,7 +462,7 @@ ${shellGuidance}
     : ""
 
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + backgroundExecSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache

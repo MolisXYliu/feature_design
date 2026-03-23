@@ -1677,91 +1677,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
 
 
-            {/* Orchestrator approval request — shown as standalone bar when pending */}
-            {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
-              <div className={`rounded-lg border-2 p-4 space-y-3 ${
-                (pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                  ? "border-blue-500/50 bg-blue-500/5"
-                  : "border-amber-500/50 bg-amber-500/5"
-              }`}>
-                <div className="flex items-center gap-2">
-                  {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                    ? <FilePenLine className="size-4 text-blue-500" />
-                    : <ShieldCheck className="size-4 text-amber-500" />}
-                  <span className="text-sm font-medium">
-                    {(pendingApproval as Record<string, unknown>).operation === "write_file"
-                      ? "写入文件需要审批"
-                      : (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                        ? "编辑文件需要审批"
-                        : "命令需要审批"}
-                  </span>
-                </div>
-                <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
-                  {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                    ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
-                    : (pendingApproval as Record<string, unknown>).command
-                      ? String((pendingApproval as Record<string, unknown>).command)
-                      : pendingApproval.tool_call?.args?.command
-                        ? String(pendingApproval.tool_call.args.command)
-                        : "unknown command"}
-                </div>
-                {(pendingApproval as Record<string, unknown>)._retryReason && (
-                  <div className="text-xs text-amber-600 dark:text-amber-400">
-                    {String((pendingApproval as Record<string, unknown>)._retryReason)}
-                  </div>
-                )}
-                {(pendingApproval as Record<string, unknown>).reason && (
-                  <div className="text-xs text-muted-foreground">
-                    原因：{String((pendingApproval as Record<string, unknown>).reason)}
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  {(pendingApproval as Record<string, unknown>)._retryReason ? (
-                    <>
-                      <button
-                        className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
-                        onClick={() => handleApprovalDecision("approve")}
-                      >
-                        无沙箱重试
-                      </button>
-                      <button
-                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                        onClick={() => handleApprovalDecision("reject")}
-                      >
-                        拒绝
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                        onClick={() => handleApprovalDecision("approve")}
-                      >
-                        {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file" ? "允许" : "运行"}
-                      </button>
-                      <button
-                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                        onClick={() => handleApprovalDecision("approve_session")}
-                      >
-                        本会话允许
-                      </button>
-                      <button
-                        className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-                        onClick={() => handleApprovalDecision("approve_permanent")}
-                      >
-                        始终允许
-                      </button>
-                      <button
-                        className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                        onClick={() => handleApprovalDecision("reject")}
-                      >
-                        拒绝
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
+            {/* Orchestrator standalone approval bar moved outside ScrollArea — see below */}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
@@ -1799,6 +1715,93 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
         </div>
       </ScrollArea>
+      {/* Orchestrator approval bar — placed outside ScrollArea so it's always visible */}
+      {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
+        <div className="px-4 pb-2">
+          <div className={`max-w-3xl mx-auto rounded-lg border-2 p-4 space-y-3 ${
+            (pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+              ? "border-blue-500/50 bg-blue-500/5"
+              : "border-amber-500/50 bg-amber-500/5"
+          }`}>
+            <div className="flex items-center gap-2">
+              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                ? <FilePenLine className="size-4 text-blue-500" />
+                : <ShieldCheck className="size-4 text-amber-500" />}
+              <span className="text-sm font-medium">
+                {(pendingApproval as Record<string, unknown>).operation === "write_file"
+                  ? "写入文件需要审批"
+                  : (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                    ? "编辑文件需要审批"
+                    : "命令需要审批"}
+              </span>
+            </div>
+            <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
+              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
+                : (pendingApproval as Record<string, unknown>).command
+                  ? String((pendingApproval as Record<string, unknown>).command)
+                  : pendingApproval.tool_call?.args?.command
+                    ? String(pendingApproval.tool_call.args.command)
+                    : "unknown command"}
+            </div>
+            {(pendingApproval as Record<string, unknown>)._retryReason && (
+              <div className="text-xs text-amber-600 dark:text-amber-400">
+                {String((pendingApproval as Record<string, unknown>)._retryReason)}
+              </div>
+            )}
+            {(pendingApproval as Record<string, unknown>).reason && (
+              <div className="text-xs text-muted-foreground">
+                原因：{String((pendingApproval as Record<string, unknown>).reason)}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              {(pendingApproval as Record<string, unknown>)._retryReason ? (
+                <>
+                  <button
+                    className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
+                    onClick={() => handleApprovalDecision("approve")}
+                  >
+                    无沙箱重试
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                    onClick={() => handleApprovalDecision("reject")}
+                  >
+                    拒绝
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                    onClick={() => handleApprovalDecision("approve")}
+                  >
+                    {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file" ? "允许" : "运行"}
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                    onClick={() => handleApprovalDecision("approve_session")}
+                  >
+                    本会话允许
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                    onClick={() => handleApprovalDecision("approve_permanent")}
+                  >
+                    始终允许
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                    onClick={() => handleApprovalDecision("reject")}
+                  >
+                    拒绝
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Input */}
       <div className="p-4">
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
