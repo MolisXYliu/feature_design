@@ -278,6 +278,7 @@ interface CustomAPI {
     /** Phase 1 — intent banner: "Want to save this as a skill?" */
     onIntentRequest: (
       callback: (req: {
+        threadId?: string
         requestId: string
         summary: string
         toolCallCount: number
@@ -289,6 +290,7 @@ interface CustomAPI {
     /** Phase 2 — full detail dialog: show skill preview for final adoption */
     onConfirmRequest: (
       callback: (req: {
+        threadId?: string
         requestId: string
         skillId: string
         name: string
@@ -299,7 +301,11 @@ interface CustomAPI {
     confirmResponse: (requestId: string, approved: boolean) => Promise<void>
     /** Listen to streaming generation progress from the main process */
     onGenerating: (
-      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+      callback: (event: {
+        threadId?: string
+        phase: "start" | "token" | "done" | "error"
+        text: string
+      }) => void
     ) => () => void
   }
   optimizer: {
