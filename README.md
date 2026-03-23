@@ -25,7 +25,9 @@ npm install -g openwork
 openwork
 ```
 
-Requires Node.js 18+.
+Requires Node.js 18-23. For Windows, use Node.js 22 LTS (recommended).
+
+`nodejieba` is optional. If native build prerequisites are missing, the app will fall back to a basic Chinese tokenizer.
 
 ### From Source
 
