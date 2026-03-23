@@ -113,6 +113,12 @@ interface CustomAPI {
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
     getUserInfo: () => Promise<UserInfoConfig | null>
     deleteCustomConfig: (id: string) => Promise<void>
+    testConnection: (params: {
+      id?: string
+      baseUrl?: string
+      model?: string
+      apiKey?: string
+    }) => Promise<{ success: boolean; error?: string; latencyMs?: number }>
   }
   workspace: {
     get: (threadId?: string) => Promise<string | null>

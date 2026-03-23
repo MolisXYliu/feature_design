@@ -176,7 +176,7 @@ function CallbackUrlBuilder(props: {
     ? selectedChatId
     : chatIds[0] || ""
   const callbackUrl = callbackBase && ip && chatId
-    ? `${callbackBase}?ip=${encodeURIComponent(ip)}&chatid=${encodeURIComponent(chatId)}`
+    ? `${callbackBase}?ip=${encodeURIComponent(ip)}&chatId=${encodeURIComponent(chatId)}`
     : ""
 
   const handleCopy = (): void => {

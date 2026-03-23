@@ -20,10 +20,12 @@ export function FilesystemPanel() {
   const threadState = useThreadState(currentThreadId)
   const workspaceFiles = threadState?.workspaceFiles ?? []
   const workspacePath = threadState?.workspacePath ?? null
+  const messages = threadState?.messages ?? []
   const setWorkspacePath = threadState?.setWorkspacePath
   const setWorkspaceFiles = threadState?.setWorkspaceFiles
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
+  const [isWorktree, setIsWorktree] = useState(false)
 
   // Load workspace path for current thread
   useEffect(() => {
@@ -31,6 +33,11 @@ export function FilesystemPanel() {
       if (currentThreadId && setWorkspacePath) {
         const path = await window.api.workspace.get(currentThreadId)
         setWorkspacePath(path)
+
+        // Check if thread is using worktree mode
+        const thread = await window.api.threads.get(currentThreadId)
+        const meta = thread?.metadata as Record<string, unknown> | undefined
+        setIsWorktree(!!meta?.isWorktree)
       }
     }
     loadWorkspacePath()
@@ -302,16 +309,18 @@ export function FilesystemPanel() {
                 <RefreshCw className="size-3" />
               )}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSelectFolder}
-              disabled={loading || !currentThreadId}
-              className="h-6 px-2 text-xs"
-              title="Change workspace folder"
-            >
-              Change
-            </Button>
+            {messages.length === 0 && !isWorktree && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSelectFolder}
+                disabled={loading || !currentThreadId}
+                className="h-6 px-2 text-xs"
+                title="Change workspace folder"
+              >
+                Change
+              </Button>
+            )}
           </div>
         </div>
       </div>
