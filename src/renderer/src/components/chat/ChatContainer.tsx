@@ -502,29 +502,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const agentValues = stream?.values as AgentStreamValues | undefined
 
-  // Listen for orchestrator approval requests (fine-grained command approval)
-  useEffect(() => {
-    console.log(`[ChatContainer] Registering approval listener for threadId: ${threadId}`)
-    const cleanup = window.api.sandbox.onApprovalRequest(threadId, (request: unknown) => {
-      console.log("[ChatContainer] Received approval request:", request)
-      const req = request as Record<string, unknown>
-      // Convert the orchestrator approval request to the pendingApproval format
-      // with a marker so handleApprovalDecision can route it correctly.
-      setPendingApproval({
-        id: (req.id as string) || "",
-        tool_call: (req.tool_call as { id: string; name: string; args: Record<string, unknown> }) || { id: "", name: "execute", args: {} },
-        allowed_decisions: ["approve", "reject"],
-        command: req.command,
-        reason: req.reason,
-        operation: req.operation,
-        filePath: req.filePath,
-        _orchestratorRequestId: req.id,
-        _retryReason: req.retry_reason,
-        _approvalTypes: req.allowed_approval_types
-      } as any)
-    })
-    return cleanup
-  }, [threadId, setPendingApproval])
+  // Approval listeners are now registered globally in ThreadProvider for ALL active threads,
+  // so approval requests are received even when this ChatContainer is not mounted (user viewing another tab).
+
   const streamTodos = agentValues?.todos
   useEffect(() => {
     if (Array.isArray(streamTodos)) {
@@ -654,6 +634,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [displayMessages, isLoading, getViewport])
 
+  // Force scroll to bottom when an approval request arrives — the user must see and act on it
+  useEffect(() => {
+    if (!pendingApproval) return
+    const viewport = getViewport()
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight
+      isAtBottomRef.current = true
+    }
+  }, [pendingApproval, getViewport])
+
   // Always scroll to bottom when switching threads
   useEffect(() => {
     const viewport = getViewport()
@@ -702,6 +692,16 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
 
     if (pendingApproval) {
+      // P0 fix: notify main process to reject the pending approval instead of silently dropping it.
+      // Otherwise the orchestrator's Promise hangs until the 5-minute timeout.
+      const approvalAny = pendingApproval as Record<string, unknown>
+      if (approvalAny._orchestratorRequestId) {
+        window.api.sandbox.sendApprovalDecision({
+          requestId: approvalAny._orchestratorRequestId as string,
+          type: "reject",
+          tool_call_id: pendingApproval.tool_call?.id || ""
+        })
+      }
       setPendingApproval(null)
     }
 

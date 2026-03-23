@@ -726,6 +726,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
           if (pendingApprovals.has(req.id)) {
             pendingApprovals.delete(req.id)
             console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
+            // P2 fix: notify renderer that approval timed out so it can clear the UI
+            for (const win of BrowserWindow.getAllWindows()) {
+              win.webContents.send(`approval:timeout:${threadId}`, { requestId: req.id })
+            }
             resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
           }
         }, APPROVAL_TIMEOUT_MS)

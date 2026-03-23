@@ -22,7 +22,10 @@ const SAFE_EXECUTABLES = new Set([
   "head", "hostname", "id", "ls", "nl", "paste", "pwd", "printf",
   "rev", "seq", "sort", "stat", "tail", "tr", "tree", "true", "uname",
   "uniq", "wc", "where", "which", "whoami", "type", "awk", "comm",
-  "date", "diff", "env", "printenv"
+  "date", "diff", "env", "printenv",
+  // Windows diagnostic commands (read-only)
+  "ipconfig", "netstat", "netsh", "systeminfo", "tasklist", "findstr", "nslookup",
+  "ping", "tracert", "pathping", "route", "arp", "getmac", "ver"
 ])
 
 const UNSAFE_FIND_OPTIONS = new Set([

@@ -602,6 +602,16 @@ const api = {
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     },
+    // Listen for approval timeout notifications from main → renderer
+    onApprovalTimeout: (
+      threadId: string,
+      callback: (data: { requestId: string }) => void
+    ): (() => void) => {
+      const channel = `approval:timeout:${threadId}`
+      const handler = (_: unknown, data: { requestId: string }): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
     onChanged: (callback: () => void): (() => void) => {
       const handler = (): void => { callback() }
       ipcRenderer.on("sandbox:changed", handler)
