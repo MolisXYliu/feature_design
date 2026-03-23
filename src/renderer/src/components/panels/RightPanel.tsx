@@ -23,6 +23,7 @@ import {
   Plug,
   Power,
   AlertCircle,
+  Loader2,
   RotateCcw,
   Webhook
 } from "lucide-react"
@@ -31,7 +32,6 @@ import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from
 import { useShallow } from "zustand/react/shallow"
 import { useThreadState } from "@/lib/thread-context"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 
