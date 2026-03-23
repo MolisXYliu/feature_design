@@ -277,9 +277,19 @@ interface CustomAPI {
         toolCallCount: number
         mode: "mode_a_rule" | "mode_b_llm"
         recommendationReason?: string
+        /** Opaque context payload — cache in renderer and pass back on retry */
+        context: unknown
       }) => void
     ) => () => void
     intentResponse: (requestId: string, accepted: boolean) => Promise<void>
+    /**
+     * Manually retry a failed skill generation. Skips the intent banner and
+     * jumps straight to generate → confirm → write.
+     */
+    retryGeneration: (
+      threadId: string,
+      retryContext: { context: unknown; intentMode: string }
+    ) => Promise<void>
     /** Phase 2 — full detail dialog: show skill preview for final adoption */
     onConfirmRequest: (
       callback: (req: {

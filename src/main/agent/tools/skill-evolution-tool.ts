@@ -23,6 +23,7 @@ import {
 import { BrowserWindow, ipcMain } from "electron"
 import { getCustomSkillsDir, invalidateEnabledSkillsCache } from "../../storage"
 import { v4 as uuid } from "uuid"
+import type { SkillProposalWindowContext } from "../skill-evolution/proposal-window"
 
 // ─────────────────────────────────────────────────────────
 // Helpers
@@ -126,6 +127,8 @@ export interface SkillIntentRequest {
   mode: "mode_a_rule" | "mode_b_llm"
   /** Optional model recommendation reason for Mode B */
   recommendationReason?: string
+  /** Full proposal context — forwarded to renderer so the retry button can replay generation */
+  context: SkillProposalWindowContext
 }
 
 /**

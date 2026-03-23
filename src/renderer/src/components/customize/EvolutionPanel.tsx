@@ -352,7 +352,7 @@ function TraceDetailView({ detail, onClose }: { detail: TraceDetail; onClose: ()
   }, [nodes])
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-background">
+    <div className="flex flex-1 min-w-0 flex-col h-full overflow-hidden bg-background">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2.5 border-b border-border">
         <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={onClose}>
           <ArrowLeft className="size-3.5" />
@@ -1051,7 +1051,7 @@ export function EvolutionPanel(): React.JSX.Element {
 
   if (detailLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="flex flex-1 min-w-0 items-center justify-center h-full">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
       </div>
     )
