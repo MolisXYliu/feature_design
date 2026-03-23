@@ -1311,6 +1311,35 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     })
   }
 
+  /** Sandbox user names used by elevated mode. */
+  private static readonly ELEVATED_SANDBOX_USERS = ["CodexSandboxOnline", "CodexSandboxOffline"]
+
+  /**
+   * Grant elevated sandbox users read+write ACL on a workspace directory via icacls.
+   * No UAC needed — the current user owns the directory so they can modify its ACLs.
+   */
+  private static grantElevatedWorkspaceAcl(dir: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      // Grant both sandbox users Modify permission with inheritance
+      const args: string[] = [dir]
+      for (const user of LocalSandbox.ELEVATED_SANDBOX_USERS) {
+        args.push("/grant", `${user}:(OI)(CI)(M)`)
+      }
+      args.push("/T", "/Q")
+      const proc = spawn("icacls", args, { stdio: "pipe" })
+      let stderr = ""
+      proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
+      proc.on("exit", (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          reject(new Error(`icacls exited ${code}: ${stderr.trim()}`))
+        }
+      })
+      proc.on("error", (err) => reject(err))
+    })
+  }
+
   private static readonly SIGKILL_TIMEOUT_MS = 200
   /** Max time (ms) to wait for stdout/stderr to drain after killing a process (matches Codex IO_DRAIN_TIMEOUT_MS). */
   private static readonly IO_DRAIN_TIMEOUT_MS = 2_000
@@ -1548,17 +1577,35 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // "setup refresh failed" (which triggers a reactive UAC mid-command).
     // Using persistent cache so workspaces only need setup once, across restarts.
     if (isElevatedSandbox && attempt === 1) {
-      const { isWorkspaceElevatedSetupDone, runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } =
+      const { isWorkspaceElevatedSetupDone, isElevatedSetupComplete, runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } =
         await import("../ipc/sandbox")
       if (!isWorkspaceElevatedSetupDone(this.workingDir)) {
-        console.log(`[LocalSandbox] elevated: workspace not yet ACL-configured, running setup proactively: ${this.workingDir}`)
-        const setupResult = await runElevatedSetupForPaths([this.workingDir])
-        if (setupResult.success) {
-          markWorkspaceElevatedSetupDone(this.workingDir)
-          console.log(`[LocalSandbox] elevated: proactive setup done for ${this.workingDir}`)
+        if (isElevatedSetupComplete()) {
+          // Initial setup already done (sandbox user exists). For new workspaces, just grant
+          // ACL access via icacls — no UAC needed since we own the directory.
+          console.log(`[LocalSandbox] elevated: granting sandbox user ACL for new workspace (no UAC): ${this.workingDir}`)
+          try {
+            await LocalSandbox.grantElevatedWorkspaceAcl(this.workingDir)
+            markWorkspaceElevatedSetupDone(this.workingDir)
+            console.log(`[LocalSandbox] elevated: ACL grant done for ${this.workingDir}`)
+          } catch (err) {
+            console.warn(`[LocalSandbox] elevated: icacls grant failed, falling back to full setup: ${err}`)
+            const setupResult = await runElevatedSetupForPaths([this.workingDir])
+            if (setupResult.success) {
+              markWorkspaceElevatedSetupDone(this.workingDir)
+            }
+          }
         } else {
-          console.warn(`[LocalSandbox] elevated: proactive setup failed: ${setupResult.error}`)
-          // Continue anyway — codex.exe will handle "setup refresh failed" reactively as fallback
+          // Initial setup not done — need full elevated setup (UAC required)
+          console.log(`[LocalSandbox] elevated: initial setup required, running with UAC: ${this.workingDir}`)
+          const setupResult = await runElevatedSetupForPaths([this.workingDir])
+          if (setupResult.success) {
+            markWorkspaceElevatedSetupDone(this.workingDir)
+            console.log(`[LocalSandbox] elevated: initial setup done for ${this.workingDir}`)
+          } else {
+            console.warn(`[LocalSandbox] elevated: initial setup failed: ${setupResult.error}`)
+            // Continue anyway — codex.exe will handle "setup refresh failed" reactively as fallback
+          }
         }
       }
     }
