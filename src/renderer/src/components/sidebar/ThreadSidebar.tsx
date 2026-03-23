@@ -320,11 +320,12 @@ export function ThreadSidebar(): React.JSX.Element {
   const [version, setVersion] = useState('')
 
   useEffect(() => {
-    const { ipcRenderer } = window.electron
-
-    ipcRenderer.on('version', (ver: any) => {
-      console.log('版本：', ver)
-      setVersion(ver)
+    // Fetch version proactively — the did-finish-load event may have
+    // already fired before this component mounts.
+    window.electron.ipcRenderer.invoke("get-version").then((ver) => {
+      setVersion(ver as string)
+    }).catch(() => {
+      // ignore — version display is non-critical
     })
   }, [])
 

@@ -239,6 +239,18 @@ const api = {
     },
     deleteCustomConfig: (id: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>
+    },
+    testConnection: (params: {
+      id?: string
+      baseUrl?: string
+      model?: string
+      apiKey?: string
+    }): Promise<{ success: boolean; error?: string; latencyMs?: number }> => {
+      return ipcRenderer.invoke("models:testConnection", params) as Promise<{
+        success: boolean
+        error?: string
+        latencyMs?: number
+      }>
     }
   },
   workspace: {

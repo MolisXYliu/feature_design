@@ -10,10 +10,6 @@ import {
   Clock,
   XCircle,
   GripHorizontal,
-  Download,
-  FolderSync,
-  Loader2,
-  Check,
   Folder,
   FolderOpen,
   File,
@@ -821,19 +817,21 @@ function FilesContent(): React.JSX.Element {
   const workspacePath = threadState?.workspacePath ?? null
   const setWorkspacePath = threadState?.setWorkspacePath
   const setWorkspaceFiles = threadState?.setWorkspaceFiles
-  const [syncing, setSyncing] = useState(false)
-  const [syncSuccess] = useState(false)
 
   // Load workspace path and files for current thread
   useEffect(() => {
+    let cancelled = false
+
     async function loadWorkspace(): Promise<void> {
       if (currentThreadId && setWorkspacePath && setWorkspaceFiles) {
         const path = await window.api.workspace.get(currentThreadId)
+        if (cancelled) return
         setWorkspacePath(path)
 
         // If a folder is linked, load files from disk
         if (path) {
           const result = await window.api.workspace.loadFromDisk(currentThreadId)
+          if (cancelled) return
           if (result.success && result.files) {
             setWorkspaceFiles(result.files)
           }
@@ -841,6 +839,8 @@ function FilesContent(): React.JSX.Element {
       }
     }
     loadWorkspace()
+
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentThreadId])
 
@@ -863,45 +863,10 @@ function FilesContent(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentThreadId])
 
-  // Handle selecting a workspace folder
-  async function handleSelectFolder(): Promise<void> {
-    if (!currentThreadId || !setWorkspacePath || !setWorkspaceFiles) return
-    setSyncing(true)
-    try {
-      const path = await window.api.workspace.select(currentThreadId)
-      if (path) {
-        setWorkspacePath(path)
-        // Load files from the newly selected folder
-        const result = await window.api.workspace.loadFromDisk(currentThreadId)
-        if (result.success && result.files) {
-          setWorkspaceFiles(result.files)
-        }
-      }
-    } catch (e) {
-      console.error("[FilesContent] Select folder error:", e)
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  // Handle sync to disk
-  // TODO: Implement syncToDisk API in main process
-  async function handleSyncToDisk(): Promise<void> {
-    if (!currentThreadId) return
-
-    // If no files, just select a folder
-    if (workspaceFiles.length === 0) {
-      await handleSelectFolder()
-      return
-    }
-
-    // syncToDisk is not yet implemented
-    console.warn("[FilesContent] syncToDisk is not yet implemented")
-  }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header with sync button */}
+      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-background/30">
         <span
           className="text-[10px] text-muted-foreground truncate flex-1"
@@ -909,35 +874,6 @@ function FilesContent(): React.JSX.Element {
         >
           {workspacePath ? workspacePath.split("/").pop() : "未关联文件夹"}
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={workspaceFiles.length > 0 ? handleSyncToDisk : handleSelectFolder}
-          disabled={syncing || !currentThreadId}
-          className="h-5 px-1.5 text-[10px]"
-          title={
-            workspaceFiles.length > 0
-              ? workspacePath
-                ? `同步到 ${workspacePath}`
-                : "同步文件到磁盘"
-              : workspacePath
-                ? "更换文件夹"
-                : "关联同步文件夹"
-          }
-        >
-          {syncing ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : syncSuccess ? (
-            <Check className="size-3 text-status-nominal" />
-          ) : workspaceFiles.length > 0 ? (
-            <Download className="size-3" />
-          ) : (
-            <FolderSync className="size-3" />
-          )}
-          <span className="ml-1">
-            {workspaceFiles.length > 0 ? "同步" : workspacePath ? "更换" : "关联"}
-          </span>
-        </Button>
       </div>
 
       {/* File tree or empty state */}
@@ -948,7 +884,7 @@ function FilesContent(): React.JSX.Element {
           <span className="text-xs mt-1">
             {workspacePath
               ? `已关联 ${workspacePath.split("/").pop()}`
-              : '点击"关联"设置同步文件夹'}
+              : "请在工作区选择器中设置文件夹"}
           </span>
         </div>
       ) : (
@@ -1167,14 +1103,13 @@ const FileTreeNode = memo(
     )
   },
   (prevProps, nextProps) => {
-    // Only re-render if:
-    // 1. The node itself changed
-    // 2. The expansion state of THIS node changed
-    // 3. The openFile callback changed
-    // 4. The onToggle callback changed
+    const wasExpanded = prevProps.expanded.has(prevProps.node.path)
+    const isExpanded = nextProps.expanded.has(nextProps.node.path)
     return (
       prevProps.node === nextProps.node &&
-      prevProps.expanded.has(prevProps.node.path) === nextProps.expanded.has(nextProps.node.path) &&
+      wasExpanded === isExpanded &&
+      // Expanded nodes render children that need the latest Set reference
+      (!isExpanded || prevProps.expanded === nextProps.expanded) &&
       prevProps.openFile === nextProps.openFile &&
       prevProps.onToggle === nextProps.onToggle &&
       prevProps.depth === nextProps.depth

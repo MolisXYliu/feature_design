@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Eye, EyeOff, Loader2, Plus, Trash2 } from "lucide-react"
+import { Eye, EyeOff, Loader2, Plus, Trash2, Zap } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -83,6 +83,12 @@ export function CustomModelDialog({
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{
+    success: boolean
+    error?: string
+    latencyMs?: number
+  } | null>(null)
   const [hasExisting, setHasExisting] = useState(false)
   const [hasExistingKey, setHasExistingKey] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -95,6 +101,7 @@ export function CustomModelDialog({
     if (open) {
       setShowKey(false)
       setFormError(null)
+      setTestResult(null)
 
       const normalizedSelectedId = selectedModelId?.startsWith("custom:")
         ? selectedModelId.slice("custom:".length)
@@ -155,6 +162,7 @@ export function CustomModelDialog({
 
   async function selectConfigToEdit(id: string): Promise<void> {
     setFormError(null)
+    setTestResult(null)
     const picked = await window.api.models.getCustomConfig(id)
     if (!picked) return
     setConfig({
@@ -185,6 +193,32 @@ export function CustomModelDialog({
     (hasExistingKey || config.apiKey.trim()) &&
     !maxTokensError &&
     !duplicateNameError
+
+  const canTest =
+    config.baseUrl.trim() && config.model.trim() && (hasExistingKey || config.apiKey.trim())
+
+  async function handleTest(): Promise<void> {
+    if (!canTest || testing || saving || deleting) return
+    setTesting(true)
+    setTestResult(null)
+    setFormError(null)
+    try {
+      const result = await window.api.models.testConnection({
+        id: config.id,
+        baseUrl: config.baseUrl.trim(),
+        model: config.model.trim(),
+        apiKey: config.apiKey.trim() || undefined
+      })
+      setTestResult(result)
+    } catch (e) {
+      setTestResult({
+        success: false,
+        error: e instanceof Error ? e.message : "测试失败"
+      })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   async function handleSave(): Promise<void> {
     if (!canSave) {
@@ -310,6 +344,7 @@ export function CustomModelDialog({
                   setHasExisting(false)
                   setHasExistingKey(false)
                   setFormError(null)
+                  setTestResult(null)
                   setShowKey(false)
                 }}
               >
@@ -356,7 +391,7 @@ export function CustomModelDialog({
               <label className="text-xs font-medium text-muted-foreground">接口地址（Base URL）</label>
               <Input
                 value={config.baseUrl}
-                onChange={(e) => setConfig((c) => ({ ...c, baseUrl: e.target.value }))}
+                onChange={(e) => { setConfig((c) => ({ ...c, baseUrl: e.target.value })); setTestResult(null) }}
                 placeholder="https://api.example.com/v1"
               />
             </div>
@@ -365,7 +400,7 @@ export function CustomModelDialog({
               <label className="text-xs font-medium text-muted-foreground">模型名称（Model）</label>
               <Input
                 value={config.model}
-                onChange={(e) => setConfig((c) => ({ ...c, model: e.target.value }))}
+                onChange={(e) => { setConfig((c) => ({ ...c, model: e.target.value })); setTestResult(null) }}
                 placeholder="gpt-4o, deepseek-chat, ..."
               />
             </div>
@@ -396,7 +431,7 @@ export function CustomModelDialog({
                 <Input
                   type={showKey ? "text" : "password"}
                   value={config.apiKey}
-                  onChange={(e) => setConfig((c) => ({ ...c, apiKey: e.target.value }))}
+                  onChange={(e) => { setConfig((c) => ({ ...c, apiKey: e.target.value })); setTestResult(null) }}
                   placeholder={hasExisting ? "••••••••••••••••" : "sk-..."}
                   className="pr-10"
                 />
@@ -412,9 +447,35 @@ export function CustomModelDialog({
                   {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                密钥仅作用于当前模型（按模型 ID 独立保存）。
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-muted-foreground">
+                  密钥仅作用于当前模型（按模型 ID 独立保存）。
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto shrink-0 h-6 px-2 text-xs border-blue-500/50 text-blue-600 hover:bg-blue-500/10 hover:text-blue-700"
+                  onClick={handleTest}
+                  disabled={!canTest || testing || saving || deleting}
+                >
+                  {testing ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
+                  测试连接
+                </Button>
+              </div>
+              {testResult && (
+                <div
+                  className={`rounded-md border px-3 py-2 text-xs ${
+                    testResult.success
+                      ? "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                      : "border-destructive/40 bg-destructive/10 text-destructive"
+                  }`}
+                >
+                  {testResult.success
+                    ? `连接成功${testResult.latencyMs != null ? `（延迟 ${testResult.latencyMs} ms）` : ""}`
+                    : `连接失败：${testResult.error || "未知错误"}`}
+                </div>
+              )}
             </div>
 
             {formError && (
@@ -430,7 +491,7 @@ export function CustomModelDialog({
                   variant="destructive"
                   size="sm"
                   onClick={handleDelete}
-                  disabled={deleting || saving}
+                  disabled={deleting || saving || testing}
                 >
                   {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
                   删除
@@ -442,7 +503,7 @@ export function CustomModelDialog({
                 <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                   取消
                 </Button>
-                <Button type="button" onClick={handleSave} disabled={!canSave || saving}>
+                <Button type="button" onClick={handleSave} disabled={!canSave || saving || testing}>
                   {saving ? <Loader2 className="size-4 animate-spin" /> : "保存"}
                 </Button>
               </div>
