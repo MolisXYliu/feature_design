@@ -130,11 +130,12 @@ Other rules:
  *   "error"    — generation failed
  */
 function emitSkillGenerating(
+  threadId: string,
   phase: "start" | "token" | "done" | "error",
   text = ""
 ): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send("skill:generating", { phase, text })
+    win.webContents.send("skill:generating", { threadId, phase, text })
   }
 }
 
@@ -209,6 +210,7 @@ Is this conversation worth saving as a reusable skill?`
  * Returns null if no model is configured or the LLM response cannot be parsed.
  */
 async function generateSkillProposal(
+  threadId: string,
   context: SkillProposalWindowContext
 ): Promise<SkillProposal | null> {
   const configs = getCustomModelConfigs()
@@ -235,7 +237,7 @@ ${context.toolCallSummary}
 Based on this conversation, generate a reusable skill. Output JSON only.`
 
   try {
-    emitSkillGenerating("start")
+    emitSkillGenerating(threadId, "start")
 
     let fullText = ""
     const stream = await model.stream([
@@ -249,11 +251,11 @@ Based on this conversation, generate a reusable skill. Output JSON only.`
         : ""
       if (token) {
         fullText += token
-        emitSkillGenerating("token", token)
+        emitSkillGenerating(threadId, "token", token)
       }
     }
 
-    emitSkillGenerating("done", fullText)
+    emitSkillGenerating(threadId, "done", fullText)
 
     // Strip <think>...</think> reasoning blocks and markdown fences, then parse JSON
     const proposal = parseSkillProposal(fullText)
@@ -264,7 +266,7 @@ Based on this conversation, generate a reusable skill. Output JSON only.`
     return proposal
   } catch (e) {
     console.warn("[Agent] Failed to generate skill proposal:", e)
-    emitSkillGenerating("error", e instanceof Error ? e.message : String(e))
+    emitSkillGenerating(threadId, "error", e instanceof Error ? e.message : String(e))
     return null
   }
 }
@@ -301,6 +303,7 @@ async function runSkillProposalFlow(
   // Step 1 — Intent banner: ask user whether they want to save as a skill
   const intentId = uuid()
   const wantsSkill = await requestSkillIntent({
+    threadId,
     requestId: intentId,
     summary: latestUserMessage.slice(0, 120),
     toolCallCount: context.toolCallCount,
@@ -319,7 +322,7 @@ async function runSkillProposalFlow(
 
   // Step 2 — LLM generates skill draft (streaming, visible in right panel)
   console.log(`[Agent][${threadId}] User confirmed intent, generating skill proposal…`)
-  const proposal = await generateSkillProposal(context)
+  const proposal = await generateSkillProposal(threadId, context)
   if (!proposal) {
     console.log(`[Agent][${threadId}] Could not generate skill proposal (no model or parse error)`)
     return
@@ -331,6 +334,7 @@ async function runSkillProposalFlow(
   // Step 3 — Detail confirm dialog
   const confirmId = uuid()
   const adopted = await requestSkillConfirmation({
+    threadId,
     requestId: confirmId,
     skillId,
     name: proposal.name,

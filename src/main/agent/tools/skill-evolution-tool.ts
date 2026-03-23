@@ -55,6 +55,7 @@ function notifyRenderer(channel: string, payload?: unknown): void {
 // ─────────────────────────────────────────────────────────
 
 export interface SkillConfirmRequest {
+  threadId: string
   requestId: string
   skillId: string
   name: string
@@ -115,6 +116,7 @@ function waitForResponse(requestId: string, timeoutMs = 5 * 60 * 1000): Promise<
 // ─────────────────────────────────────────────────────────
 
 export interface SkillIntentRequest {
+  threadId: string
   requestId: string
   /** Short summary of what the conversation accomplished */
   summary: string
@@ -264,7 +266,13 @@ const skillEvolveSchema = z.object({
 // Tool factory
 // ─────────────────────────────────────────────────────────
 
-export function createSkillEvolutionTool() {
+interface SkillEvolutionToolContext {
+  /** The thread that owns this agent run — forwarded into IPC events so the
+   *  renderer can filter out events that belong to a different thread. */
+  threadId?: string
+}
+
+export function createSkillEvolutionTool(context: SkillEvolutionToolContext = {}) {
   return tool(
     async (input) => {
       switch (input.action) {
@@ -322,6 +330,7 @@ export function createSkillEvolutionTool() {
           const requestId = uuid()
           console.log(`[SkillEvolution] Requesting user confirmation for skill: "${input.name}" (${requestId})`)
           const approved = await requestSkillConfirmation({
+            threadId: context.threadId ?? "",
             requestId,
             skillId,
             name: input.name,

@@ -149,7 +149,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       currentThreadId: thread.thread_id,
       showKanbanView: false,
       showCustomizeView: false,
-      mainView: "thread"
+      mainView: "thread",
+      // Clear any lingering skill generation card from the previous thread
+      skillGenerationAgent: { phase: null, streamedText: "", errorText: "" }
     }))
     return thread
   },
@@ -159,7 +161,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       currentThreadId: threadId,
       showKanbanView: false,
       showCustomizeView: false,
-      mainView: "thread"
+      mainView: "thread",
+      // Reset skill generation virtual agent so the previous thread's
+      // "generating" card does not bleed into the newly selected thread.
+      skillGenerationAgent: { phase: null, streamedText: "", errorText: "" }
     })
   },
 

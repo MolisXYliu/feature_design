@@ -918,7 +918,7 @@ The workspace root is: ${workspacePath}`
     }))
   }
   if (!options.noSkillEvolutionTool) {
-    extraTools.push(createSkillEvolutionTool())
+    extraTools.push(createSkillEvolutionTool({ threadId: options.threadId }))
   }
 
   // Add git_push tool
