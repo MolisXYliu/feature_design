@@ -8,8 +8,10 @@ out
 release
 resources/bin/win32/codex.exe
 .idea/
+.claude/
 .env
 .playwright-browsers/
 
 # Codex local files
 .codex/
+tests/screenshots/

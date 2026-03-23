@@ -1,7 +1,22 @@
 import { create } from "zustand"
 import type { Thread, ModelConfig, Provider } from "@/types"
 
+type EvolutionTab = "candidates" | "traces"
+
+interface EvolutionRunProgress {
+  runId: string
+  traceId: string
+  index: number
+  total: number
+  status: "pending" | "running" | "completed" | "failed"
+  message?: string
+  candidateCount?: number
+}
+
 interface AppState {
+  // Main content view routing
+  mainView: "thread" | "customize" | "evolution" | "kanban"
+
   // Threads
   threads: Thread[]
   currentThreadId: string | null
@@ -58,10 +73,39 @@ interface AppState {
 
   // Customize actions
   setShowCustomizeView: (show: boolean, tab?: string) => void
+  setMainView: (view: "thread" | "customize" | "evolution" | "kanban") => void
 
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
   bumpPluginVersion: () => void
+
+  // Skill evolution — true when threshold reached, clears when Evolution panel opens
+  pendingEvolution: boolean
+  setPendingEvolution: (v: boolean) => void
+
+  // Skill generation virtual subagent — shown in the right panel agents section
+  skillGenerationAgent: {
+    phase: "generating" | "done" | "error" | null
+    streamedText: string
+    errorText: string
+  }
+  setSkillGenerationPhase: (phase: "generating" | "done" | "error" | null, text?: string) => void
+  appendSkillGenerationToken: (token: string) => void
+
+  // Evolution UI state — persists while switching customize submenus
+  evolutionTab: EvolutionTab
+  setEvolutionTab: (tab: EvolutionTab) => void
+  evolutionRunning: boolean
+  setEvolutionRunning: (running: boolean) => void
+  evolutionRunningSummary: string | null
+  setEvolutionRunningSummary: (summary: string | null) => void
+  evolutionSummary: string | null
+  setEvolutionSummary: (summary: string | null) => void
+  evolutionSelectedTraceIds: Set<string>
+  setEvolutionSelectedTraceIds: (ids: Set<string>) => void
+  evolutionRunProgress: Record<string, EvolutionRunProgress>
+  setEvolutionRunProgress: (progress: Record<string, EvolutionRunProgress>) => void
+  mergeEvolutionRunProgress: (payload: EvolutionRunProgress) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -74,11 +118,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   sidebarCollapsed: false,
   rightPanelCollapsed: false,
+  mainView: "thread",
   showKanbanView: false,
   showSubagentsInKanban: true,
   showCustomizeView: false,
   customizeInitialTab: null,
   pluginVersion: 0,
+  evolutionTab: "candidates",
+  evolutionRunning: false,
+  evolutionRunningSummary: null,
+  evolutionSummary: null,
+  evolutionSelectedTraceIds: new Set<string>(),
+  evolutionRunProgress: {},
 
   // Thread actions
   loadThreads: async () => {
@@ -96,13 +147,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       threads: [thread, ...state.threads],
       currentThreadId: thread.thread_id,
-      showKanbanView: false
+      showKanbanView: false,
+      showCustomizeView: false,
+      mainView: "thread"
     }))
     return thread
   },
 
   selectThread: async (threadId: string) => {
-    set({ currentThreadId: threadId, showKanbanView: false, showCustomizeView: false })
+    set({
+      currentThreadId: threadId,
+      showKanbanView: false,
+      showCustomizeView: false,
+      mainView: "thread"
+    })
   },
 
   deleteThread: async (threadId: string) => {
@@ -185,9 +243,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Kanban actions
   setShowKanbanView: (show: boolean) => {
     if (show) {
-      set({ showKanbanView: true, showCustomizeView: false, currentThreadId: null })
+      set({
+        showKanbanView: true,
+        showCustomizeView: false,
+        mainView: "kanban",
+        currentThreadId: null
+      })
     } else {
-      set({ showKanbanView: false })
+      set({ showKanbanView: false, mainView: "thread" })
     }
   },
 
@@ -197,13 +260,94 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setShowCustomizeView: (show: boolean, tab?: string) => {
     if (show) {
-      set({ showCustomizeView: true, showKanbanView: false, customizeInitialTab: tab ?? null })
+      set({
+        showCustomizeView: true,
+        showKanbanView: false,
+        customizeInitialTab: tab ?? null,
+        mainView: "customize"
+      })
     } else {
-      set({ showCustomizeView: false, customizeInitialTab: null })
+      set({
+        showCustomizeView: false,
+        customizeInitialTab: null,
+        mainView: "thread"
+      })
     }
+  },
+
+  setMainView: (view) => {
+    if (view === "kanban") {
+      set({
+        mainView: "kanban",
+        showKanbanView: true,
+        showCustomizeView: false,
+        currentThreadId: null
+      })
+      return
+    }
+
+    if (view === "customize") {
+      set({
+        mainView: "customize",
+        showCustomizeView: true,
+        showKanbanView: false
+      })
+      return
+    }
+
+    if (view === "evolution") {
+      set({
+        mainView: "customize",
+        showCustomizeView: true,
+        showKanbanView: false,
+        customizeInitialTab: "evolution"
+      })
+      return
+    }
+
+    set({
+      mainView: "thread",
+      showCustomizeView: false,
+      showKanbanView: false
+    })
   },
 
   bumpPluginVersion: () => {
     set((state) => ({ pluginVersion: state.pluginVersion + 1 }))
-  }
+  },
+
+  pendingEvolution: false,
+  setPendingEvolution: (v) => set({ pendingEvolution: v }),
+
+  skillGenerationAgent: { phase: null, streamedText: "", errorText: "" },
+  setSkillGenerationPhase: (phase, text = "") =>
+    set({
+      skillGenerationAgent:
+        phase === null
+          ? { phase: null, streamedText: "", errorText: "" }
+          : phase === "error"
+            ? { phase: "error", streamedText: "", errorText: text }
+            : { phase, streamedText: "", errorText: "" }
+    }),
+  appendSkillGenerationToken: (token) =>
+    set((state) => ({
+      skillGenerationAgent: {
+        ...state.skillGenerationAgent,
+        streamedText: state.skillGenerationAgent.streamedText + token
+      }
+    })),
+
+  setEvolutionTab: (tab) => set({ evolutionTab: tab }),
+  setEvolutionRunning: (running) => set({ evolutionRunning: running }),
+  setEvolutionRunningSummary: (summary) => set({ evolutionRunningSummary: summary }),
+  setEvolutionSummary: (summary) => set({ evolutionSummary: summary }),
+  setEvolutionSelectedTraceIds: (ids) => set({ evolutionSelectedTraceIds: new Set(ids) }),
+  setEvolutionRunProgress: (progress) => set({ evolutionRunProgress: { ...progress } }),
+  mergeEvolutionRunProgress: (payload) =>
+    set((state) => ({
+      evolutionRunProgress: {
+        ...state.evolutionRunProgress,
+        [payload.traceId]: payload
+      }
+    }))
 }))

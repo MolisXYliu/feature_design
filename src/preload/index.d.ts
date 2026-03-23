@@ -267,6 +267,174 @@ interface CustomAPI {
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
+  skillEvolution: {
+    /** Phase 1 — intent banner: "Want to save this as a skill?" */
+    onIntentRequest: (
+      callback: (req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }) => void
+    ) => () => void
+    intentResponse: (requestId: string, accepted: boolean) => Promise<void>
+    /** Phase 2 — full detail dialog: show skill preview for final adoption */
+    onConfirmRequest: (
+      callback: (req: {
+        requestId: string
+        skillId: string
+        name: string
+        description: string
+        content: string
+      }) => void
+    ) => () => void
+    confirmResponse: (requestId: string, approved: boolean) => Promise<void>
+    /** Listen to streaming generation progress from the main process */
+    onGenerating: (
+      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+    ) => () => void
+  }
+  optimizer: {
+    run: (opts?: {
+      threadId?: string
+      traceLimit?: number
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+    }) => Promise<{
+      startedAt: string
+      endedAt: string
+      tracesAnalyzed: number
+      candidates: Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+      summary: string
+    }>
+    onRunProgress: (
+      cb: (payload: {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      }) => void
+    ) => () => void
+    getCandidates: () => Promise<Array<{
+      candidateId: string
+      action: "create" | "patch"
+      skillId: string
+      name: string
+      description: string
+      proposedContent: string
+      rationale: string
+      sourceTraceIds: string[]
+      generatedAt: string
+      status: "pending" | "approved" | "rejected"
+    }>>
+    approve: (candidateId: string) => Promise<{ success: boolean; skillId?: string; error?: string }>
+    reject: (candidateId: string) => Promise<{ success: boolean }>
+    clear: () => Promise<void>
+    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<Array<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      durationMs: number
+      userMessage: string
+      totalToolCalls: number
+      totalInputTokens: number
+      totalOutputTokens: number
+      totalTokens: number
+      outcome: string
+      usedSkills: string[]
+    }>>
+    onAutoTriggered: (cb: (payload: { threadId: string; toolCallCount: number }) => void) => () => void
+    getTraceDetail: (traceId: string) => Promise<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      endedAt: string
+      durationMs: number
+      userMessage: string
+      modelId: string
+      totalToolCalls: number
+      outcome: string
+      errorMessage?: string
+      usedSkills: string[]
+      nodes?: Array<{
+        id: string
+        type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+        parentId: string | null
+        name?: string
+        status?: "running" | "success" | "error" | "cancelled" | "unknown"
+        startedAt: string
+        endedAt?: string
+        input?: unknown
+        output?: unknown
+        metadata?: Record<string, unknown>
+      }>
+      modelCalls?: Array<{
+        messageId?: string
+        startedAt: string
+        inputMessages: Array<{
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }>
+        outputMessage: {
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+        tokenUsage?: {
+          inputTokens?: number
+          outputTokens?: number
+          totalTokens?: number
+          cacheReadTokens?: number
+          cacheCreationTokens?: number
+        }
+      }>
+      steps: Array<{
+        index: number
+        startedAt: string
+        assistantText: string
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+      }>
+    } | null>
+    deleteTraces: (traceIds: string[]) => Promise<{
+      deletedIds: string[]
+      failed: Array<{ traceId: string; error: string }>
+    }>
+    getOnlineSkillEvolutionEnabled: () => Promise<boolean>
+    setOnlineSkillEvolutionEnabled: (enabled: boolean) => Promise<void>
+    getAutoPropose: () => Promise<boolean>
+    setAutoPropose: (enabled: boolean) => Promise<void>
+    getThreshold: () => Promise<number>
+    setThreshold: (value: number) => Promise<void>
+  }
   hooks: {
     list: () => Promise<HookConfig[]>
     create: (config: HookUpsert) => Promise<{ id: string }>

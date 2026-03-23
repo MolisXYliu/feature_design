@@ -33,7 +33,17 @@ const RIGHT_MAX = 450
 const RIGHT_DEFAULT = 300
 
 function App(): React.JSX.Element {
-  const { currentThreadId, loadThreads, createThread, showKanbanView, showCustomizeView, sidebarCollapsed, toggleSidebar, rightPanelCollapsed, toggleRightPanel } = useAppStore()
+  const {
+    currentThreadId,
+    loadThreads,
+    createThread,
+    mainView,
+    sidebarCollapsed,
+    toggleSidebar,
+    rightPanelCollapsed,
+    toggleRightPanel,
+    setPendingEvolution
+  } = useAppStore()
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
@@ -148,6 +158,13 @@ function App(): React.JSX.Element {
     init()
   }, [loadThreads, createThread])
 
+  // Listen for skill-evolution threshold events — set badge on Evolution tab
+  useEffect(() => {
+    return window.api.optimizer.onAutoTriggered(() => {
+      setPendingEvolution(true)
+    })
+  }, [setPendingEvolution])
+
   // Reload thread list when main process signals a change (e.g. scheduled task created a thread).
   // Only update the list without auto-selecting (which would navigate away from customize view).
   useEffect(() => {
@@ -194,7 +211,7 @@ function App(): React.JSX.Element {
             className="flex flex-1 h-9 min-w-0 items-center"
             style={{ marginLeft: "var(--titlebar-inset-left, 0px)" }}
           >
-            {!showCustomizeView && (
+            {mainView !== "customize" && (
               <button
                 type="button"
                 className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
@@ -247,7 +264,7 @@ function App(): React.JSX.Element {
           <div
             className="flex flex-1 h-full items-center justify-end pl-1 gap-1"
           >
-            {!showCustomizeView && (
+            {mainView !== "customize" && (
               <button
                 type="button"
                 className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
@@ -266,7 +283,7 @@ function App(): React.JSX.Element {
         </div>
 
         {/* Main content below titlebar */}
-        {showCustomizeView ? (
+        {mainView === "customize" ? (
           <div className="flex flex-1 overflow-hidden bg-grid-subtle">
             <main className="flex flex-1 flex-col min-w-0 overflow-hidden">
               <CustomizeView />
@@ -284,7 +301,7 @@ function App(): React.JSX.Element {
               </>
             )}
 
-            {showKanbanView ? (
+            {mainView === "kanban" ? (
               <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
                 <KanbanView />
               </main>
@@ -303,7 +320,7 @@ function App(): React.JSX.Element {
               </>
             )}
 
-            {!showKanbanView && !rightPanelCollapsed && (
+            {mainView === "thread" && !rightPanelCollapsed && (
               <>
                 <ResizeHandle onDrag={handleRightResize} />
                 {/* Right Panel - floating style */}

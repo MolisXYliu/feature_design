@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent.ts 潜在 Bug 分析报告</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #f5f7fa;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #1a1a2e;
+      font-size: 28px;
+      margin-bottom: 10px;
+      padding-bottom: 15px;
+      border-bottom: 3px solid #4361ee;
+    }
+    .meta {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    .summary-card {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .summary-card.total { border-top: 4px solid #4361ee; }
+    .summary-card.critical { border-top: 4px solid #e63946; }
+    .summary-card.medium { border-top: 4px solid #f4a261; }
+    .summary-card.minor { border-top: 4px solid #2a9d8f; }
+    .summary-card .number {
+      font-size: 32px;
+      font-weight: bold;
+      color: #1a1a2e;
+    }
+    .summary-card .label {
+      font-size: 13px;
+      color: #666;
+      margin-top: 5px;
+    }
+    .bug {
+      background: white;
+      border-radius: 10px;
+      padding: 25px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      border-left: 4px solid #ddd;
+    }
+    .bug.critical { border-left-color: #e63946; }
+    .bug.medium { border-left-color: #f4a261; }
+    .bug.minor { border-left-color: #2a9d8f; }
+    .bug-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 15px;
+    }
+    .bug-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+    .severity {
+      font-size: 12px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    .severity.critical { background: #ffe5e7; color: #c1121f; }
+    .severity.medium { background: #fff3e6; color: #d35400; }
+    .severity.minor { background: #e6f7f5; color: #1a7f64; }
+    .location {
+      background: #f8f9fa;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 15px;
+    }
+    .location code {
+      color: #d63384;
+    }
+    .description {
+      margin-bottom: 15px;
+    }
+    .fix-section {
+      background: #f0f7ff;
+      border-radius: 8px;
+      padding: 15px;
+    }
+    .fix-title {
+      font-weight: 600;
+      color: #4361ee;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    .fix-content {
+      font-size: 14px;
+      color: #444;
+    }
+    .fix-content code {
+      background: #e8eef5;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      color: #c41230;
+    }
+    .code-block {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 13px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+    .code-block .comment { color: #6c7086; }
+    .code-block .keyword { color: #cba6f7; }
+    .code-block .string { color: #a6e3a1; }
+    .code-block .function { color: #89b4fa; }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #888;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Agent.ts 潜在 Bug 分析报告</h1>
+    <p class="meta">文件路径: src/main/ipc/agent.ts | 生成时间: 2026-03-19</p>
+
+    <div class="summary">
+      <div class="summary-card total">
+        <div class="number">7</div>
+        <div class="label">总问题数</div>
+      </div>
+      <div class="summary-card critical">
+        <div class="number">2</div>
+        <div class="label">严重问题</div>
+      </div>
+      <div class="summary-card medium">
+        <div class="number">4</div>
+        <div class="label">中等问题</div>
+      </div>
+      <div class="summary-card minor">
+        <div class="number">1</div>
+        <div class="label">轻微问题</div>
+      </div>
+    </div>
+
+    <!-- Bug 1 -->
+    <div class="bug critical">
+      <div class="bug-header">
+        <span class="bug-title">1. window 可能为 null 导致崩溃</span>
+        <span class="severity critical">严重</span>
+      </div>
+      <div class="location">位置: Line 942, 1048, 1140</div>
+      <div class="description">
+        在 <code>catch</code> 块中使用 <code>window</code> 时，窗口可能已经关闭，导致 <code>Cannot read property 'webContents' of null</code>。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          在使用 window 前添加空值检查：
+          <div class="code-block"><span class="keyword">if</span> (window &amp;&amp; !window.isDestroyed()) {
+  window.webContents.send(channel, { <span class="string">type</span>: <span class="string">"error"</span>, error: errMsg })
+}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 2 -->
+    <div class="bug critical">
+      <div class="bug-header">
+        <span class="bug-title">2. interrupt handler 未传递 modelId 参数</span>
+        <span class="severity critical">严重</span>
+      </div>
+      <div class="location">位置: Line 1099</div>
+      <div class="description">
+        <code>interrupt</code> handler 接收了 <code>modelId</code> 参数并从 metadata 获取了值，但没有传递给 <code>createAgentRuntime</code>，导致使用了错误的模型配置。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          修改 Line 1099，正确传递 modelId 参数：
+          <div class="code-block"><span class="comment">// 原来的代码</span>
+<span class="keyword">const</span> agent = <span class="keyword">await</span> createAgentRuntime({ threadId, workspacePath, modelId })
+
+<span class="comment">// 修复后的代码 - 使用正确获取的 modelId</span>
+<span class="keyword">const</span> effectiveModelId = modelId || (metadata.model <span class="keyword">as</span> <span class="keyword">string</span> | <span class="keyword">undefined</span>)
+<span class="keyword">const</span> agent = <span class="keyword">await</span> createAgentRuntime({ threadId, workspacePath, modelId: effectiveModelId })</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 3 -->
+    <div class="bug medium">
+      <div class="bug-header">
+        <span class="bug-title">3. workspacePath 验证失败时未清理 abortController</span>
+        <span class="severity medium">中等</span>
+      </div>
+      <div class="location">位置: Line 476-484</div>
+      <div class="description">
+        <code>abortController</code> 已被添加到 <code>activeRuns</code> Map 中，但提前 return 时未删除，导致内存泄漏和后续无法正确取消该线程的任务。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          在 return 前清理 activeRuns：
+          <div class="code-block"><span class="keyword">if</span> (!workspacePath) {
+  window.webContents.send(channel, {
+    <span class="string">type</span>: <span class="string">"error"</span>,
+    <span class="string">error</span>: <span class="string">"WORKSPACE_REQUIRED"</span>,
+    <span class="string">message</span>: <span class="string">"Please select a workspace folder before sending messages."</span>
+  })
+  <span class="comment">// 添加这行</span>
+  activeRuns.delete(threadId)  <span class="comment">// 清理 abortController</span>
+  <span class="keyword">await</span> tracer.finish(<span class="string">"error"</span>, <span class="string">"WORKSPACE_REQUIRED"</span>)
+  <span class="keyword">return</span>
+}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 4 -->
+    <div class="bug medium">
+      <div class="bug-header">
+        <span class="bug-title">4. skill evolution 禁用时频繁重置会话</span>
+        <span class="severity medium">中等</span>
+      </div>
+      <div class="location">位置: Line 904-906</div>
+      <div class="description">
+        当禁用 skill evolution 时，每次对话都会执行 <code>resetSkillEvolutionSession(threadId)</code>，这不仅浪费资源，而且逻辑上不合理（禁用时不应该有任何相关操作）。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          移除 else 分支的 reset 调用：
+          <div class="code-block"><span class="comment">// 原来的代码</span>
+<span class="keyword">if</span> (isOnlineSkillEvolutionEnabled()) {
+  <span class="comment">// ... skill evolution logic</span>
+} <span class="keyword">else</span> {
+  resetSkillEvolutionSession(threadId)  <span class="comment">// 删除这行</span>
+}
+
+<span class="comment">// 修复后 - 直接移除 else 分支</span>
+<span class="keyword">if</span> (isOnlineSkillEvolutionEnabled()) {
+  <span class="comment">// ... skill evolution logic</span>
+}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 5 -->
+    <div class="bug medium">
+      <div class="bug-header">
+        <span class="bug-title">5. 桌面通知时机可能早于前端消息</span>
+        <span class="severity medium">中等</span>
+      </div>
+      <div class="location">位置: Line 866-867</div>
+      <div class="description">
+        桌面通知 <code>notifyIfBackground</code> 在发送 <code>"done"</code> 消息之前调用，可能导致通知比前端收到完成信号更早到达。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          调整发送顺序，先发送完成消息，再发送通知：
+          <div class="code-block"><span class="comment">// 原来的代码</span>
+window.webContents.send(channel, { <span class="string">type</span>: <span class="string">"done"</span> })
+notifyIfBackground(<span class="string">"✅ 任务完成"</span>, assistantText.trim() || <span class="string">"对话已完成"</span>)
+
+<span class="comment">// 修复后</span>
+<span class="keyword">await</span> <span class="keyword">new</span> <span class="function">Promise</span>(resolve => {
+  window.webContents.send(channel, { <span class="string">type</span>: <span class="string">"done"</span> })
+  <span class="comment">// 等待一小段时间确保消息发送</span>
+  setTimeout(resolve, 50)
+})
+notifyIfBackground(<span class="string">"✅ 任务完成"</span>, assistantText.trim() || <span class="string">"对话已完成"</span>)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 6 -->
+    <div class="bug medium">
+      <div class="bug-header">
+        <span class="bug-title">6. resume/interrupt 中存在冗余 abort 操作</span>
+        <span class="severity medium">中等</span>
+      </div>
+      <div class="location">位置: Line 988-991, 1083-1086</div>
+      <div class="description">
+        在 resume/interrupt 之前手动 abort 旧的 stream，但 <code>agent:invoke</code> 已经在 <code>finally</code> 中删除了对应的 controller，这是冗余操作且可能导致竞态条件。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          简化逻辑，依赖 invoke handler 的 finally 块清理：
+          <div class="code-block"><span class="comment">// 移除 resume handler 中的手动 abort 逻辑 (Line 986-991)</span>
+<span class="comment">// 直接创建新的 abortController</span>
+<span class="keyword">const</span> abortController = <span class="keyword">new</span> AbortController()
+activeRuns.<span class="function">set</span>(threadId, abortController)
+
+<span class="comment">// 同样移除 interrupt handler 中的手动 abort (Line 1082-1087)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bug 7 -->
+    <div class="bug minor">
+      <div class="bug-header">
+        <span class="bug-title">7. 模型配置 fallback 逻辑不够精确</span>
+        <span class="severity minor">轻微</span>
+      </div>
+      <div name="location">位置: Line 915</div>
+      <div class="description">
+        当找不到匹配的 model 时 fallback 到第一个配置，可能导致使用了非预期的模型，造成不可预期的行为。
+      </div>
+      <div class="fix-section">
+        <div class="fix-title">修复方案</div>
+        <div class="fix-content">
+          添加明确的错误处理：
+          <div class="code-block"><span class="comment">// 原来的代码</span>
+<span class="keyword">const</span> config = allConfigs.<span class="function">find</span>(<span class="keyword">c</span> => <span class="keyword">c</span>.id === (modelId?.<span class="function">replace</span>(<span class="string">"custom:"</span>, <span class="string">""</span>) ?? <span class="string">""</span>)) || allConfigs[<span class="number">0</span>]
+
+<span class="comment">// 修复后</span>
+<span class="keyword">const</span> normalizedModelId = modelId?.<span class="function">replace</span>(<span class="string">"custom:"</span>, <span class="string">""</span>) ?? <span class="string">""</span>
+<span class="keyword">const</span> config = allConfigs.<span class="function">find</span>(<span class="keyword">c</span> => <span class="keyword">c</span>.id === normalizedModelId)
+<span class="keyword">if</span> (!config) {
+  console.<span class="function">warn</span>(<span class="string">`[Agent] Model config not found for: ${normalizedModelId}, skipping memory summarization`</span>)
+  <span class="keyword">return</span>  <span class="comment">// 或抛出异常</span>
+}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>报告生成时间: 2026-03-19 | 来源: src/main/ipc/agent.ts</p>
+    </div>
+  </div>
+</body>
+</html>
