@@ -181,10 +181,14 @@ export function RightPanel(): React.JSX.Element {
     }
   }, [skillGenerationAgent.phase])
 
-  // When confirmRequest arrives (phase becomes "done"), clear virtual card after short delay
+  // Auto-clear the virtual skill card once it reaches a terminal phase:
+  //   "done"  → 3 s  (brief confirmation before disappearing)
+  //   "error" → 10 s (long enough for the user to read the error message)
   useEffect(() => {
-    if (skillGenerationAgent.phase === "done") {
-      const t = setTimeout(() => setSkillGenerationPhase(null), 3000)
+    const phase = skillGenerationAgent.phase
+    if (phase === "done" || phase === "error") {
+      const delayMs = phase === "done" ? 3000 : 10_000
+      const t = setTimeout(() => setSkillGenerationPhase(null), delayMs)
       return () => clearTimeout(t)
     }
     return undefined

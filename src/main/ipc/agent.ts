@@ -215,7 +215,11 @@ async function generateSkillProposal(
 ): Promise<SkillProposal | null> {
   const configs = getCustomModelConfigs()
   const config = configs[0]
-  if (!config?.apiKey) return null
+  if (!config?.apiKey) {
+    // No model configured — notify the renderer so the card doesn't stay stuck
+    emitSkillGenerating(threadId, "error", "未配置模型或 API Key，无法生成技能草稿")
+    return null
+  }
 
   const model = new ChatOpenAI({
     model: config.model,
@@ -261,6 +265,8 @@ Based on this conversation, generate a reusable skill. Output JSON only.`
     const proposal = parseSkillProposal(fullText)
     if (!proposal) {
       console.warn("[Agent] Failed to parse skill proposal JSON")
+      // Emit error so the renderer card transitions out of "generating" state
+      emitSkillGenerating(threadId, "error", "技能草稿解析失败，请重试")
       return null
     }
     return proposal
@@ -321,6 +327,9 @@ async function runSkillProposalFlow(
   }
 
   // Step 2 — LLM generates skill draft (streaming, visible in right panel)
+  // generateSkillProposal() is responsible for emitting skill:generating events
+  // (including the terminal "error" event) before returning null, so the renderer
+  // card will always transition to a final state.
   console.log(`[Agent][${threadId}] User confirmed intent, generating skill proposal…`)
   const proposal = await generateSkillProposal(threadId, context)
   if (!proposal) {
