@@ -212,6 +212,7 @@ export function MessageBubble({
                     needsApproval={needsApproval}
                     showApprovalButtons={!isBatch}
                     onApprovalDecision={onApprovalDecision}
+                    approvalTypes={(pendingApproval as any)?._approvalTypes}
                     threadId={threadId}
                     isStreaming={isStreaming}
                   />

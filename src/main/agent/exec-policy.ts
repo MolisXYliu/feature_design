@@ -22,7 +22,10 @@ const SAFE_EXECUTABLES = new Set([
   "head", "hostname", "id", "ls", "nl", "paste", "pwd", "printf",
   "rev", "seq", "sort", "stat", "tail", "tr", "tree", "true", "uname",
   "uniq", "wc", "where", "which", "whoami", "type", "awk", "comm",
-  "date", "diff", "env", "printenv"
+  "date", "diff", "env", "printenv",
+  // Windows diagnostic commands (read-only)
+  "ipconfig", "netstat", "netsh", "systeminfo", "tasklist", "findstr", "nslookup",
+  "ping", "tracert", "pathping", "route", "arp", "getmac", "ver"
 ])
 
 const UNSAFE_FIND_OPTIONS = new Set([
@@ -86,8 +89,23 @@ const BANNED_PERSISTENT_PREFIXES: string[][] = [
 ]
 
 const PERSISTABLE_EXECUTABLES = new Set([
-  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "java", "make",
-  "mvn", "npm", "pnpm", "poetry", "pytest", "uv", "yarn"
+  // Build tools & package managers
+  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "java", "javac", "make",
+  "mvn", "npm", "npx", "pnpm", "poetry", "pip", "pip3", "pytest", "uv", "yarn",
+  "dotnet", "msbuild", "ant",
+  // Version control
+  "git", "svn",
+  // Common dev tools
+  "node", "python", "python3", "ruby", "perl", "php",
+  "rustc", "gcc", "g++", "clang", "clang++",
+  "docker", "docker-compose", "kubectl",
+  "curl", "wget",
+  // Shell utilities (read-only / safe)
+  "ls", "dir", "cat", "head", "tail", "find", "grep", "rg", "awk", "sed",
+  "wc", "sort", "uniq", "diff", "tree", "file", "which", "where", "echo",
+  "pwd", "env", "printenv", "whoami", "hostname", "date", "df", "du",
+  // Windows-specific
+  "type", "findstr", "icacls", "net", "sc", "tasklist", "systeminfo"
 ])
 
 // ── Forbidden patterns ───────────────────────────────────────────────────────
@@ -265,6 +283,24 @@ export function derivePermanentApprovalPattern(command: string): string | null {
 }
 
 export function matchesApprovalPattern(pattern: string, command: string): boolean {
+  // File operation pattern matching: "file:write_file:/dir/*" or "file:edit_file:/dir/*"
+  if (pattern.startsWith("file:")) {
+    if (!command.startsWith("file:")) return false
+    // pattern = "file:write_file:/some/dir/*", command = "file:write_file:/some/dir/foo.ts"
+    const patternParts = pattern.split(":")  // ["file", "write_file", "/some/dir/*"]
+    const commandParts = command.split(":")  // ["file", "write_file", "/some/dir/foo.ts"]
+    if (patternParts.length < 3 || commandParts.length < 3) return false
+    if (patternParts[1] !== commandParts[1]) return false  // operation must match
+    const patternPath = patternParts.slice(2).join(":").replace(/\\/g, "/")
+    const commandPath = commandParts.slice(2).join(":").replace(/\\/g, "/")
+    // "dir/*" → check if commandPath starts with "dir/"
+    if (patternPath.endsWith("/*")) {
+      const dirPrefix = patternPath.slice(0, -1)  // "dir/"
+      return commandPath.startsWith(dirPrefix) || commandPath === dirPrefix.slice(0, -1)
+    }
+    return patternPath === commandPath
+  }
+
   if (pattern.startsWith(APPROVAL_PREFIX_RULE_PREFIX)) {
     const prefixTokens = parseApprovalPattern(pattern)
     const commandTokens = tokenizeCommand(command.trim())

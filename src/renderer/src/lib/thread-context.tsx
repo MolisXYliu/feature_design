@@ -14,6 +14,7 @@ import {
 import { useStream } from "@langchain/langgraph-sdk/react"
 import { ElectronIPCTransport } from "./electron-transport"
 import type { Message, Todo, FileInfo, Subagent, HITLRequest } from "@/types"
+import { useAppStore } from "@/lib/store"
 import type { DeepAgent } from "../../../main/agent/types"
 
 // Open file tab type
@@ -729,6 +730,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   // Track passive scheduler/heartbeat stream listeners per thread
   const schedulerListenerCleanups = useRef<Record<string, () => void>>({})
   const heartbeatListenerCleanups = useRef<Record<string, () => void>>({})
+  // Track approval listeners per thread (registered globally, not per-component)
+  const approvalListenerCleanups = useRef<Record<string, Array<() => void>>>({})
 
   // Track streaming AI message state per thread (for token-by-token accumulation)
   const schedulerStreamingRef = useRef<
@@ -909,8 +912,39 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         })
         schedulerListenerCleanups.current[threadId] = schedulerCleanup
       }
+
+      // Register global approval listeners for this thread (not tied to ChatContainer mount)
+      const cleanupApproval = window.api.sandbox.onApprovalRequest(threadId, (request: unknown) => {
+        console.log(`[ThreadProvider] Approval request for thread ${threadId}:`, request)
+        const req = request as Record<string, unknown>
+        updateThreadState(threadId, () => ({
+          pendingApproval: {
+            id: (req.id as string) || "",
+            tool_call: (req.tool_call as { id: string; name: string; args: Record<string, unknown> }) || { id: "", name: "execute", args: {} },
+            allowed_decisions: ["approve", "reject"],
+            command: req.command,
+            reason: req.reason,
+            operation: req.operation,
+            filePath: req.filePath,
+            _orchestratorRequestId: req.id,
+            _retryReason: req.retry_reason,
+            _approvalTypes: req.allowed_approval_types
+          } as any
+        }))
+        // Auto-switch to this thread so the approval UI is visible
+        const currentId = useAppStore.getState().currentThreadId
+        if (currentId !== threadId) {
+          console.log(`[ThreadProvider] Auto-switching to thread ${threadId} for pending approval`)
+          useAppStore.getState().selectThread(threadId)
+        }
+      })
+      const cleanupTimeout = window.api.sandbox.onApprovalTimeout(threadId, (data) => {
+        console.warn(`[ThreadProvider] Approval timed out for thread ${threadId}: requestId=${data.requestId}`)
+        updateThreadState(threadId, () => ({ pendingApproval: null }))
+      })
+      approvalListenerCleanups.current[threadId] = [cleanupApproval, cleanupTimeout]
     },
-    [loadThreadHistory, processSchedulerEvent]
+    [loadThreadHistory, processSchedulerEvent, updateThreadState]
   )
 
   const cleanupThread = useCallback((threadId: string) => {
@@ -918,6 +952,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     delete schedulerListenerCleanups.current[threadId]
     heartbeatListenerCleanups.current[threadId]?.()
     delete heartbeatListenerCleanups.current[threadId]
+    approvalListenerCleanups.current[threadId]?.forEach((c) => c())
+    delete approvalListenerCleanups.current[threadId]
     delete schedulerStreamingRef.current[threadId]
 
     initializedThreadsRef.current.delete(threadId)

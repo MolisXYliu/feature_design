@@ -413,12 +413,14 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
 
     const pending = pendingApprovals.get(decision.requestId)
     if (pending) {
-      // P2 fix: validate sender is one of the windows that received this specific request
+      // P3 fix: accept decisions from any known BrowserWindow, not just the original targets.
+      // After window reload / hot-reload the webContents.id changes, so the original
+      // targetWebContentsIds list becomes stale. The senderWindow check above already
+      // ensures the sender is a legitimate BrowserWindow.
       if (!pending.targetWebContentsIds.includes(event.sender.id)) {
-        console.warn(
-          `[Sandbox] Rejected approval decision from non-target window (sender=${event.sender.id}, targets=[${pending.targetWebContentsIds.join(",")}])`
+        console.log(
+          `[Sandbox] Accepting approval from reloaded window (sender=${event.sender.id}, originalTargets=[${pending.targetWebContentsIds.join(",")}])`
         )
-        return
       }
 
       // P2 fix: validate tool_call_id matches the original request
