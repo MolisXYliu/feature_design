@@ -30,7 +30,7 @@ import {
   Webhook
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useAppStore } from "@/lib/store"
+import { useAppStore, selectSkillGenerationAgent } from "@/lib/store"
 import { useShallow } from "zustand/react/shallow"
 import { useThreadState } from "@/lib/thread-context"
 import { Badge } from "@/components/ui/badge"
@@ -129,13 +129,19 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 export function RightPanel(): React.JSX.Element {
-  const { currentThreadId, pluginVersion, skillGenerationAgent, setSkillGenerationPhase } = useAppStore(
+  const { currentThreadId, pluginVersion, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
       pluginVersion: s.pluginVersion,
-      skillGenerationAgent: s.skillGenerationAgent,
+      // Subscribe to the whole map so we re-render when any thread's card changes
+      skillGenerationByThread: s.skillGenerationByThread,
       setSkillGenerationPhase: s.setSkillGenerationPhase
     }))
+  )
+  // Derive the current thread's card state from the per-thread map
+  const skillGenerationAgent = selectSkillGenerationAgent(
+    { skillGenerationByThread } as Parameters<typeof selectSkillGenerationAgent>[0],
+    currentThreadId
   )
   const threadState = useThreadState(currentThreadId)
   const todos = threadState?.todos ?? []
@@ -181,18 +187,23 @@ export function RightPanel(): React.JSX.Element {
     }
   }, [skillGenerationAgent.phase])
 
-  // Auto-clear the virtual skill card once it reaches a terminal phase:
-  //   "done"  → 3 s  (brief confirmation before disappearing)
-  //   "error" → 10 s (long enough for the user to read the error message)
+  // Auto-clear only for "done" phase (3 s brief confirmation).
+  // "error" is intentionally NOT auto-cleared — it stays visible so the user
+  // can read the error, and must be dismissed manually via the ✕ button on the card.
   useEffect(() => {
-    const phase = skillGenerationAgent.phase
-    if (phase === "done" || phase === "error") {
-      const delayMs = phase === "done" ? 3000 : 10_000
-      const t = setTimeout(() => setSkillGenerationPhase(null), delayMs)
+    if (skillGenerationAgent.phase === "done") {
+      const t = setTimeout(() => setSkillGenerationPhase(null), 3000)
       return () => clearTimeout(t)
     }
     return undefined
   }, [skillGenerationAgent.phase, setSkillGenerationPhase])
+
+  // Log skill generation errors to the console for easier diagnosis on Windows
+  useEffect(() => {
+    if (skillGenerationAgent.phase === "error") {
+      console.error("[SkillGen] 技能生成失败:", skillGenerationAgent.errorText)
+    }
+  }, [skillGenerationAgent.phase, skillGenerationAgent.errorText])
 
   useEffect(() => {
     if (hooksOpen) {
@@ -1245,11 +1256,14 @@ function FileIcon({
 function SkillGenerationCard({
   phase,
   streamedText,
-  errorText
+  errorText,
+  onDismiss
 }: {
   phase: "generating" | "done" | "error"
   streamedText: string
   errorText: string
+  /** Called when the user clicks ✕ to dismiss an error card. */
+  onDismiss?: () => void
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
 
@@ -1257,7 +1271,7 @@ function SkillGenerationCard({
     ? { icon: Loader2, variant: "info" as const, label: "生成中", spin: true }
     : phase === "done"
       ? { icon: CheckCircle2, variant: "nominal" as const, label: "已完成", spin: false }
-      : { icon: AlertCircle, variant: "critical" as const, label: "失败", spin: false }
+      : { icon: AlertCircle, variant: "critical" as const, label: "执行失败", spin: false }
 
   const StatusIcon = statusBadge.icon
 
@@ -1289,7 +1303,18 @@ function SkillGenerationCard({
       {/* Body */}
       <div className="px-3 pb-3 space-y-2">
         {phase === "error" ? (
-          <p className="text-xs text-destructive">{errorText}</p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs text-destructive flex-1">{errorText}</p>
+            {onDismiss && (
+              <button
+                onClick={onDismiss}
+                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="关闭"
+              >
+                <XCircle className="size-3.5" />
+              </button>
+            )}
+          </div>
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
@@ -1322,11 +1347,16 @@ function SkillGenerationCard({
 }
 
 function AgentsContent(): React.JSX.Element {
-  const { currentThreadId, skillGenerationAgent } = useAppStore(
+  const { currentThreadId, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
-      skillGenerationAgent: s.skillGenerationAgent
+      skillGenerationByThread: s.skillGenerationByThread,
+      setSkillGenerationPhase: s.setSkillGenerationPhase
     }))
+  )
+  const skillGenerationAgent = selectSkillGenerationAgent(
+    { skillGenerationByThread } as Parameters<typeof selectSkillGenerationAgent>[0],
+    currentThreadId
   )
   const threadState = useThreadState(currentThreadId)
   const subagents = threadState?.subagents ?? []
@@ -1351,6 +1381,11 @@ function AgentsContent(): React.JSX.Element {
           phase={skillGenerationAgent.phase!}
           streamedText={skillGenerationAgent.streamedText}
           errorText={skillGenerationAgent.errorText}
+          onDismiss={
+            skillGenerationAgent.phase === "error"
+              ? () => setSkillGenerationPhase(null)
+              : undefined
+          }
         />
       )}
       {subagents.map((agent) => (
