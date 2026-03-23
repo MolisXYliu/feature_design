@@ -38,6 +38,7 @@ import {
   appendSkillProposalWindowTurn,
   buildSkillProposalWindowContext,
   snapshotSkillProposalWindow,
+  isSkillProposalWindowContext,
   type SkillProposalWindowContext
 } from "../agent/skill-evolution/proposal-window"
 import {
@@ -213,22 +214,16 @@ async function generateSkillProposal(
   threadId: string,
   context: SkillProposalWindowContext
 ): Promise<SkillProposal | null> {
+  // Always emit "start" first so the renderer card resets to generating state,
+  // both on the initial run and on manual retry.
+  emitSkillGenerating(threadId, "start")
+
   const configs = getCustomModelConfigs()
   const config = configs[0]
   if (!config?.apiKey) {
-    // No model configured — notify the renderer so the card doesn't stay stuck
     emitSkillGenerating(threadId, "error", "未配置模型或 API Key，无法生成技能草稿")
     return null
   }
-
-  const model = new ChatOpenAI({
-    model: config.model,
-    apiKey: config.apiKey,
-    configuration: { baseURL: config.baseUrl },
-    maxTokens: 2048,
-    temperature: 0.3,
-    streaming: true
-  })
 
   const userPrompt = `# Conversation window to analyze
 
@@ -241,23 +236,56 @@ ${context.toolCallSummary}
 Based on this conversation, generate a reusable skill. Output JSON only.`
 
   try {
-    emitSkillGenerating(threadId, "start")
+    const model = new ChatOpenAI({
+      model: config.model,
+      apiKey: config.apiKey,
+      configuration: { baseURL: config.baseUrl },
+      maxTokens: 2048,
+      temperature: 0.3,
+      streaming: true
+    })
+
+    // Per-token idle timeout: if no new chunk arrives within this window the
+    // internal model has likely stalled mid-stream without closing the connection.
+    const TOKEN_IDLE_TIMEOUT_MS = 60_000
+
+    const abortController = new AbortController()
+    let timedOut = false
+    let idleTimer = setTimeout(() => {
+      timedOut = true
+      abortController.abort()
+    }, TOKEN_IDLE_TIMEOUT_MS)
+    const resetIdleTimer = (): void => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        timedOut = true
+        abortController.abort()
+      }, TOKEN_IDLE_TIMEOUT_MS)
+    }
 
     let fullText = ""
-    const stream = await model.stream([
-      new SystemMessage(SKILL_PROPOSAL_SYSTEM_PROMPT),
-      new HumanMessage(userPrompt)
-    ])
+    const stream = await model.stream(
+      [new SystemMessage(SKILL_PROPOSAL_SYSTEM_PROMPT), new HumanMessage(userPrompt)],
+      { signal: abortController.signal }
+    )
 
-    for await (const chunk of stream) {
-      const token = typeof chunk.content === "string"
-        ? chunk.content
-        : ""
-      if (token) {
-        fullText += token
-        emitSkillGenerating(threadId, "token", token)
+    try {
+      for await (const chunk of stream) {
+        resetIdleTimer()
+        const token = typeof chunk.content === "string" ? chunk.content : ""
+        if (token) {
+          fullText += token
+          emitSkillGenerating(threadId, "token", token)
+        }
       }
+    } catch (streamErr) {
+      clearTimeout(idleTimer)
+      if (timedOut) {
+        throw new Error(`技能草稿生成超时（${TOKEN_IDLE_TIMEOUT_MS / 1000}s 内无新内容），请点击重试`)
+      }
+      throw streamErr
     }
+    clearTimeout(idleTimer)
 
     emitSkillGenerating(threadId, "done", fullText)
 
@@ -292,6 +320,35 @@ async function writeSkillToDisk(skillId: string, content: string, name: string):
 }
 
 /**
+ * Show the detail confirm dialog and, on adoption, write the skill to disk.
+ * Extracted so it can be shared between the normal flow and manual retry.
+ */
+async function confirmAndWriteSkillProposal(
+  threadId: string,
+  proposal: SkillProposal
+): Promise<void> {
+  const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
+  if (!skillId) return
+
+  const confirmId = uuid()
+  const adopted = await requestSkillConfirmation({
+    threadId,
+    requestId: confirmId,
+    skillId,
+    name: proposal.name,
+    description: proposal.description,
+    content: proposal.content
+  })
+
+  if (!adopted) {
+    console.log(`[Agent][${threadId}] User rejected skill detail for "${proposal.name}"`)
+    return
+  }
+
+  await writeSkillToDisk(skillId, proposal.content, proposal.name)
+}
+
+/**
  * Shared tail of the skill proposal flow (used by both modes):
  *   1. Ask user intent via banner
  *   2. On yes → LLM generates skill (streaming)
@@ -306,7 +363,8 @@ async function runSkillProposalFlow(
 ): Promise<void> {
   const latestUserMessage = context.turns[context.turns.length - 1]?.userMessage ?? context.transcript
 
-  // Step 1 — Intent banner: ask user whether they want to save as a skill
+  // Step 1 — Intent banner: ask user whether they want to save as a skill.
+  // We include the proposal context so the renderer can cache it for manual retry.
   const intentId = uuid()
   const wantsSkill = await requestSkillIntent({
     threadId,
@@ -314,7 +372,8 @@ async function runSkillProposalFlow(
     summary: latestUserMessage.slice(0, 120),
     toolCallCount: context.toolCallCount,
     mode: intentMode,
-    recommendationReason
+    recommendationReason,
+    context
   })
 
   if (shouldResetSkillEvolutionSessionAfterIntent(wantsSkill ? "accept" : "skip")) {
@@ -337,27 +396,8 @@ async function runSkillProposalFlow(
     return
   }
 
-  const skillId = sanitizeSkillId(proposal.skillId || proposal.name)
-  if (!skillId) return
-
-  // Step 3 — Detail confirm dialog
-  const confirmId = uuid()
-  const adopted = await requestSkillConfirmation({
-    threadId,
-    requestId: confirmId,
-    skillId,
-    name: proposal.name,
-    description: proposal.description,
-    content: proposal.content
-  })
-
-  if (!adopted) {
-    console.log(`[Agent][${threadId}] User rejected skill detail for "${proposal.name}"`)
-    return
-  }
-
-  // Step 4 — Write to disk
-  await writeSkillToDisk(skillId, proposal.content, proposal.name)
+  // Step 3+4 — Detail confirm dialog → write to disk
+  await confirmAndWriteSkillProposal(threadId, proposal)
 }
 
 /**
@@ -421,6 +461,41 @@ async function autoProposeSKill(
 
 export function registerAgentHandlers(ipcMain: IpcMain): void {
   console.log("[Agent] Registering agent handlers...")
+
+  // Manual retry for skill generation — triggered when the user clicks the retry button
+  // in the right panel after a generation failure.  Skips the intent banner (user already
+  // accepted), jumps straight to generate → confirm → write.
+  ipcMain.handle(
+    "skill:retryGeneration",
+    async (_event, payload: { threadId: string; context: unknown; intentMode: string }) => {
+      const { threadId, context, intentMode } = payload
+
+      if (!threadId) return
+      if (!isSkillProposalWindowContext(context)) {
+        emitSkillGenerating(threadId, "error", "技能草稿上下文无效，请等待下次重新触发")
+        return
+      }
+      if (intentMode !== "mode_a_rule" && intentMode !== "mode_b_llm") {
+        emitSkillGenerating(threadId, "error", "技能触发模式无效，请等待下次重新触发")
+        return
+      }
+
+      console.log(`[SkillEvolution][${threadId}] Manual retry requested ${JSON.stringify({
+        intentMode,
+        toolCallCount: context.toolCallCount,
+        turnCount: context.turnCount
+      })}`)
+
+      try {
+        const proposal = await generateSkillProposal(threadId, context)
+        if (!proposal) return
+        await confirmAndWriteSkillProposal(threadId, proposal)
+      } catch (e) {
+        console.warn(`[SkillEvolution][${threadId}] Retry flow failed:`, e)
+        emitSkillGenerating(threadId, "error", e instanceof Error ? e.message : String(e))
+      }
+    }
+  )
 
   // Handle agent invocation with streaming
   ipcMain.on("agent:invoke", async (event, { threadId, message, modelId }: AgentInvokeParams) => {

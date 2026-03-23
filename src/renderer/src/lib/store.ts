@@ -93,6 +93,11 @@ interface AppState {
   setSkillGenerationPhase: (phase: "generating" | "done" | "error" | null, text?: string) => void
   appendSkillGenerationToken: (token: string) => void
 
+  // Per-thread retry context — cached when the user accepts the intent banner so that
+  // the retry button can replay the generation without re-running the full proposal flow.
+  skillRetryContextByThread: Map<string, { context: unknown; intentMode: string }>
+  setSkillRetryContext: (retryContext: { context: unknown; intentMode: string } | null) => void
+
   // Evolution UI state — persists while switching customize submenus
   evolutionTab: EvolutionTab
   setEvolutionTab: (tab: EvolutionTab) => void
@@ -334,12 +339,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = new Map(state.skillGenerationByThread)
       if (phase === null) {
         next.delete(threadId)
+        // Also clear the retry context when the card is dismissed
+        const retryNext = new Map(state.skillRetryContextByThread)
+        retryNext.delete(threadId)
+        return { skillGenerationByThread: next, skillRetryContextByThread: retryNext }
       } else if (phase === "error") {
         next.set(threadId, { phase: "error", streamedText: "", errorText: text })
       } else {
         next.set(threadId, { phase, streamedText: "", errorText: "" })
       }
       return { skillGenerationByThread: next }
+    }),
+
+  // Per-thread retry context — cached on intent accept, cleared on dismiss.
+  skillRetryContextByThread: new Map(),
+
+  setSkillRetryContext: (retryContext) =>
+    set((state) => {
+      const threadId = state.currentThreadId
+      if (!threadId) return {}
+      const next = new Map(state.skillRetryContextByThread)
+      if (retryContext) {
+        next.set(threadId, retryContext)
+      } else {
+        next.delete(threadId)
+      }
+      return { skillRetryContextByThread: next }
     }),
 
   appendSkillGenerationToken: (token) =>
@@ -385,4 +410,16 @@ export function selectSkillGenerationAgent(
 ): { phase: "generating" | "done" | "error" | null; streamedText: string; errorText: string } {
   if (!threadId) return EMPTY_SKILL_GEN
   return state.skillGenerationByThread.get(threadId) ?? EMPTY_SKILL_GEN
+}
+
+/**
+ * Returns the cached retry context (proposal context + intent mode) for the given thread,
+ * or null if the user has not accepted the intent banner for this thread yet.
+ */
+export function selectSkillRetryContext(
+  state: AppState,
+  threadId: string | null
+): { context: unknown; intentMode: string } | null {
+  if (!threadId) return null
+  return state.skillRetryContextByThread.get(threadId) ?? null
 }

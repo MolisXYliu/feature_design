@@ -494,6 +494,7 @@ const api = {
         toolCallCount: number
         mode: "mode_a_rule" | "mode_b_llm"
         recommendationReason?: string
+        context: unknown
       }) => void
     ): (() => void) => {
       const handler = (_: unknown, req: {
@@ -503,6 +504,7 @@ const api = {
         toolCallCount: number
         mode: "mode_a_rule" | "mode_b_llm"
         recommendationReason?: string
+        context: unknown
       }): void => {
         callback(req)
       }
@@ -511,6 +513,15 @@ const api = {
     },
     intentResponse: (requestId: string, accepted: boolean): Promise<void> =>
       ipcRenderer.invoke("skill:intentResponse", { requestId, accepted }) as Promise<void>,
+    retryGeneration: (
+      threadId: string,
+      retryContext: { context: unknown; intentMode: string }
+    ): Promise<void> =>
+      ipcRenderer.invoke("skill:retryGeneration", {
+        threadId,
+        context: retryContext.context,
+        intentMode: retryContext.intentMode
+      }) as Promise<void>,
 
     // ── Phase 2: Full confirmation dialog ("Adopt / Reject") ───────
     onConfirmRequest: (
