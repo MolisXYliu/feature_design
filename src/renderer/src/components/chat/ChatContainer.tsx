@@ -72,6 +72,8 @@ interface SkillIntentBannerRequest {
   toolCallCount: number
   mode: "mode_a_rule" | "mode_b_llm"
   recommendationReason?: string
+  /** Opaque context — cached so the retry button can replay generation without a new threshold. */
+  context: unknown
 }
 
 const THINKING_MESSAGES = [
@@ -124,8 +126,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [skillIntentRequest, setSkillIntentRequest] = useState<SkillIntentBannerRequest | null>(null)
 
   // Skill generation state stored globally so RightPanel can render the virtual subagent card
-  const { setSkillGenerationPhase, appendSkillGenerationToken } = useAppStore(
-    useShallow((s) => ({ setSkillGenerationPhase: s.setSkillGenerationPhase, appendSkillGenerationToken: s.appendSkillGenerationToken }))
+  const { setSkillGenerationPhase, appendSkillGenerationToken, setSkillRetryContext } = useAppStore(
+    useShallow((s) => ({
+      setSkillGenerationPhase: s.setSkillGenerationPhase,
+      appendSkillGenerationToken: s.appendSkillGenerationToken,
+      setSkillRetryContext: s.setSkillRetryContext
+    }))
   )
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
@@ -808,6 +814,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     console.log("[ChatContainer] Registering skill confirm listener")
     const cleanup = window.api.skillEvolution.onConfirmRequest((req) => {
+      // Ignore events that belong to a different thread (stale background run)
+      if (req.threadId && req.threadId !== useAppStore.getState().currentThreadId) return
       console.log("[ChatContainer] Received skill confirm request:", req.requestId, req.name)
       setSkillConfirmRequest(req)
       // Mark generation as done — RightPanel will switch the card to "completed"
@@ -832,6 +840,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   useEffect(() => {
     console.log("[ChatContainer] Registering skill intent listener")
     const cleanup = window.api.skillEvolution.onIntentRequest((req) => {
+      // Ignore events that belong to a different thread (stale background run)
+      if (req.threadId && req.threadId !== useAppStore.getState().currentThreadId) return
       console.log(
         "[ChatContainer] Received skill intent request:",
         req.requestId,
@@ -843,22 +853,28 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     return cleanup
   }, [])
 
-  const handleSkillIntentYes = useCallback((requestId: string): void => {
-    console.log("[ChatContainer] Accepting skill intent request:", requestId)
+  const handleSkillIntentYes = useCallback((): void => {
+    if (!skillIntentRequest) return
+    console.log("[ChatContainer] Accepting skill intent request:", skillIntentRequest.requestId)
+    // Cache the proposal context so the user can retry if generation hangs or fails
+    setSkillRetryContext({ context: skillIntentRequest.context, intentMode: skillIntentRequest.mode })
     setSkillGenerationPhase("generating")
     setSkillIntentRequest(null)
-    void window.api.skillEvolution.intentResponse(requestId, true)
-  }, [setSkillGenerationPhase])
+    void window.api.skillEvolution.intentResponse(skillIntentRequest.requestId, true)
+  }, [skillIntentRequest, setSkillGenerationPhase, setSkillRetryContext])
 
-  const handleSkillIntentNo = useCallback((requestId: string): void => {
-    console.log("[ChatContainer] Skipping skill intent request:", requestId)
+  const handleSkillIntentNo = useCallback((): void => {
+    if (!skillIntentRequest) return
+    console.log("[ChatContainer] Skipping skill intent request:", skillIntentRequest.requestId)
     setSkillIntentRequest(null)
-    void window.api.skillEvolution.intentResponse(requestId, false)
-  }, [])
+    void window.api.skillEvolution.intentResponse(skillIntentRequest.requestId, false)
+  }, [skillIntentRequest])
 
   // ── Skill generation streaming progress — update global store so RightPanel shows progress ──
   useEffect(() => {
     const cleanup = window.api.skillEvolution.onGenerating((evt) => {
+      // Ignore events that belong to a different thread (stale background run)
+      if (evt.threadId && evt.threadId !== useAppStore.getState().currentThreadId) return
       if (evt.phase === "start") {
         setSkillGenerationPhase("generating")
       } else if (evt.phase === "token") {
@@ -1286,13 +1302,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
           <button
             className="shrink-0 rounded px-2.5 py-1 bg-violet-500 text-white hover:bg-violet-600 transition-colors font-medium"
-            onClick={() => handleSkillIntentYes(skillIntentRequest.requestId)}
+            onClick={handleSkillIntentYes}
           >
             创建技能
           </button>
           <button
             className="shrink-0 rounded px-2.5 py-1 text-muted-foreground hover:text-foreground transition-colors"
-            onClick={() => handleSkillIntentNo(skillIntentRequest.requestId)}
+            onClick={handleSkillIntentNo}
           >
             跳过
           </button>

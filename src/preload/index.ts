@@ -488,19 +488,23 @@ const api = {
     // ── Phase 1: Intent banner ("Want to save as skill?") ──────────
     onIntentRequest: (
       callback: (req: {
+        threadId?: string
         requestId: string
         summary: string
         toolCallCount: number
         mode: "mode_a_rule" | "mode_b_llm"
         recommendationReason?: string
+        context: unknown
       }) => void
     ): (() => void) => {
       const handler = (_: unknown, req: {
+        threadId?: string
         requestId: string
         summary: string
         toolCallCount: number
         mode: "mode_a_rule" | "mode_b_llm"
         recommendationReason?: string
+        context: unknown
       }): void => {
         callback(req)
       }
@@ -509,10 +513,20 @@ const api = {
     },
     intentResponse: (requestId: string, accepted: boolean): Promise<void> =>
       ipcRenderer.invoke("skill:intentResponse", { requestId, accepted }) as Promise<void>,
+    retryGeneration: (
+      threadId: string,
+      retryContext: { context: unknown; intentMode: string }
+    ): Promise<void> =>
+      ipcRenderer.invoke("skill:retryGeneration", {
+        threadId,
+        context: retryContext.context,
+        intentMode: retryContext.intentMode
+      }) as Promise<void>,
 
     // ── Phase 2: Full confirmation dialog ("Adopt / Reject") ───────
     onConfirmRequest: (
       callback: (req: {
+        threadId?: string
         requestId: string
         skillId: string
         name: string
@@ -522,7 +536,14 @@ const api = {
     ): (() => void) => {
       const handler = (
         _: unknown,
-        req: { requestId: string; skillId: string; name: string; description: string; content: string }
+        req: {
+          threadId?: string
+          requestId: string
+          skillId: string
+          name: string
+          description: string
+          content: string
+        }
       ): void => { callback(req) }
       ipcRenderer.on("skill:confirmRequest", handler)
       return () => { ipcRenderer.removeListener("skill:confirmRequest", handler) }
@@ -532,9 +553,17 @@ const api = {
 
     // ── Streaming generation progress ──────────────────────────
     onGenerating: (
-      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+      callback: (event: {
+        threadId?: string
+        phase: "start" | "token" | "done" | "error"
+        text: string
+      }) => void
     ): (() => void) => {
-      const handler = (_: unknown, evt: { phase: "start" | "token" | "done" | "error"; text: string }): void => {
+      const handler = (_: unknown, evt: {
+        threadId?: string
+        phase: "start" | "token" | "done" | "error"
+        text: string
+      }): void => {
         callback(evt)
       }
       ipcRenderer.on("skill:generating", handler)

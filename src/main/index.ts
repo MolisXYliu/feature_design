@@ -74,6 +74,8 @@ import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
+import { setTraceReporter } from "./agent/trace/collector"
+import { S3TraceReporter } from "./agent/trace/s3-reporter"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -268,6 +270,13 @@ if (!gotTheLock) {
           }
         })
       })
+    }
+
+    // Register S3 trace reporter if API base URL is configured
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined
+    if (apiBaseUrl) {
+      setTraceReporter(new S3TraceReporter(apiBaseUrl))
+      console.log("[Main] S3TraceReporter registered, uploading traces to:", apiBaseUrl)
     }
 
     // Initialize database

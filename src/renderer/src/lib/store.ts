@@ -83,14 +83,20 @@ interface AppState {
   pendingEvolution: boolean
   setPendingEvolution: (v: boolean) => void
 
-  // Skill generation virtual subagent — shown in the right panel agents section
-  skillGenerationAgent: {
+  // Skill generation virtual subagent — shown in the right panel agents section.
+  // State is stored per-thread so switching threads preserves each thread's card.
+  skillGenerationByThread: Map<string, {
     phase: "generating" | "done" | "error" | null
     streamedText: string
     errorText: string
-  }
+  }>
   setSkillGenerationPhase: (phase: "generating" | "done" | "error" | null, text?: string) => void
   appendSkillGenerationToken: (token: string) => void
+
+  // Per-thread retry context — cached when the user accepts the intent banner so that
+  // the retry button can replay the generation without re-running the full proposal flow.
+  skillRetryContextByThread: Map<string, { context: unknown; intentMode: string }>
+  setSkillRetryContext: (retryContext: { context: unknown; intentMode: string } | null) => void
 
   // Evolution UI state — persists while switching customize submenus
   evolutionTab: EvolutionTab
@@ -150,6 +156,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       showKanbanView: false,
       showCustomizeView: false,
       mainView: "thread"
+      // skillGenerationByThread is NOT reset here: new threads start with no entry
+      // in the map, so the card is naturally absent without discarding other threads' state.
     }))
     return thread
   },
@@ -160,6 +168,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       showKanbanView: false,
       showCustomizeView: false,
       mainView: "thread"
+      // skillGenerationByThread is NOT cleared here: each thread retains its own card
+      // state so switching back to a thread shows the card exactly as it was left.
     })
   },
 
@@ -319,23 +329,54 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingEvolution: false,
   setPendingEvolution: (v) => set({ pendingEvolution: v }),
 
-  skillGenerationAgent: { phase: null, streamedText: "", errorText: "" },
+  // Per-thread skill generation state — keyed by threadId.
+  skillGenerationByThread: new Map(),
+
   setSkillGenerationPhase: (phase, text = "") =>
-    set({
-      skillGenerationAgent:
-        phase === null
-          ? { phase: null, streamedText: "", errorText: "" }
-          : phase === "error"
-            ? { phase: "error", streamedText: "", errorText: text }
-            : { phase, streamedText: "", errorText: "" }
-    }),
-  appendSkillGenerationToken: (token) =>
-    set((state) => ({
-      skillGenerationAgent: {
-        ...state.skillGenerationAgent,
-        streamedText: state.skillGenerationAgent.streamedText + token
+    set((state) => {
+      const threadId = state.currentThreadId
+      if (!threadId) return {}
+      const next = new Map(state.skillGenerationByThread)
+      if (phase === null) {
+        next.delete(threadId)
+        // Also clear the retry context when the card is dismissed
+        const retryNext = new Map(state.skillRetryContextByThread)
+        retryNext.delete(threadId)
+        return { skillGenerationByThread: next, skillRetryContextByThread: retryNext }
+      } else if (phase === "error") {
+        next.set(threadId, { phase: "error", streamedText: "", errorText: text })
+      } else {
+        next.set(threadId, { phase, streamedText: "", errorText: "" })
       }
-    })),
+      return { skillGenerationByThread: next }
+    }),
+
+  // Per-thread retry context — cached on intent accept, cleared on dismiss.
+  skillRetryContextByThread: new Map(),
+
+  setSkillRetryContext: (retryContext) =>
+    set((state) => {
+      const threadId = state.currentThreadId
+      if (!threadId) return {}
+      const next = new Map(state.skillRetryContextByThread)
+      if (retryContext) {
+        next.set(threadId, retryContext)
+      } else {
+        next.delete(threadId)
+      }
+      return { skillRetryContextByThread: next }
+    }),
+
+  appendSkillGenerationToken: (token) =>
+    set((state) => {
+      const threadId = state.currentThreadId
+      if (!threadId) return {}
+      const current = state.skillGenerationByThread.get(threadId)
+        ?? { phase: "generating" as const, streamedText: "", errorText: "" }
+      const next = new Map(state.skillGenerationByThread)
+      next.set(threadId, { ...current, streamedText: current.streamedText + token })
+      return { skillGenerationByThread: next }
+    }),
 
   setEvolutionTab: (tab) => set({ evolutionTab: tab }),
   setEvolutionRunning: (running) => set({ evolutionRunning: running }),
@@ -351,3 +392,34 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }))
 }))
+
+// ─────────────────────────────────────────────────────────
+// Selector helpers
+// ─────────────────────────────────────────────────────────
+
+const EMPTY_SKILL_GEN = { phase: null, streamedText: "", errorText: "" } as const
+
+/**
+ * Returns the skill generation card state for the given thread.
+ * Use this instead of reading skillGenerationByThread directly so callers
+ * always get a stable fallback when no entry exists for the thread.
+ */
+export function selectSkillGenerationAgent(
+  state: AppState,
+  threadId: string | null
+): { phase: "generating" | "done" | "error" | null; streamedText: string; errorText: string } {
+  if (!threadId) return EMPTY_SKILL_GEN
+  return state.skillGenerationByThread.get(threadId) ?? EMPTY_SKILL_GEN
+}
+
+/**
+ * Returns the cached retry context (proposal context + intent mode) for the given thread,
+ * or null if the user has not accepted the intent banner for this thread yet.
+ */
+export function selectSkillRetryContext(
+  state: AppState,
+  threadId: string | null
+): { context: unknown; intentMode: string } | null {
+  if (!threadId) return null
+  return state.skillRetryContextByThread.get(threadId) ?? null
+}
