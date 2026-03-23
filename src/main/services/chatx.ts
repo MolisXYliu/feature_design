@@ -27,6 +27,18 @@ let pingTimer: ReturnType<typeof setInterval> | null = null
 let reconnectAttempts = 0
 let stopped = false
 let lastPong = 0
+type ChatXWsStatus = "disconnected" | "connecting" | "connected" | "reconnecting"
+
+let currentStatus: ChatXWsStatus = "disconnected"
+
+function setStatus(status: ChatXWsStatus): void {
+  currentStatus = status
+  broadcastToChannel("chatx:status", status)
+}
+
+export function getChatXStatus(): ChatXWsStatus {
+  return currentStatus
+}
 
 const processedMsgIds = new Set<string>()
 const runningChats = new Set<string>()
@@ -312,12 +324,14 @@ function connect(): void {
   const baseWsUrl = envWsUrl || config.wsUrl
   if (!config.enabled) {
     console.log("[ChatX] Not enabled")
+    stopped = true
     return
   }
   if (!baseWsUrl) {
     console.error("[ChatX] No wsUrl configured (check VITE_CHATX_WS_URL in .env or config)")
     return
   }
+  setStatus("connecting")
 
   let wsUrl = baseWsUrl
   if (config.userIp) {
@@ -330,6 +344,7 @@ function connect(): void {
     ws = new WebSocket(wsUrl)
   } catch (err) {
     console.error("[ChatX] WebSocket creation error:", err)
+    setStatus("reconnecting")
     scheduleReconnect()
     return
   }
@@ -338,6 +353,7 @@ function connect(): void {
     console.log("[ChatX] WebSocket connected")
     reconnectAttempts = 0
     startPing()
+    setStatus("connected")
   })
 
   ws.on("message", (raw: WebSocket.RawData) => {
@@ -375,7 +391,12 @@ function connect(): void {
   ws.on("close", (code, reason) => {
     console.log(`[ChatX] WebSocket closed: ${code} ${reason}`)
     cleanup()
-    if (!stopped) scheduleReconnect()
+    if (!stopped) {
+      setStatus("reconnecting")
+      scheduleReconnect()
+    } else {
+      setStatus("disconnected")
+    }
   })
 
   ws.on("error", (err) => {
@@ -437,6 +458,7 @@ export function startChatX(): void {
 export function stopChatX(): void {
   console.log("[ChatX] Stopping ChatX service")
   stopped = true
+  setStatus("disconnected")
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
