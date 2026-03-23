@@ -4,12 +4,13 @@
  * Sits between the agent framework and LocalSandbox's raw execute method.
  * Handles:
  *   1. Command safety assessment
- *   2. Cached / interactive approval
+ *   2. Cached / interactive approval (shell commands + file write/edit)
  *   3. Sandbox execution
  *   4. Sandbox-denial → block and inform user to switch sandbox mode
  */
 
 import { randomUUID } from "crypto"
+import path from "path"
 import { ApprovalStore } from "./approval-store"
 import { assessCommandSafety, derivePermanentApprovalPattern } from "./exec-policy"
 import type {
@@ -72,8 +73,11 @@ export class ToolOrchestrator {
 
     // 5. Needs approval → check cache, then ask user
     const key = this.approvalStore.makeKey(command, cwd, sandboxMode)
-    const patternKey = derivePermanentApprovalPattern(command) ?? this.approvalStore.makePatternKey(command)
-    const allowPermanentApproval = patternKey !== this.approvalStore.makePatternKey(command)
+    // derivePermanentApprovalPattern returns a prefix-based pattern for known safe executables,
+    // or null for unknown executables. For unknown executables, fall back to exact-match pattern
+    // (the raw command text) — this still allows "always allow" but requires exact same command.
+    const prefixPattern = derivePermanentApprovalPattern(command)
+    const patternKey = prefixPattern ?? this.approvalStore.makePatternKey(command)
 
     console.log("[Orchestrator] needs_approval → requesting user approval...")
 
@@ -89,15 +93,15 @@ export class ToolOrchestrator {
           cwd,
           reason: safety.reason,
           allowed_decisions: ["approve", "reject"],
-          allowed_approval_types: allowPermanentApproval
-            ? ["approve", "approve_session", "approve_permanent", "reject"]
-            : ["approve", "approve_session", "reject"]
+          // Always offer permanent approval — for known executables it uses prefix match,
+          // for unknown executables it uses exact match (still useful for repeated commands).
+          allowed_approval_types: ["approve", "approve_session", "approve_permanent", "reject"]
         })
         return this.mapDecisionToReview(approval.type)
       },
       {
-        allowPermanentMatch: allowPermanentApproval,
-        allowPermanentStore: allowPermanentApproval,
+        allowPermanentMatch: true,
+        allowPermanentStore: true,
         commandForPatternMatch: command
       }
     )
@@ -128,6 +132,54 @@ export class ToolOrchestrator {
       }
       throw err
     }
+  }
+
+  /**
+   * Approve a file write or edit operation.
+   * Returns true if approved, false if rejected.
+   * Skipped in YOLO mode (no orchestrator set on LocalSandbox).
+   */
+  async approveFileOp(
+    operation: "write_file" | "edit_file",
+    filePath: string,
+    cwd: string
+  ): Promise<boolean> {
+    if (this.yoloMode) return true
+
+    const key = this.approvalStore.makeKey(`${operation}:${filePath}`, cwd, "file")
+    // Directory-based pattern for permanent approval: file:write:/dir/* or file:edit:/dir/*
+    const dir = path.dirname(filePath).replace(/\\/g, "/")
+    const patternKey = `file:${operation}:${dir}/*`
+
+    console.log(`[Orchestrator] approveFileOp: ${operation} "${filePath}" cwd=${cwd}`)
+
+    const decision = await this.approvalStore.withCachedApproval(
+      key,
+      patternKey,
+      async (): Promise<ReviewDecision> => {
+        const approval = await this.requestApproval({
+          id: randomUUID(),
+          tool_call: { id: randomUUID(), name: operation, args: { filePath } },
+          safety_level: "needs_approval",
+          operation,
+          filePath,
+          cwd,
+          reason: operation === "write_file" ? "文件写入操作需要审批" : "文件编辑操作需要审批",
+          allowed_decisions: ["approve", "reject"],
+          allowed_approval_types: ["approve", "approve_session", "approve_permanent", "reject"]
+        })
+        return this.mapDecisionToReview(approval.type)
+      },
+      {
+        allowPermanentMatch: true,
+        allowPermanentStore: true,
+        commandForPatternMatch: `file:${operation}:${filePath.replace(/\\/g, "/")}`
+      }
+    )
+
+    const approved = decision !== "denied" && decision !== "abort"
+    console.log(`[Orchestrator] approveFileOp: ${operation} "${filePath}" → ${approved ? "approved" : "rejected"}`)
+    return approved
   }
 
   /** Map renderer decision type to ReviewDecision. */

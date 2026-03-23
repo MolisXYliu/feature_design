@@ -113,6 +113,12 @@ interface CustomAPI {
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
     getUserInfo: () => Promise<UserInfoConfig | null>
     deleteCustomConfig: (id: string) => Promise<void>
+    testConnection: (params: {
+      id?: string
+      baseUrl?: string
+      model?: string
+      apiKey?: string
+    }) => Promise<{ success: boolean; error?: string; latencyMs?: number }>
   }
   workspace: {
     get: (threadId?: string) => Promise<string | null>
@@ -265,6 +271,7 @@ interface CustomAPI {
     deleteApprovalRule: (pattern: string) => Promise<void>
     sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
+    onApprovalTimeout: (threadId: string, callback: (data: { requestId: string }) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {

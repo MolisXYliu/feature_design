@@ -239,6 +239,18 @@ const api = {
     },
     deleteCustomConfig: (id: string): Promise<void> => {
       return ipcRenderer.invoke("models:deleteCustomConfig", id) as Promise<void>
+    },
+    testConnection: (params: {
+      id?: string
+      baseUrl?: string
+      model?: string
+      apiKey?: string
+    }): Promise<{ success: boolean; error?: string; latencyMs?: number }> => {
+      return ipcRenderer.invoke("models:testConnection", params) as Promise<{
+        success: boolean
+        error?: string
+        latencyMs?: number
+      }>
     }
   },
   workspace: {
@@ -616,6 +628,16 @@ const api = {
     ): (() => void) => {
       const channel = `approval:request:${threadId}`
       const handler = (_: unknown, data: unknown): void => { callback(data) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
+    // Listen for approval timeout notifications from main → renderer
+    onApprovalTimeout: (
+      threadId: string,
+      callback: (data: { requestId: string }) => void
+    ): (() => void) => {
+      const channel = `approval:timeout:${threadId}`
+      const handler = (_: unknown, data: { requestId: string }): void => { callback(data) }
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     },

@@ -62,7 +62,8 @@ function PathRow({ label, path, highlight = false }: { label: string; path: stri
 }
 
 export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.Element {
-  const { workspacePath, setWorkspacePath, setWorkspaceFiles } = useCurrentThread(threadId)
+  const { workspacePath, setWorkspacePath, setWorkspaceFiles, messages } = useCurrentThread(threadId)
+  const canChangeWorkspace = messages.length === 0
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -89,6 +90,8 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
   const [worktreeError, setWorktreeError] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+
     async function loadWorkspace(): Promise<void> {
       if (!threadId) return
 
@@ -104,18 +107,22 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       setWorktreeError(null)
 
       const p = await window.api.workspace.get(threadId)
+      if (cancelled) return
       setWorkspacePath(p)
       if (p) {
         const result = await window.api.workspace.loadFromDisk(threadId)
+        if (cancelled) return
         if (result.success && result.files) setWorkspaceFiles(result.files)
 
         const gitInfo = await window.api.workspace.isGit(p)
+        if (cancelled) return
         setIsGit(gitInfo.isGit)
         setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
         setIsWorktreePath(gitInfo.isWorktreePath)
 
         // Load worktree context from thread metadata
         const thread = await window.api.threads.get(threadId)
+        if (cancelled) return
         const meta = thread?.metadata as Record<string, unknown> | undefined
         if (meta?.isWorktree && meta.gitRoot && meta.worktreeBranch) {
           setIsWorktree(true)
@@ -127,6 +134,8 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       }
     }
     loadWorkspace()
+
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId])
 
@@ -399,6 +408,19 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                     ? "将基于当前仓库创建一个独立的 Worktree，代理在隔离的分支中工作。"
                     : "代理将在此文件夹中读写文件。"}
                 </p>
+              )}
+
+              {canChangeWorkspace && !isWorktree && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full h-7 text-xs"
+                  onClick={handleSelectFolder}
+                  disabled={loading}
+                >
+                  {loading ? <Loader2 className="size-3 mr-1.5 animate-spin" /> : <Folder className="size-3.5 mr-1.5" />}
+                  更换文件夹
+                </Button>
               )}
             </div>
           ) : (

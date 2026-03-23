@@ -240,7 +240,12 @@ const SAFE_POWERSHELL_COMMANDS = new Set([
   "get-command", "gcm",
   "get-help", "help", "man",
   "get-alias", "gal",
-  "get-variable", "gv"
+  "get-variable", "gv",
+  // Windows diagnostic commands (read-only)
+  "ipconfig", "netstat", "netsh", "systeminfo", "tasklist", "nslookup",
+  "ping", "tracert", "pathping", "route", "arp", "getmac",
+  "hostname", "whoami", "ver", "get-netadapter", "get-netipaddress",
+  "get-netipinterface", "get-nettcpconnection"
 ])
 const SIDE_EFFECTING_POWERSHELL_CMDLETS = new Set([
   "set-content", "add-content", "out-file", "new-item", "remove-item", "move-item",

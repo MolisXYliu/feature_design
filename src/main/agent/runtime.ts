@@ -245,6 +245,63 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
     } else {
       console.warn("[Runtime] grep tool schema patch skipped: tool or pattern field not found")
     }
+
+    // Replace the default execute tool with a version that supports run_in_background.
+    // Long-running commands (builds, dependency downloads) can be started in background
+    // and their output retrieved later via task_output tool.
+    const { tool: lcTool } = require("langchain") as typeof import("langchain")
+    const { z } = require("zod") as typeof import("zod")
+
+    const executeIdx = mw.tools?.findIndex((t: any) => t.name === "execute") ?? -1
+    if (executeIdx >= 0) {
+      const oldExecute = mw.tools![executeIdx]
+      const customExecute = lcTool(async (input: { command: string; run_in_background?: boolean }) => {
+        if (input.run_in_background) {
+          const taskId = await (filesystemBackend as LocalSandbox).executeBackground(input.command)
+          return `Background task started (id: ${taskId}). Use task_output tool with this id to check results later.`
+        }
+        // Delegate to original execute handler for foreground execution
+        return (oldExecute as any).invoke(input)
+      }, {
+        name: "execute",
+        description: (oldExecute as any).description,
+        schema: z.object({
+          command: z.string().describe("The shell command to execute"),
+          run_in_background: z.boolean().optional().describe(
+            "Set to true to run the command in the background. Returns a task ID immediately. " +
+            "Use this for long-running commands like builds, dependency downloads, or test suites. " +
+            "Retrieve the result later with the task_output tool."
+          )
+        })
+      })
+      mw.tools![executeIdx] = customExecute
+      console.log("[Runtime] execute tool patched: added run_in_background support")
+    }
+
+    // Add task_output tool for retrieving background task results
+    const taskOutputTool = lcTool(async (input: { task_id: string }) => {
+      const result = (filesystemBackend as LocalSandbox).getTaskOutput(input.task_id)
+      if (!result) return `Error: No background task found with id "${input.task_id}".`
+      if (!result.completed) {
+        return `Task ${input.task_id} is still running (elapsed: ${result.elapsedSeconds}s, command: ${result.command}). Try again in a few seconds.`
+      }
+      const status = result.exitCode === 0 ? "succeeded" : "failed"
+      const parts = [result.output ?? "<no output>"]
+      if (result.exitCode !== null && result.exitCode !== undefined) {
+        parts.push(`\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`)
+      }
+      return parts.join("")
+    }, {
+      name: "task_output",
+      description: "Retrieve the output of a background task started with execute(run_in_background=true). When the task is still running, returns elapsed time. Poll every 5-10 seconds until completion. Tell the user the elapsed time so they know the build is still in progress.",
+      schema: z.object({
+        task_id: z.string().describe("The task ID returned by execute when run_in_background was true")
+      })
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mw.tools = [...(mw.tools || []), taskOutputTool] as any
+    console.log("[Runtime] task_output tool added")
+
     return mw
   }
 
@@ -365,6 +422,23 @@ ${shellGuidance}
 - Always use full absolute paths for all file operations
 `
 
+  const backgroundExecSection = `
+### 长时间命令执行
+
+**重要提示：** execute 工具默认超时 60 秒。对于可能超过 60 秒的命令，**必须**使用 \`run_in_background: true\` 参数：
+- 项目编译/构建：mvn, gradle, npm run build, dotnet build, cargo build, make 等
+- 依赖安装：mvn dependency:resolve, npm install, pip install, go mod download 等
+- 测试套件：mvn test, npm test, pytest, cargo test 等
+- 代码生成、Docker 构建等耗时操作
+
+使用方法：
+1. 调用 execute({ command: "mvn clean package -DskipTests", run_in_background: true })
+2. 获得 task_id 后，用 task_output({ task_id: "..." }) 轮询结果
+3. 如果 task_output 返回 "still running"，等待几秒后再次轮询
+
+**切勿**对编译、安装依赖等命令使用前台执行，否则会因超时被终止。
+`
+
   const sandboxSection = windowsSandbox === "readonly"
     ? `
 ### 只读沙箱模式
@@ -388,7 +462,7 @@ ${shellGuidance}
     : ""
 
   const memorySection = isMemoryEnabled() ? MEMORY_SYSTEM_PROMPT : ""
-  return workingDirSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
+  return workingDirSection + backgroundExecSection + sandboxSection + BASE_SYSTEM_PROMPT + memorySection
 }
 
 // Per-thread checkpointer cache
@@ -669,6 +743,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
           if (pendingApprovals.has(req.id)) {
             pendingApprovals.delete(req.id)
             console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
+            // P2 fix: notify renderer that approval timed out so it can clear the UI
+            for (const win of BrowserWindow.getAllWindows()) {
+              win.webContents.send(`approval:timeout:${threadId}`, { requestId: req.id })
+            }
             resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
           }
         }, APPROVAL_TIMEOUT_MS)

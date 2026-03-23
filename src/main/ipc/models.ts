@@ -66,6 +66,7 @@ import {
   getOpenworkDir,
   getCustomModelPublicConfigById,
   getCustomModelPublicConfigs,
+  getCustomModelConfigById,
   setCustomModelConfig,
   upsertCustomModelConfig,
   deleteCustomModelConfig,
@@ -180,6 +181,102 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       maxMaxTokens: MAX_MAX_TOKENS
     }
   })
+
+  // Test model connection by sending a minimal chat completions request
+  ipcMain.handle(
+    "models:testConnection",
+    async (
+      _event,
+      params: { id?: string; baseUrl?: string; model?: string; apiKey?: string }
+    ): Promise<{ success: boolean; error?: string; latencyMs?: number }> => {
+      let baseUrl: string
+      let model: string
+      let apiKey: string
+
+      if (params.id) {
+        // Test an existing saved config — read API key from storage
+        const saved = getCustomModelConfigById(params.id)
+        if (!saved) return { success: false, error: "未找到该模型配置" }
+        baseUrl = params.baseUrl || saved.baseUrl
+        model = params.model || saved.model
+        apiKey = params.apiKey || saved.apiKey || ""
+      } else {
+        baseUrl = params.baseUrl || ""
+        model = params.model || ""
+        apiKey = params.apiKey || ""
+      }
+
+      if (!baseUrl) return { success: false, error: "接口地址不能为空" }
+      if (!model) return { success: false, error: "模型名称不能为空" }
+      if (!apiKey) return { success: false, error: "API 密钥不能为空" }
+
+      // Normalise URL: parse first, then operate on pathname to handle query params correctly
+      let urlObj: URL
+      try {
+        urlObj = new URL(baseUrl.replace(/\/+$/, ""))
+      } catch {
+        return { success: false, error: "接口地址格式无效" }
+      }
+      if (!["http:", "https:"].includes(urlObj.protocol)) {
+        return { success: false, error: "仅支持 http/https 协议" }
+      }
+      urlObj.pathname = urlObj.pathname
+        .replace(/\/chat\/completions\/?$/, "")
+        .replace(/\/+$/, "") + "/chat/completions"
+      const url = urlObj.toString()
+
+      const start = Date.now()
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 15_000)
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: "Hi" }],
+            max_tokens: 1,
+            stream: false
+          }),
+          signal: controller.signal
+        })
+
+        const latencyMs = Date.now() - start
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "")
+          let detail = ""
+          try {
+            const json = JSON.parse(body)
+            detail = json.error?.message || json.message || ""
+          } catch {
+            detail = body.slice(0, 200)
+          }
+          return {
+            success: false,
+            error: `HTTP ${res.status}${detail ? ": " + detail : ""}`,
+            latencyMs
+          }
+        }
+
+        return { success: true, latencyMs }
+      } catch (e) {
+        const latencyMs = Date.now() - start
+        const msg =
+          e instanceof Error
+            ? e.name === "AbortError"
+              ? "连接超时（15 秒）"
+              : e.message
+            : "未知错误"
+        return { success: false, error: msg, latencyMs }
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+  )
 
   // Sync version info
   ipcMain.on("app:version", (event) => {
