@@ -34,11 +34,15 @@ Do NOT save when:
 - Simple Q&A or single-step lookup with no meaningful workflow
 - Task failed or was left incomplete
 - Purely one-off data operation (e.g. "what is the value in row 5") with no reusable pattern
+- The only skill you could write would be narrowly tied to a specific file, component, bug, or artifact — with no transferable method that would help with similar tasks in other contexts
+
+Key question to ask yourself: "Can I name a generalized task family this skill belongs to (e.g. 'code bug investigation', 'API integration debugging', 'git conflict resolution') rather than just restating the specific task?"
+If yes → worthy. If no → not worthy.
 
 Output ONLY a single JSON object, no markdown:
-{"worthy": true, "reason": "one sentence referencing which condition matched"}
+{"worthy": true, "reason": "one sentence naming the generalized task family and why it's reusable"}
 or
-{"worthy": false, "reason": "one sentence why not"}`
+{"worthy": false, "reason": "one sentence why the workflow is too narrow or not transferable"}`
 }
 
 /**

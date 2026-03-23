@@ -70,13 +70,15 @@ const activeRuns = new Map<string, AbortController>()
 
 const SKILL_PROPOSAL_SYSTEM_PROMPT = `You are an expert at capturing reusable agent skills from conversation history.
 
-Given a conversation between a user and an AI agent, your job is to extract a reusable skill.
+Given a conversation between a user and an AI agent, your job is to extract a GENERALIZED, reusable skill.
+Your primary task is to identify the underlying repeatable WORKFLOW or METHOD — not to describe the specific task instance.
+Strip out all one-off details (file names, component names, specific bug descriptions, exact error messages, ticket IDs) and abstract to the task family.
 
 Output ONLY valid JSON (no markdown, no explanation) with this exact shape:
 {
   "name": "Short Human-Readable Name (3-6 words)",
   "skillId": "snake_case_identifier",
-  "description": "One sentence: WHEN should this skill be loaded? Be specific about the trigger scenario.",
+  "description": "One sentence: WHEN should this skill be loaded? Describe the recurring task pattern, not the one-off artifact.",
   "content": "Full SKILL.md content (including YAML frontmatter)"
 }
 
@@ -88,18 +90,35 @@ version: 1.0.0
 ---
 
 # Overview
-Brief description.
+Brief description of the generalized workflow.
 
 ## When to use
-Specific situations.
+Recurring trigger patterns and task families.
 
 ## Steps / Guidelines
-Concrete instructions for the agent.
+Concrete, generalizable instructions the agent should follow.
 
-Rules:
-- description is the MOST important — it controls when the skill is injected
-- Make it specific: describe the exact user intent that should trigger it
-- Focus on REUSABLE patterns, not one-time tasks
+Generalization rules (CRITICAL — read carefully):
+Target the right abstraction level — not too narrow, not too broad:
+- TOO NARROW (bad):  "当用户要找 ChatContainer.tsx 里的 null pointer bug 时" — single file + single bug
+- TOO BROAD (bad):   "当用户遇到任何代码问题时" — no useful specificity
+- JUST RIGHT (good): "当用户要系统排查 React 组件的渲染或状态类 bug 时" — task family with clear domain boundary
+
+More examples:
+- BAD name:  "Fix ChatContainer Null Pointer Bug" | GOOD name: "React Component Bug Investigation"
+- BAD steps: "1. Open ChatContainer.tsx 2. Check line 47" | GOOD steps: "1. Identify component boundary 2. Check state/prop flow"
+- BAD trigger: "用户说 ChatContainer 崩溃" | GOOD trigger: "用户要排查 React 组件异常行为"
+
+What to keep vs. strip:
+- STRIP: specific file names, component names, exact error strings, line numbers, ticket IDs, one-off data values
+- KEEP: framework names (React, Electron), patterns (IPC, state management), domain types (bug investigation, deployment, refactor)
+- A skill scoped to a stable tool/framework (e.g. "Electron IPC debugging") is valid and reusable — don't over-generalize it to "any debugging"
+
+Steps should describe the METHOD (how to approach the problem class), not the SOLUTION to this specific instance.
+If the conversation is narrow, lift it one level: "how we fixed X" → "systematic approach to X-type problems".
+
+Other rules:
+- description is the MOST important field — it controls when the skill is injected in future sessions
 - Output ONLY valid JSON, no other text`
 
 /**

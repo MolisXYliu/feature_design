@@ -188,6 +188,7 @@ export function ThreadSidebar(): React.JSX.Element {
     updateThread,
     mainView,
     pendingEvolution,
+    showCustomizeView,
     setShowCustomizeView,
     showKanbanView,
     setShowKanbanView
