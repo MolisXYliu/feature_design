@@ -51,14 +51,8 @@ function notifyRenderer(channel: string, payload?: unknown): void {
 }
 
 /**
- * Compute token usage summary for a trace.
- *
- * Each LLM call's inputTokens represents the full context window sent to the
- * model (all prior messages included), so summing them across calls would
- * double-count earlier history. Instead:
- *   - inputTokens  → peak value from the last call (reflects max context used)
- *   - outputTokens → sum across all calls (each call generates new output)
- *   - totalTokens  → peak input + sum of outputs
+ * Sum token usage across all model calls in a trace.
+ * Returns zeros when modelCalls is absent or empty.
  */
 function summarizeTraceTokenUsage(modelCalls: AgentTrace["modelCalls"]): {
   totalInputTokens: number
@@ -68,18 +62,19 @@ function summarizeTraceTokenUsage(modelCalls: AgentTrace["modelCalls"]): {
   if (!Array.isArray(modelCalls) || modelCalls.length === 0) {
     return { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 }
   }
-  // Use the last call's inputTokens as the peak context size
-  const lastCall = modelCalls[modelCalls.length - 1]
-  const peakInputTokens = lastCall?.tokenUsage?.inputTokens ?? 0
-  const totalOutputTokens = modelCalls.reduce(
-    (sum, call) => sum + (call?.tokenUsage?.outputTokens ?? 0),
-    0
+  return modelCalls.reduce(
+    (acc, call) => {
+      const input = call?.tokenUsage?.inputTokens ?? 0
+      const output = call?.tokenUsage?.outputTokens ?? 0
+      // Prefer explicit totalTokens from API; fall back to input + output
+      const total = call?.tokenUsage?.totalTokens ?? input + output
+      acc.totalInputTokens += input
+      acc.totalOutputTokens += output
+      acc.totalTokens += total
+      return acc
+    },
+    { totalInputTokens: 0, totalOutputTokens: 0, totalTokens: 0 }
   )
-  return {
-    totalInputTokens: peakInputTokens,
-    totalOutputTokens,
-    totalTokens: peakInputTokens + totalOutputTokens
-  }
 }
 
 function getDefaultModel(): ChatOpenAI | null {
