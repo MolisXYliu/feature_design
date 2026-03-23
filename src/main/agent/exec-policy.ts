@@ -254,6 +254,24 @@ export function derivePermanentApprovalPattern(command: string): string | null {
 }
 
 export function matchesApprovalPattern(pattern: string, command: string): boolean {
+  // File operation pattern matching: "file:write_file:/dir/*" or "file:edit_file:/dir/*"
+  if (pattern.startsWith("file:")) {
+    if (!command.startsWith("file:")) return false
+    // pattern = "file:write_file:/some/dir/*", command = "file:write_file:/some/dir/foo.ts"
+    const patternParts = pattern.split(":")  // ["file", "write_file", "/some/dir/*"]
+    const commandParts = command.split(":")  // ["file", "write_file", "/some/dir/foo.ts"]
+    if (patternParts.length < 3 || commandParts.length < 3) return false
+    if (patternParts[1] !== commandParts[1]) return false  // operation must match
+    const patternPath = patternParts.slice(2).join(":").replace(/\\/g, "/")
+    const commandPath = commandParts.slice(2).join(":").replace(/\\/g, "/")
+    // "dir/*" → check if commandPath starts with "dir/"
+    if (patternPath.endsWith("/*")) {
+      const dirPrefix = patternPath.slice(0, -1)  // "dir/"
+      return commandPath.startsWith(dirPrefix) || commandPath === dirPrefix.slice(0, -1)
+    }
+    return patternPath === commandPath
+  }
+
   if (pattern.startsWith(APPROVAL_PREFIX_RULE_PREFIX)) {
     const prefixTokens = parseApprovalPattern(pattern)
     const commandTokens = tokenizeCommand(command.trim())

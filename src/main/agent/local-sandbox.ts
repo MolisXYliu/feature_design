@@ -134,6 +134,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly getHooks: () => HookConfig[]
   /** Host user's TEMP directory — ACL-granted writable by the elevated sandbox user. */
   private readonly _elevatedMavenTempDir: string
+  /** Host user's real home directory — for locating ~/.m2/settings.xml etc. */
+  private readonly _realUserHome: string
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
   /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
@@ -154,7 +156,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return path.win32.join(systemDrive, "Users", username)
   }
 
-  private static buildElevatedSandboxEnvPreamble(shellBase: string, realTempDir: string): string {
+  private static buildElevatedSandboxEnvPreamble(shellBase: string, realTempDir: string, realUserHome: string): string {
     const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
     const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
     const homePath = profileRoot.slice(homeDrive.length) || "\\"
@@ -165,6 +167,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // own profile TEMP (C:\Users\CodexSandboxOnline\...\Temp) is NOT granted write access
     // by the ACL setup, so we must NOT redirect TEMP/TMP to it.
     const mavenRepoLocal = path.win32.join(realTempDir, "m2-sandbox-repo")
+    // Host user's Maven settings.xml — company private repos, mirrors, auth, etc.
+    // Pass via MAVEN_ARGS (Maven 3.9+) so Maven uses the real settings instead of
+    // the sandbox user's empty/default settings.
+    const mavenSettingsPath = path.win32.join(realUserHome, ".m2", "settings.xml")
     const envOverrides: Array<[string, string]> = [
       ["USERPROFILE", profileRoot],
       ["HOME", profileRoot],
@@ -182,20 +188,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
-      // realTempDir already exists, so no mkdir needed.
-      return `${base} & set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
+      // Set maven.repo.local + conditionally pass host user's settings.xml via MAVEN_ARGS
+      const mavenOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
+      const mavenArgs = `if exist "${cmdSetLiteral(mavenSettingsPath)}" set "MAVEN_ARGS=-s ${cmdSetLiteral(mavenSettingsPath)}"`
+      return `${base} & ${mavenOpts} & ${mavenArgs}`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      // Append Maven repo local to MAVEN_OPTS (preserving existing value).
-      // NOTE: Do NOT use powershellSingleQuote here — single quotes inside a double-quoted
-      // string are literal characters in PowerShell. Maven would receive the quote as part
-      // of the path, causing it to be treated as a relative path and prepended with cwd.
-      return `${base}; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")}"`
+      // Set maven.repo.local + conditionally pass host user's settings.xml via MAVEN_ARGS
+      const mavenOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")}"`
+      const settingsEscaped = mavenSettingsPath.replace(/\\/g, "\\\\")
+      const mavenArgs = `if (Test-Path ${powershellSingleQuote(mavenSettingsPath)}) { $env:MAVEN_ARGS="-s ${settingsEscaped}" }`
+      return `${base}; ${mavenOpts}; ${mavenArgs}`
     }
 
     return ""
@@ -234,6 +241,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const h = options.hooks
     this.getHooks = typeof h === "function" ? h : () => h ?? []
     this._elevatedMavenTempDir = baseEnv.TEMP || baseEnv.TMP || tmpdir()
+    this._realUserHome = baseEnv.USERPROFILE || baseEnv.HOME || homedir()
     this.abortSignal = options.abortSignal
 
     // Eagerly cache the elevation check during construction to avoid blocking
@@ -824,6 +832,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "写入") }
     }
+    // Approval gate (skipped when no orchestrator = YOLO mode)
+    if (this.orchestrator) {
+      const approved = await this.orchestrator.approveFileOp("write_file", filePath, this.workingDir)
+      if (!approved) {
+        return { error: "文件写入被用户拒绝。" }
+      }
+    }
     // PreToolUse hook
     const preResult = await runHooks(this.getHooks(), "PreToolUse", {
       toolName: "write_file",
@@ -905,6 +920,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
     if (this.isWriteBlocked(filePath)) {
       return { error: this.readonlyBlockedError(filePath, "编辑") }
+    }
+    // Approval gate (skipped when no orchestrator = YOLO mode)
+    if (this.orchestrator) {
+      const approved = await this.orchestrator.approveFileOp("edit_file", filePath, this.workingDir)
+      if (!approved) {
+        return { error: "文件编辑被用户拒绝。" }
+      }
     }
     // PreToolUse hook
     const preResult = await runHooks(this.getHooks(), "PreToolUse", {
@@ -1347,6 +1369,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    */
   private static readonly SPAWN_RETRY_COUNT = 2
   private static readonly SPAWN_RETRY_DELAY_MS = 300
+  /** Extended timeout for build tool commands that may download dependencies. */
+  private static readonly BUILD_TOOL_TIMEOUT_MS = 300_000 // 5 minutes
+
+  /**
+   * Detect build tool commands that may need a longer timeout (e.g. dependency download).
+   * Returns the extended timeout if the command matches, otherwise the default timeout.
+   */
+  private getEffectiveTimeout(command: string): number {
+    if (/\b(mvn|gradle|gradlew|npm|pnpm|yarn|cargo|dotnet)\b/i.test(command)) {
+      return Math.max(this.timeout, LocalSandbox.BUILD_TOOL_TIMEOUT_MS)
+    }
+    return this.timeout
+  }
 
   async execute(command: string): Promise<ExecuteResponse> {
     if (!command || typeof command !== "string") {
@@ -1511,7 +1546,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ? `${psUtf8Preamble}; ${command}`
         : command
     const sandboxUserEnvPreamble = isElevatedSandbox
-      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir)
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir, this._realUserHome)
       : ""
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"
@@ -1615,16 +1650,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         void LocalSandbox.killTree(proc, () => exited)
       }
 
+      const effectiveTimeout = this.getEffectiveTimeout(command)
       const timeoutId = setTimeout(() => {
         if (resolved || timedOut || aborted) return
-        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${this.timeout}ms`)
+        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${effectiveTimeout}ms`)
         timedOut = true
         killProc()
         drainTimerId = setTimeout(() => {
           console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
-      }, this.timeout)
+      }, effectiveTimeout)
 
       const abortHandler = (): void => {
         if (resolved || timedOut || aborted) return
@@ -1694,7 +1730,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 130, truncated })
         } else if (timedOut) {
-          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(effectiveTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 124, truncated })
         } else {
           resolve({ output, exitCode: signal ? null : code, truncated })
@@ -1850,6 +1886,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         void LocalSandbox.killTree(proc, () => exited)
       }
 
+      const effectiveTimeout = this.getEffectiveTimeout(command)
       const timeoutId = setTimeout(() => {
         if (resolved || timedOut || aborted) return
         timedOut = true
@@ -1859,7 +1896,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         drainTimerId = setTimeout(() => {
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
-      }, this.timeout)
+      }, effectiveTimeout)
 
       const abortHandler = (): void => {
         if (resolved || timedOut || aborted) return
@@ -1946,7 +1983,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 130, truncated })
         } else if (timedOut) {
-          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(this.timeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(effectiveTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 124, truncated })
         } else {
           resolve({ output, exitCode: signal ? null : code, truncated })

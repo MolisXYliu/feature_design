@@ -25,7 +25,8 @@ import {
   Zap,
   Sparkles,
   Wrench,
-  CircleAlert
+  CircleAlert,
+  FilePenLine
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -515,6 +516,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         allowed_decisions: ["approve", "reject"],
         command: req.command,
         reason: req.reason,
+        operation: req.operation,
+        filePath: req.filePath,
         _orchestratorRequestId: req.id,
         _retryReason: req.retry_reason,
         _approvalTypes: req.allowed_approval_types
@@ -1676,17 +1679,31 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
             {/* Orchestrator approval request — shown as standalone bar when pending */}
             {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
-              <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">
+              <div className={`rounded-lg border-2 p-4 space-y-3 ${
+                (pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                  ? "border-blue-500/50 bg-blue-500/5"
+                  : "border-amber-500/50 bg-amber-500/5"
+              }`}>
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-amber-500" />
-                  <span className="text-sm font-medium">命令需要审批</span>
+                  {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                    ? <FilePenLine className="size-4 text-blue-500" />
+                    : <ShieldCheck className="size-4 text-amber-500" />}
+                  <span className="text-sm font-medium">
+                    {(pendingApproval as Record<string, unknown>).operation === "write_file"
+                      ? "写入文件需要审批"
+                      : (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                        ? "编辑文件需要审批"
+                        : "命令需要审批"}
+                  </span>
                 </div>
                 <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
-                  {(pendingApproval as Record<string, unknown>).command
-                    ? String((pendingApproval as Record<string, unknown>).command)
-                    : pendingApproval.tool_call?.args?.command
-                      ? String(pendingApproval.tool_call.args.command)
-                      : "unknown command"}
+                  {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                    ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
+                    : (pendingApproval as Record<string, unknown>).command
+                      ? String((pendingApproval as Record<string, unknown>).command)
+                      : pendingApproval.tool_call?.args?.command
+                        ? String(pendingApproval.tool_call.args.command)
+                        : "unknown command"}
                 </div>
                 {(pendingApproval as Record<string, unknown>)._retryReason && (
                   <div className="text-xs text-amber-600 dark:text-amber-400">
@@ -1720,7 +1737,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                         className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
                         onClick={() => handleApprovalDecision("approve")}
                       >
-                        运行
+                        {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file" ? "允许" : "运行"}
                       </button>
                       <button
                         className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"

@@ -327,7 +327,10 @@ export type ExecSafetyLevel = "safe" | "needs_approval" | "forbidden"
 /** Fine-grained approval request sent to the renderer */
 export interface ApprovalRequest extends HITLRequest {
   safety_level: ExecSafetyLevel
-  command: string
+  /** Operation type: "execute" for shell commands, "write_file"/"edit_file" for file operations */
+  operation?: "execute" | "write_file" | "edit_file"
+  command?: string           // shell command (for execute operations)
+  filePath?: string          // target file path (for write_file/edit_file operations)
   cwd: string
   reason?: string           // why approval is needed
   retry_reason?: string     // sandbox-failure retry context
