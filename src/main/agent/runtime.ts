@@ -825,7 +825,10 @@ ${subagentShellGuidance}
 - When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
 - chrome_*: browser automation and page interaction tools provided by mcp-chrome via MCP (http://127.0.0.1:12306/mcp). These tools become available after the mcp-chrome extension bridge is connected.
 - chrome_setup: check mcp-chrome readiness and return install/register/extension setup steps when not ready.
-- If user asks browser automation but chrome tools are unavailable or connection fails, call chrome_setup first, then guide the user to install bridge, run register, and load/connect the Chrome extension.
+- chrome_setup auto-remediation flow: (1) check whether mcp-chrome-bridge is installed, install with "npm install -g mcp-chrome-bridge" when missing; (2) always run "mcp-chrome-bridge register" directly (no pre-check); (3) always remind user that browser extension "chrome-mcp-server-1.0.0.zip" must be installed/enabled manually via chrome://extensions (cannot be auto-detected).
+- Do NOT call chrome_setup automatically during normal chrome_* usage.
+- Only call chrome_setup when the user explicitly asks to check/fix/setup Chrome MCP environment.
+- If chrome_setup is called and returns ready=false (or actionRequired=true), clearly tell the user how to fix it with a numbered checklist before asking them to retry.
 
 The workspace root is: ${workspacePath}`
 
