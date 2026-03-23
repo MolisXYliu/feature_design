@@ -17,7 +17,9 @@ function getToolCallSummary(toolCall: { name: string; args?: Record<string, unkn
     write_todos: "更新任务",
     task: "子任务执行",
     git_workflow:"git代码批量提交（点击展开）",
-    browser_playwright:"操作本地浏览器"
+    mcp_call: "调用MCP工具",
+    search_tool: "搜索MCP工具",
+    load_tool: "加载MCP工具"
   }
 
   const label = toolLabels[toolCall.name] || toolCall.name

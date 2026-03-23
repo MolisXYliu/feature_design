@@ -56,7 +56,6 @@ import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
-import { createPlaywrightTool } from "./tools/playwright-tool"
 import {
   McpToolRegistry,
   createToolSearchTools,
@@ -109,6 +108,14 @@ export function getOrCreateApprovalStore(threadId: string): ApprovalStore {
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+
+const BUILTIN_MCP_CHROME_URL = "http://127.0.0.1:12306/mcp"
+const BUILTIN_MCP_CHROME_ID = "__builtin_mcp_chrome__"
+const BUILTIN_MCP_CHROME_NAME = "mcp-chrome"
+
+function normalizeMcpUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "").toLowerCase()
+}
 
 const SEQUENTIAL_TASK_PROMPT = `## \`task\` (subagent spawner)
 
@@ -815,7 +822,7 @@ ${subagentShellGuidance}
 - grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
 - When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
-- browser_playwright: open and automate a real browser with Playwright (launch/goto/click/type/press/wait/text/screenshot/close), plus URL RAG keyword mapping from file resources/browser-playwright-rag.json (e.g. "访问克难系统" -> configured URL). On Windows, you can use launch channel "msedge" or "chrome".
+- chrome_mcp_*: browser automation and page interaction tools provided by mcp-chrome via MCP (http://127.0.0.1:12306/mcp). These tools become available after the mcp-chrome extension bridge is connected.
 
 The workspace root is: ${workspacePath}`
 
@@ -850,7 +857,28 @@ The workspace root is: ${workspacePath}`
     console.log("[Runtime] Memory disabled by user setting")
   }
 
-  const mcpConnectors = getEnabledMcpConnectors()
+  const enabledMcpConnectors = getEnabledMcpConnectors()
+  const hasBuiltinChromeConnector = enabledMcpConnectors.some((c) => {
+    const byUrl = normalizeMcpUrl(c.url) === normalizeMcpUrl(BUILTIN_MCP_CHROME_URL)
+    const byName = c.name.trim().toLowerCase().includes("mcp-chrome")
+      || c.name.trim().toLowerCase().includes("chrome mcp")
+    return byUrl || byName
+  })
+  const mcpConnectors = hasBuiltinChromeConnector
+    ? enabledMcpConnectors
+    : [
+      ...enabledMcpConnectors,
+      {
+        id: BUILTIN_MCP_CHROME_ID,
+        name: BUILTIN_MCP_CHROME_NAME,
+        url: BUILTIN_MCP_CHROME_URL,
+        enabled: true,
+        advanced: { transport: "streamable-http" as const },
+        lazyLoad: false,
+        createdAt: "",
+        updatedAt: ""
+      }
+    ]
   const pluginMcpConfigs = getEnabledPluginMcpConfigs()
 
   // Create instance-level registry for lazy tools (avoid global state)
@@ -1005,7 +1033,6 @@ The workspace root is: ${workspacePath}`
   // Add git_push tool
   // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
-  extraTools.push(createPlaywrightTool(workspacePath))
 
   // Add tool search tools if there are lazy-loaded MCP tools
   const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
