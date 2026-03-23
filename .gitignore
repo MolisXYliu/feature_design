@@ -10,3 +10,4 @@ resources/bin/win32/codex.exe
 .idea/
 .claude/
 .env
+tests/screenshots/
