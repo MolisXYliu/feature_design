@@ -11,6 +11,8 @@ const TOOL_LABELS: Record<string, string> = {
   git_workflow: "Git 代码批量提交（点击展开）",
   git_push: "Git 推送",
   chrome_setup: "Chrome MCP 环境检查",
+  agent_browser: "Agent Browser 浏览器操作",
+  browser_playwright: "Playwright 浏览器操作",
   mcp_call: "调用 MCP 工具",
   search_tool: "搜索 MCP 工具",
   load_tool: "加载 MCP 工具",

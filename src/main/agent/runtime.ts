@@ -57,6 +57,7 @@ import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { createChromeSetupTool } from "./tools/chrome-setup-tool"
+import { createAgentBrowserTool } from "./tools/agent-browser-tool"
 import {
   McpToolRegistry,
   createToolSearchTools,
@@ -116,6 +117,34 @@ const BUILTIN_MCP_CHROME_NAME = "mcp-chrome"
 
 function normalizeMcpUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").toLowerCase()
+}
+
+function isChromeToolName(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false
+  const normalized = toolName.trim().toLowerCase()
+  return (
+    normalized.startsWith("chrome_")
+    || normalized.includes("chrome_computer")
+    || normalized === "computer"
+    || normalized === "computer_use"
+  )
+}
+
+function isChromeMcpUnavailableError(message: string): boolean {
+  const msg = message.toLowerCase()
+  return (
+    msg.includes("econnrefused") ||
+    msg.includes("127.0.0.1:12306") ||
+    msg.includes("connect") ||
+    msg.includes("connection") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("server disconnected") ||
+    msg.includes("socket hang up") ||
+    msg.includes("mcp") ||
+    msg.includes("transport")
+  )
 }
 
 const SEQUENTIAL_TASK_PROMPT = `## \`task\` (subagent spawner)
@@ -824,11 +853,14 @@ ${subagentShellGuidance}
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
 - When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
 - chrome_*: browser automation and page interaction tools provided by mcp-chrome via MCP (http://127.0.0.1:12306/mcp). These tools become available after the mcp-chrome extension bridge is connected.
-- chrome_setup: check mcp-chrome readiness and return install/register/extension setup steps when not ready.
-- chrome_setup auto-remediation flow: (1) check whether mcp-chrome-bridge is installed, install with "npm install -g mcp-chrome-bridge" when missing; (2) always run "mcp-chrome-bridge register" directly (no pre-check); (3) always remind user that browser extension "chrome-mcp-server-1.0.0.zip" must be installed/enabled manually via chrome://extensions (cannot be auto-detected).
+- chrome_setup: manual guidance only — returns install/register/extension setup checklist as text and never executes commands.
+- agent_browser: browser automation and page interaction tool powered by vercel-labs/agent-browser CLI; can be used without Chrome MCP bridge.
+- Browser tool priority: always prefer chrome_* tools first for browser tasks; only use agent_browser when chrome_* is unavailable/unreachable, or when the user explicitly asks to use agent_browser.
+- chrome_setup guidance should include these manual commands: "npm install -g mcp-chrome-bridge" and "mcp-chrome-bridge register", plus extension setup steps.
 - Do NOT call chrome_setup automatically during normal chrome_* usage.
 - Only call chrome_setup when the user explicitly asks to check/fix/setup Chrome MCP environment.
 - If chrome_setup is called and returns ready=false (or actionRequired=true), clearly tell the user how to fix it with a numbered checklist before asking them to retry.
+- If any chrome_* call fails because MCP is unavailable/unreachable, immediately fallback to agent_browser for the same browsing task.
 
 The workspace root is: ${workspacePath}`
 
@@ -1004,9 +1036,13 @@ The workspace root is: ${workspacePath}`
           return await originalFunc(...args)
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e)
-          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, msg)
+          const shouldFallbackToAgentBrowser = isChromeToolName(t.name) && isChromeMcpUnavailableError(msg)
+          const finalMsg = shouldFallbackToAgentBrowser
+            ? `${msg}\nFallback: chrome MCP seems unavailable. Please use agent_browser tool for this browser task.`
+            : msg
+          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, finalMsg)
           // MCP tools use responseFormat: "content_and_artifact", must return [content, artifact]
-          return [`MCP tool error: ${msg}`, []]
+          return [`MCP tool error: ${finalMsg}`, []]
         }
       }
     }
@@ -1040,6 +1076,7 @@ The workspace root is: ${workspacePath}`
   // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
   extraTools.push(createChromeSetupTool())
+  extraTools.push(createAgentBrowserTool(workspacePath))
 
   // Add tool search tools if there are lazy-loaded MCP tools
   const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
