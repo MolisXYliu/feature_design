@@ -1981,63 +1981,80 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
           return
         }
-        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
-        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
-        resolved = true
-        exited = true
-        LocalSandbox.activeProcesses.delete(proc)
-        clearTimeout(timeoutId)
-        if (drainTimerId) clearTimeout(drainTimerId)
-        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+        try {
+          const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
+          resolved = true
+          exited = true
+          LocalSandbox.activeProcesses.delete(proc)
+          clearTimeout(timeoutId)
+          if (drainTimerId) clearTimeout(drainTimerId)
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
-        const stdoutBuf = Buffer.concat(stdoutChunks)
-        const stderrBuf = Buffer.concat(stderrChunks)
+          const stdoutBuf = Buffer.concat(stdoutChunks)
+          const stderrBuf = Buffer.concat(stderrChunks)
 
-        // On Windows, Git Bash via pipe may convert UTF-8 to the system code
-        // page (e.g. GBK/CP936) despite LANG=C.UTF-8, because MSYS2's
-        // character conversion layer uses the Windows ANSI code page for
-        // non-pty file descriptors. Detect the actual encoding from the
-        // output buffer so CJK characters are decoded correctly.
-        const enc = isWindows
-          ? this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
-          : "utf-8"
+          // On Windows, Git Bash via pipe may convert UTF-8 to the system code
+          // page (e.g. GBK/CP936) despite LANG=C.UTF-8, because MSYS2's
+          // character conversion layer uses the Windows ANSI code page for
+          // non-pty file descriptors. Detect the actual encoding from the
+          // output buffer so CJK characters are decoded correctly.
+          const enc = isWindows
+            ? this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
+            : "utf-8"
 
-        let output = ""
-        if (stdoutBuf.length > 0) {
-          output += iconv.decode(stdoutBuf, enc)
-        }
-        if (stderrBuf.length > 0) {
-          const stderrText = iconv.decode(stderrBuf, enc)
-          const prefixed = stderrText
-            .split("\n")
-            .filter((line) => line.length > 0)
-            .map((line) => `[stderr] ${line}`)
-            .join("\n")
-          if (prefixed) {
-            output += (output ? "\n" : "") + prefixed + (stderrText.endsWith("\n") ? "\n" : "")
+          let output = ""
+          if (stdoutBuf.length > 0) {
+            output += iconv.decode(stdoutBuf, enc)
           }
-        }
+          if (stderrBuf.length > 0) {
+            const stderrText = iconv.decode(stderrBuf, enc)
+            const prefixed = stderrText
+              .split("\n")
+              .filter((line) => line.length > 0)
+              .map((line) => `[stderr] ${line}`)
+              .join("\n")
+            if (prefixed) {
+              output += (output ? "\n" : "") + prefixed + (stderrText.endsWith("\n") ? "\n" : "")
+            }
+          }
 
-        let truncated = false
-        if (output.length > this.maxOutputBytes) {
-          output = output.slice(0, this.maxOutputBytes)
-          output += `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
-          truncated = true
-        }
-        if (!output.trim()) {
-          output = "<no output>"
-        }
+          let truncated = false
+          if (output.length > this.maxOutputBytes) {
+            output = output.slice(0, this.maxOutputBytes)
+            output += `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+            truncated = true
+          }
+          if (!output.trim()) {
+            output = "<no output>"
+          }
 
-        // Add metadata prefix for abort/timeout, override exitCode
-        if (aborted) {
-          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
-          resolve({ output: metadata + output, exitCode: 130, truncated })
-        } else if (timedOut) {
-          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(cmdTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
-          resolve({ output: metadata + output, exitCode: 124, truncated })
-        } else {
-          resolve({ output, exitCode: signal ? null : code, truncated })
+          // Add metadata prefix for abort/timeout, override exitCode
+          if (aborted) {
+            const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+            resolve({ output: metadata + output, exitCode: 130, truncated })
+          } else if (timedOut) {
+            const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(cmdTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+            resolve({ output: metadata + output, exitCode: 124, truncated })
+          } else {
+            resolve({ output, exitCode: signal ? null : code, truncated })
+          }
+        } catch (err) {
+          // Encoding detection or iconv.decode can throw on unusual binary output.
+          // Ensure the promise always resolves — a stuck promise means the UI hangs on RUNNING forever.
+          console.error(`[LocalSandbox] collectAndResolve error: pid=${proc.pid}`, err)
+          resolved = true
+          LocalSandbox.activeProcesses.delete(proc)
+          clearTimeout(timeoutId)
+          if (drainTimerId) clearTimeout(drainTimerId)
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          resolve({
+            output: `Error processing command output: ${err instanceof Error ? err.message : String(err)}`,
+            exitCode: code ?? 1,
+            truncated: false
+          })
         }
       }
 
