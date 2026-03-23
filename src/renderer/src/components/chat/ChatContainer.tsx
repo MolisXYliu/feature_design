@@ -23,6 +23,7 @@ import {
   Notebook,
   Megaphone,
   Zap,
+  Sparkles,
   Wrench,
   CircleAlert
 } from "lucide-react"
@@ -30,6 +31,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
+import { useShallow } from "zustand/react/shallow"
 import { useCurrentThread, useThreadStream } from "@/lib/thread-context"
 import { ModelSwitcher } from "./ModelSwitcher"
 import { WorkspacePicker } from "./WorkspacePicker"
@@ -37,6 +39,10 @@ import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
+import {
+  SkillCreateConfirmDialog,
+  type SkillConfirmRequest
+} from "./SkillCreateConfirmDialog"
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
@@ -57,6 +63,14 @@ interface StreamMessage {
 
 interface ChatContainerProps {
   threadId: string
+}
+
+interface SkillIntentBannerRequest {
+  requestId: string
+  summary: string
+  toolCallCount: number
+  mode: "mode_a_rule" | "mode_b_llm"
+  recommendationReason?: string
 }
 
 const THINKING_MESSAGES = [
@@ -103,6 +117,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const [showAllProgrammingSkills, setShowAllProgrammingSkills] = useState(false)
   const [showAllCustomSkills, setShowAllCustomSkills] = useState(false)
   const [thinkingMessageIndex, setThinkingMessageIndex] = useState(0)
+  // Skill creation human-confirmation state
+  const [skillConfirmRequest, setSkillConfirmRequest] = useState<SkillConfirmRequest | null>(null)
+  // Skill intent banner state ("Want to save as a skill?")
+  const [skillIntentRequest, setSkillIntentRequest] = useState<SkillIntentBannerRequest | null>(null)
+
+  // Skill generation state stored globally so RightPanel can render the virtual subagent card
+  const { setSkillGenerationPhase, appendSkillGenerationToken } = useAppStore(
+    useShallow((s) => ({ setSkillGenerationPhase: s.setSkillGenerationPhase, appendSkillGenerationToken: s.appendSkillGenerationToken }))
+  )
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
@@ -778,6 +801,75 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [])
 
+  // ── Skill creation human-confirmation listener ──────────
+  useEffect(() => {
+    console.log("[ChatContainer] Registering skill confirm listener")
+    const cleanup = window.api.skillEvolution.onConfirmRequest((req) => {
+      console.log("[ChatContainer] Received skill confirm request:", req.requestId, req.name)
+      setSkillConfirmRequest(req)
+      // Mark generation as done — RightPanel will switch the card to "completed"
+      setSkillGenerationPhase("done")
+    })
+    return cleanup
+  }, [setSkillGenerationPhase])
+
+  const handleSkillApprove = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Approving skill confirm request:", requestId)
+    void window.api.skillEvolution.confirmResponse(requestId, true)
+    setSkillConfirmRequest(null)
+  }, [])
+
+  const handleSkillReject = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Rejecting skill confirm request:", requestId)
+    void window.api.skillEvolution.confirmResponse(requestId, false)
+    setSkillConfirmRequest(null)
+  }, [])
+
+  // ── Skill intent banner listener (Mode A: "Want to save as skill?") ──
+  useEffect(() => {
+    console.log("[ChatContainer] Registering skill intent listener")
+    const cleanup = window.api.skillEvolution.onIntentRequest((req) => {
+      console.log(
+        "[ChatContainer] Received skill intent request:",
+        req.requestId,
+        req.mode,
+        req.toolCallCount
+      )
+      setSkillIntentRequest(req)
+    })
+    return cleanup
+  }, [])
+
+  const handleSkillIntentYes = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Accepting skill intent request:", requestId)
+    setSkillGenerationPhase("generating")
+    setSkillIntentRequest(null)
+    void window.api.skillEvolution.intentResponse(requestId, true)
+  }, [setSkillGenerationPhase])
+
+  const handleSkillIntentNo = useCallback((requestId: string): void => {
+    console.log("[ChatContainer] Skipping skill intent request:", requestId)
+    setSkillIntentRequest(null)
+    void window.api.skillEvolution.intentResponse(requestId, false)
+  }, [])
+
+  // ── Skill generation streaming progress — update global store so RightPanel shows progress ──
+  useEffect(() => {
+    const cleanup = window.api.skillEvolution.onGenerating((evt) => {
+      if (evt.phase === "start") {
+        setSkillGenerationPhase("generating")
+      } else if (evt.phase === "token") {
+        appendSkillGenerationToken(evt.text)
+      } else if (evt.phase === "done") {
+        // confirmRequest will arrive shortly — keep phase as "generating" until then
+      } else if (evt.phase === "error") {
+        setSkillGenerationPhase("error", evt.text || "生成失败")
+      }
+    })
+    return cleanup
+  }, [setSkillGenerationPhase, appendSkillGenerationToken])
+  // ────────────────────────────────────────────────────────
+
   const getSkillId = useCallback((skill: SkillMetadata): string => {
     const fromPath = skill?.path?.split("/").slice(-2, -1)[0]
     return (fromPath || skill.name || "").toLowerCase()
@@ -1159,6 +1251,51 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
+      {/* Skill creation confirmation dialog */}
+      <SkillCreateConfirmDialog
+        request={skillConfirmRequest}
+        onApprove={handleSkillApprove}
+        onReject={handleSkillReject}
+      />
+
+      {/* Skill intent banner — "Want to save this conversation as a skill?" */}
+      {skillIntentRequest && (
+        <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 bg-violet-500/10 border-b border-violet-500/20 text-xs">
+          <Sparkles className="size-3.5 text-violet-500 shrink-0" />
+          <div className="flex-1 text-violet-700 dark:text-violet-300 leading-snug">
+            {skillIntentRequest.mode === "mode_b_llm" ? (
+              <>
+                <div>
+                  大模型判断这段流程具有复用价值，建议将它沉淀为可复用的技能。
+                  本次累计使用了 <strong>{skillIntentRequest.toolCallCount}</strong> 次工具调用。
+                </div>
+                {skillIntentRequest.recommendationReason ? (
+                  <div className="mt-0.5 text-[11px] text-violet-600/80 dark:text-violet-200/80">
+                    推荐依据：{skillIntentRequest.recommendationReason}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div>
+                本次对话使用了 <strong>{skillIntentRequest.toolCallCount}</strong> 次工具调用，是否将它沉淀为可复用的技能？
+              </div>
+            )}
+          </div>
+          <button
+            className="shrink-0 rounded px-2.5 py-1 bg-violet-500 text-white hover:bg-violet-600 transition-colors font-medium"
+            onClick={() => handleSkillIntentYes(skillIntentRequest.requestId)}
+          >
+            创建技能
+          </button>
+          <button
+            className="shrink-0 rounded px-2.5 py-1 text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => handleSkillIntentNo(skillIntentRequest.requestId)}
+          >
+            跳过
+          </button>
+        </div>
+      )}
+
       {/* NUX: First-run sandbox setup dialog */}
       {showNux && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center">
@@ -1234,6 +1371,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         </div>
       )}
 
+      {/* Skill generation progress is shown in the right panel's 代理 section */}
       {/* Copy notification */}
       {showCopyNotification && (
         <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
@@ -1249,7 +1387,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
         </div>
       )}
-
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">

@@ -472,6 +472,63 @@ const api = {
       return () => { ipcRenderer.removeListener(channel, handler) }
     }
   },
+  skillEvolution: {
+    // ── Phase 1: Intent banner ("Want to save as skill?") ──────────
+    onIntentRequest: (
+      callback: (req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, req: {
+        requestId: string
+        summary: string
+        toolCallCount: number
+        mode: "mode_a_rule" | "mode_b_llm"
+        recommendationReason?: string
+      }): void => {
+        callback(req)
+      }
+      ipcRenderer.on("skill:intentRequest", handler)
+      return () => { ipcRenderer.removeListener("skill:intentRequest", handler) }
+    },
+    intentResponse: (requestId: string, accepted: boolean): Promise<void> =>
+      ipcRenderer.invoke("skill:intentResponse", { requestId, accepted }) as Promise<void>,
+
+    // ── Phase 2: Full confirmation dialog ("Adopt / Reject") ───────
+    onConfirmRequest: (
+      callback: (req: {
+        requestId: string
+        skillId: string
+        name: string
+        description: string
+        content: string
+      }) => void
+    ): (() => void) => {
+      const handler = (
+        _: unknown,
+        req: { requestId: string; skillId: string; name: string; description: string; content: string }
+      ): void => { callback(req) }
+      ipcRenderer.on("skill:confirmRequest", handler)
+      return () => { ipcRenderer.removeListener("skill:confirmRequest", handler) }
+    },
+    confirmResponse: (requestId: string, approved: boolean): Promise<void> =>
+      ipcRenderer.invoke("skill:confirmResponse", { requestId, approved }) as Promise<void>,
+
+    // ── Streaming generation progress ──────────────────────────
+    onGenerating: (
+      callback: (event: { phase: "start" | "token" | "done" | "error"; text: string }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, evt: { phase: "start" | "token" | "done" | "error"; text: string }): void => {
+        callback(evt)
+      }
+      ipcRenderer.on("skill:generating", handler)
+      return () => { ipcRenderer.removeListener("skill:generating", handler) }
+    }
+  },
   plugins: {
     list: (): Promise<PluginMetadata[]> =>
       ipcRenderer.invoke("plugins:list") as Promise<PluginMetadata[]>,
@@ -538,6 +595,294 @@ const api = {
       ipcRenderer.on("sandbox:changed", handler)
       return () => { ipcRenderer.removeListener("sandbox:changed", handler) }
     }
+  },
+  optimizer: {
+    /** Run the offline optimization loop — returns candidates for review */
+    run: (opts?: {
+      threadId?: string
+      traceLimit?: number
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+    }): Promise<{
+      startedAt: string
+      endedAt: string
+      tracesAnalyzed: number
+      candidates: Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+      summary: string
+    }> =>
+      ipcRenderer.invoke("optimizer:run", opts) as Promise<{
+        startedAt: string
+        endedAt: string
+        tracesAnalyzed: number
+        candidates: Array<{
+          candidateId: string
+          action: "create" | "patch"
+          skillId: string
+          name: string
+          description: string
+          proposedContent: string
+          rationale: string
+          sourceTraceIds: string[]
+          generatedAt: string
+          status: "pending" | "approved" | "rejected"
+        }>
+        summary: string
+      }>,
+    /** Listen to selected-trace optimizer progress (serial task updates). */
+    onRunProgress: (
+      cb: (payload: {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as {
+        runId: string
+        traceId: string
+        index: number
+        total: number
+        status: "pending" | "running" | "completed" | "failed"
+        message?: string
+        candidateCount?: number
+      })
+      ipcRenderer.on("optimizer:runProgress", handler)
+      return () => ipcRenderer.removeListener("optimizer:runProgress", handler)
+    },
+    /** Get current in-memory candidates */
+    getCandidates: (): Promise<Array<{
+      candidateId: string
+      action: "create" | "patch"
+      skillId: string
+      name: string
+      description: string
+      proposedContent: string
+      rationale: string
+      sourceTraceIds: string[]
+      generatedAt: string
+      status: "pending" | "approved" | "rejected"
+    }>> =>
+      ipcRenderer.invoke("optimizer:candidates") as Promise<Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>>,
+    /** Approve a candidate — writes the skill to disk */
+    approve: (candidateId: string): Promise<{ success: boolean; skillId?: string; error?: string }> =>
+      ipcRenderer.invoke("optimizer:approve", { candidateId }) as Promise<{ success: boolean; skillId?: string; error?: string }>,
+    /** Reject a candidate */
+    reject: (candidateId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("optimizer:reject", { candidateId }) as Promise<{ success: boolean }>,
+    /** Clear all candidates */
+    clear: (): Promise<void> =>
+      ipcRenderer.invoke("optimizer:clear") as Promise<void>,
+    /** List recent traces (metadata only) */
+    getTraces: (opts?: { threadId?: string; limit?: number }): Promise<Array<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      durationMs: number
+      userMessage: string
+      totalToolCalls: number
+      totalInputTokens: number
+      totalOutputTokens: number
+      totalTokens: number
+      outcome: string
+      usedSkills: string[]
+    }>> =>
+      ipcRenderer.invoke("optimizer:traces", opts) as Promise<Array<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        durationMs: number
+        userMessage: string
+        totalToolCalls: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalTokens: number
+        outcome: string
+        usedSkills: string[]
+      }>>,
+    /** Listen for auto-triggered skill evolution (main process fires this after threshold) */
+    onAutoTriggered: (
+      cb: (payload: { threadId: string; toolCallCount: number }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as { threadId: string; toolCallCount: number })
+      ipcRenderer.on("optimizer:autoTriggered", handler)
+      return () => ipcRenderer.removeListener("optimizer:autoTriggered", handler)
+    },
+    /** Get full trace detail (steps + tool calls) by traceId */
+    getTraceDetail: (traceId: string): Promise<{
+      traceId: string
+      threadId: string
+      startedAt: string
+      endedAt: string
+      durationMs: number
+      userMessage: string
+      modelId: string
+      totalToolCalls: number
+      outcome: string
+      errorMessage?: string
+      usedSkills: string[]
+      nodes?: Array<{
+        id: string
+        type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+        parentId: string | null
+        name?: string
+        status?: "running" | "success" | "error" | "cancelled" | "unknown"
+        startedAt: string
+        endedAt?: string
+        input?: unknown
+        output?: unknown
+        metadata?: Record<string, unknown>
+      }>
+      modelCalls?: Array<{
+        messageId?: string
+        startedAt: string
+        inputMessages: Array<{
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }>
+        outputMessage: {
+          role: "system" | "user" | "assistant" | "tool" | "unknown"
+          content: string
+          name?: string
+          toolCallId?: string
+        }
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+        tokenUsage?: {
+          inputTokens?: number
+          outputTokens?: number
+          totalTokens?: number
+          cacheReadTokens?: number
+          cacheCreationTokens?: number
+        }
+      }>
+      steps: Array<{
+        index: number
+        startedAt: string
+        assistantText: string
+        toolCalls: Array<{
+          name: string
+          args: Record<string, unknown>
+          result?: string
+          durationMs?: number
+        }>
+      }>
+    } | null> =>
+      ipcRenderer.invoke("optimizer:traceDetail", { traceId }) as Promise<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        endedAt: string
+        durationMs: number
+        userMessage: string
+        modelId: string
+        totalToolCalls: number
+        outcome: string
+        errorMessage?: string
+        usedSkills: string[]
+        nodes?: Array<{
+          id: string
+          type: "trace" | "llm" | "tool" | "tool_result" | "message" | "error" | "cancel"
+          parentId: string | null
+          name?: string
+          status?: "running" | "success" | "error" | "cancelled" | "unknown"
+          startedAt: string
+          endedAt?: string
+          input?: unknown
+          output?: unknown
+          metadata?: Record<string, unknown>
+        }>
+        modelCalls?: Array<{
+          messageId?: string
+          startedAt: string
+          inputMessages: Array<{
+            role: "system" | "user" | "assistant" | "tool" | "unknown"
+            content: string
+            name?: string
+            toolCallId?: string
+          }>
+          outputMessage: {
+            role: "system" | "user" | "assistant" | "tool" | "unknown"
+            content: string
+            name?: string
+            toolCallId?: string
+          }
+          toolCalls: Array<{
+            name: string
+            args: Record<string, unknown>
+            result?: string
+            durationMs?: number
+          }>
+          tokenUsage?: {
+            inputTokens?: number
+            outputTokens?: number
+            totalTokens?: number
+            cacheReadTokens?: number
+            cacheCreationTokens?: number
+          }
+        }>
+        steps: Array<{
+          index: number
+          startedAt: string
+          assistantText: string
+          toolCalls: Array<{
+            name: string
+            args: Record<string, unknown>
+            result?: string
+            durationMs?: number
+          }>
+        }>
+      } | null>,
+    deleteTraces: (traceIds: string[]): Promise<{
+      deletedIds: string[]
+      failed: Array<{ traceId: string; error: string }>
+    }> =>
+      ipcRenderer.invoke("optimizer:deleteTraces", { traceIds }) as Promise<{
+        deletedIds: string[]
+        failed: Array<{ traceId: string; error: string }>
+      }>,
+    getOnlineSkillEvolutionEnabled: (): Promise<boolean> =>
+      ipcRenderer.invoke("optimizer:getOnlineSkillEvolutionEnabled") as Promise<boolean>,
+    setOnlineSkillEvolutionEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setOnlineSkillEvolutionEnabled", enabled) as Promise<void>,
+    getAutoPropose: (): Promise<boolean> =>
+      ipcRenderer.invoke("optimizer:getAutoPropose") as Promise<boolean>,
+    setAutoPropose: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setAutoPropose", enabled) as Promise<void>,
+    getThreshold: (): Promise<number> =>
+      ipcRenderer.invoke("optimizer:getThreshold") as Promise<number>,
+    setThreshold: (value: number): Promise<void> =>
+      ipcRenderer.invoke("optimizer:setThreshold", value) as Promise<void>
   },
   hooks: {
     list: (): Promise<HookConfig[]> => ipcRenderer.invoke("hooks:list"),

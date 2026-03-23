@@ -3,7 +3,6 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 @import "@fontsource/inter/700.css";
-@import "@fontsource/rajdhani/700.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -451,7 +450,7 @@
 }
 
 .app-badge-name {
-  font-family: 'Rajdhani', sans-serif;
+  font-family: 'Inter', ui-sans-serif, sans-serif;
   font-size: 17px;
   font-weight: 700;
   letter-spacing: 0.01em;

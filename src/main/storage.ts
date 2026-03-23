@@ -28,6 +28,26 @@ export function getCheckpointDbPath(): string {
   return join(getOpenworkDir(), "langgraph.sqlite")
 }
 
+export function getLogsDir(): string {
+  const dir = join(getOpenworkDir(), "logs")
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+export function getMainLogPath(): string {
+  return join(getLogsDir(), "main.log")
+}
+
+export function getRendererLogPath(): string {
+  return join(getLogsDir(), "renderer.log")
+}
+
+export function getOptimizerCandidatesPath(): string {
+  return join(getOpenworkDir(), "optimizer-candidates.json")
+}
+
 export function getThreadCheckpointDir(): string {
   const dir = join(getOpenworkDir(), "threads")
   if (!existsSync(dir)) {
@@ -132,6 +152,87 @@ export function getSkillsSources(): string[] {
   if (existsSync(builtin)) sources.push(builtin)
   if (existsSync(custom)) sources.push(custom)
   return sources
+}
+
+// ── Skill auto-propose setting ──
+
+const SKILL_EVOLUTION_SETTINGS_FILE = join(OPENWORK_DIR, "skill-evolution-settings.json")
+
+interface SkillEvolutionSettings {
+  onlineEnabled?: boolean
+  autoPropose?: boolean
+  threshold?: number
+}
+
+function readSkillEvolutionSettings(): SkillEvolutionSettings {
+  if (!existsSync(SKILL_EVOLUTION_SETTINGS_FILE)) return {}
+  try {
+    return JSON.parse(readFileSync(SKILL_EVOLUTION_SETTINGS_FILE, "utf-8")) as SkillEvolutionSettings
+  } catch {
+    return {}
+  }
+}
+
+function writeSkillEvolutionSettings(settings: SkillEvolutionSettings): void {
+  getOpenworkDir()
+  writeFileSync(SKILL_EVOLUTION_SETTINGS_FILE, JSON.stringify(settings, null, 2))
+}
+
+/**
+ * Controls whether the online skill-evolution feature is enabled at all.
+ * When false, no automatic proposal flow runs during a live conversation.
+ */
+export function isOnlineSkillEvolutionEnabled(): boolean {
+  return readSkillEvolutionSettings().onlineEnabled === true
+}
+
+export function setOnlineSkillEvolutionEnabled(enabled: boolean): void {
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: enabled,
+    autoPropose: current.autoPropose === true,
+    threshold: getSkillEvolutionThreshold()
+  })
+}
+
+/**
+ * Online skill-evolution mode selector:
+ * - true  => direct trigger after threshold (Mode A / 直接触发)
+ * - false => ask worthiness LLM first     (Mode B / 模型判断)
+ */
+export function isSkillAutoProposeEnabled(): boolean {
+  return readSkillEvolutionSettings().autoPropose === true
+}
+
+export function setSkillAutoProposeEnabled(enabled: boolean): void {
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: current.onlineEnabled === true,
+    autoPropose: enabled,
+    threshold: getSkillEvolutionThreshold()
+  })
+}
+
+const SKILL_EVOLUTION_THRESHOLD_DEFAULT = 10
+const SKILL_EVOLUTION_THRESHOLD_MIN = 1
+const SKILL_EVOLUTION_THRESHOLD_MAX = 99
+
+export function getSkillEvolutionThreshold(): number {
+  const value = Number(readSkillEvolutionSettings().threshold)
+  if (Number.isInteger(value) && value >= SKILL_EVOLUTION_THRESHOLD_MIN && value <= SKILL_EVOLUTION_THRESHOLD_MAX) {
+    return value
+  }
+  return SKILL_EVOLUTION_THRESHOLD_DEFAULT
+}
+
+export function setSkillEvolutionThreshold(value: number): void {
+  const clamped = Math.max(SKILL_EVOLUTION_THRESHOLD_MIN, Math.min(SKILL_EVOLUTION_THRESHOLD_MAX, Math.round(value)))
+  const current = readSkillEvolutionSettings()
+  writeSkillEvolutionSettings({
+    onlineEnabled: current.onlineEnabled === true,
+    autoPropose: current.autoPropose === true,
+    threshold: clamped
+  })
 }
 
 // ── Memory settings ──

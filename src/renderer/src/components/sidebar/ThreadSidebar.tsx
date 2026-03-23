@@ -186,6 +186,8 @@ export function ThreadSidebar(): React.JSX.Element {
     selectThread,
     deleteThread,
     updateThread,
+    mainView,
+    pendingEvolution,
     showCustomizeView,
     setShowCustomizeView,
     showKanbanView,
@@ -225,11 +227,11 @@ export function ThreadSidebar(): React.JSX.Element {
 
   const currentThreadIdRef = useRef(currentThreadId)
   currentThreadIdRef.current = currentThreadId
-  const showCustomizeViewRef = useRef(showCustomizeView)
-  showCustomizeViewRef.current = showCustomizeView
+  const mainViewRef = useRef(mainView)
+  mainViewRef.current = mainView
 
   const handleRunFinished = useCallback((threadId: string) => {
-    if (threadId === currentThreadIdRef.current && !showCustomizeViewRef.current) return
+    if (threadId === currentThreadIdRef.current && mainViewRef.current === "thread") return
     setUnreadIds((prev) => {
       if (prev.has(threadId)) return prev
       const next = new Set(prev)
@@ -346,14 +348,15 @@ export function ThreadSidebar(): React.JSX.Element {
           size="sm"
           className={cn(
             "w-full justify-start gap-2 text-sm font-semibold",
-            showCustomizeView && "bg-muted"
+            mainView === "customize" && "bg-muted"
           )}
-          onClick={() => setShowCustomizeView(!showCustomizeView)}
+          onClick={() => setShowCustomizeView(true, pendingEvolution ? "evolution" : undefined)}
         >
           <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
             <Briefcase className="size-3" />
           </div>
-          <span className="text-muted-foreground">自定义</span>
+          <span className="flex-1 text-left text-muted-foreground">自定义</span>
+          {pendingEvolution && <span className="size-2 rounded-full bg-orange-500 shrink-0" />}
         </Button>
         <Button
           variant="ghost"
@@ -453,8 +456,8 @@ export function ThreadSidebar(): React.JSX.Element {
           <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
         </svg>
         <div className="flex items-baseline">
-          <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Rajdhani', sans-serif" }}>CMBDev</span>
-          <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Claw</span>
+          <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>CMBDev</span>
+          <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>Claw</span>
           <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">{version || __APP_VERSION__}</span>
         </div>
       </div>

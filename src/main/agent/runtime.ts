@@ -15,6 +15,7 @@ import {
   getCustomModelConfigs,
   getUserInfo,
   isMemoryEnabled,
+  getSkillEvolutionThreshold as getStoredSkillEvolutionThreshold,
   DEFAULT_MAX_TOKENS,
   getEnabledPluginSkillsSources,
   getEnabledPluginMcpConfigs
@@ -52,6 +53,7 @@ import { BASE_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT, LAZY_MCP_SYSTEM_PROMPT } from
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
+import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import {
@@ -392,6 +394,52 @@ ${shellGuidance}
 // Per-thread checkpointer cache
 const checkpointers = new Map<string, SqlJsSaver>()
 
+// ─────────────────────────────────────────────────────────
+// Tool-call counter: track how many tool calls have been made
+// in each thread during the current session. Used to trigger
+// the skill-evolution nudge after SKILL_EVOLUTION_THRESHOLD calls.
+// ─────────────────────────────────────────────────────────
+
+/** Returns the current skill-evolution threshold from persistent storage. */
+export function getSkillEvolutionThreshold(): number {
+  return getStoredSkillEvolutionThreshold()
+}
+
+/** Per-thread tool-call counters (in-memory, reset on app restart) */
+const _threadToolCallCounts = new Map<string, number>()
+
+export function incrementToolCallCount(threadId: string): number {
+  const prev = _threadToolCallCounts.get(threadId) ?? 0
+  const next = prev + 1
+  _threadToolCallCounts.set(threadId, next)
+  return next
+}
+
+export function getToolCallCount(threadId: string): number {
+  return _threadToolCallCounts.get(threadId) ?? 0
+}
+
+export function resetToolCallCount(threadId: string): void {
+  _threadToolCallCounts.delete(threadId)
+}
+
+/**
+ * Threads that need the skill-evolution nudge injected on the NEXT invocation.
+ * Used when auto-propose is disabled and we want the agent to decide itself.
+ */
+const _pendingNudgeThreads = new Set<string>()
+
+export function scheduleSkillNudge(threadId: string): void {
+  _pendingNudgeThreads.add(threadId)
+}
+
+/** Returns and clears the nudge flag for the given thread. */
+export function consumeSkillNudge(threadId: string): boolean {
+  const had = _pendingNudgeThreads.has(threadId)
+  _pendingNudgeThreads.delete(threadId)
+  return had
+}
+
 // Global MCP tools cache: single shared client for both eager and lazy tools
 // Lifecycle managed here (not per-thread), reused across all sessions
 // Note: toolsByServer is cached, but eager/lazy distribution is decided at runtime
@@ -519,6 +567,8 @@ export interface CreateAgentRuntimeOptions {
   extraSystemPrompt?: string
   /** Skip the manage_scheduler tool (used by scheduled task / heartbeat execution to prevent recursive scheduling) */
   noSchedulerTool?: boolean
+  /** Skip the manage_skill tool (disable skill evolution for scheduled/heartbeat agents) */
+  noSkillEvolutionTool?: boolean
   /** AbortSignal — when signalled, any running child process is killed immediately. */
   abortSignal?: AbortSignal
 }
@@ -866,6 +916,9 @@ The workspace root is: ${workspacePath}`
       threadId: options.threadId,
       chatxRobotChatId
     }))
+  }
+  if (!options.noSkillEvolutionTool) {
+    extraTools.push(createSkillEvolutionTool())
   }
 
   // Add git_push tool

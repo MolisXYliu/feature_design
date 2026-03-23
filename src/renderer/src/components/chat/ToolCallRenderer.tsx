@@ -78,6 +78,47 @@ const TOOL_LABELS: Record<string, string> = {
 // Tools whose results are shown in the UI panels and don't need verbose display
 const PANEL_SYNCED_TOOLS = new Set(["write_todos"])
 
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>()
+
+  try {
+    const serialized = JSON.stringify(
+      value,
+      (_key, currentValue: unknown) => {
+        if (typeof currentValue === "bigint") {
+          return `${currentValue.toString()}n`
+        }
+        if (currentValue instanceof Error) {
+          return {
+            name: currentValue.name,
+            message: currentValue.message,
+            stack: currentValue.stack
+          }
+        }
+        if (typeof currentValue === "function") {
+          return `[Function ${currentValue.name || "anonymous"}]`
+        }
+        if (typeof currentValue === "symbol") {
+          return currentValue.toString()
+        }
+        if (currentValue && typeof currentValue === "object") {
+          if (seen.has(currentValue)) {
+            return "[Circular]"
+          }
+          seen.add(currentValue)
+        }
+        return currentValue
+      },
+      2
+    )
+
+    return typeof serialized === "string" ? serialized : String(serialized)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return `[Unserializable value: ${message}]`
+  }
+}
+
 // Helper to get a clean file name from path
 function getFileName(path: string): string {
   return path.split("/").pop() || path
@@ -661,7 +702,7 @@ export function ToolCallRenderer({
         <div className="text-xs text-status-critical flex items-start gap-1.5">
           <XCircle className="size-3 mt-0.5 shrink-0" />
           <span className="break-words">
-            {typeof result === "string" ? result : JSON.stringify(result)}
+            {typeof result === "string" ? result : safeStringify(result)}
           </span>
         </div>
       )
@@ -669,7 +710,7 @@ export function ToolCallRenderer({
 
     switch (toolCall.name) {
       case "read_file": {
-        const content = typeof result === "string" ? result : JSON.stringify(result)
+        const content = typeof result === "string" ? result : safeStringify(result)
         const lines = content.split("\n").length
         return (
           <div className="space-y-2">
@@ -743,7 +784,8 @@ export function ToolCallRenderer({
       case "execute": {
         // When expanded, output is shown in CommandDisplay - just show status
         // When collapsed, show the output preview
-        const output = typeof result === "string" ? result : JSON.stringify(result)
+        const output = typeof result === "string" ? result : safeStringify(result)
+        const command = args.command as string
 
         // Special handling for git diff commands
         // todo 暂时注释，看后续是否要放开
@@ -1056,7 +1098,7 @@ export function ToolCallRenderer({
           <div>
             <div className="text-section-header text-[10px] mb-1">参数</div>
             <pre className="text-xs font-mono bg-background p-2 rounded-sm overflow-auto max-h-24">
-              {JSON.stringify(args, null, 2)}
+              {safeStringify(args)}
             </pre>
           </div>
 
@@ -1143,7 +1185,7 @@ export function ToolCallRenderer({
           <div className="overflow-hidden w-full">
             <div className="text-section-header mb-1">RAW ARGUMENTS</div>
             <pre className="text-xs font-mono bg-background p-2 rounded-sm overflow-auto max-h-48 w-full whitespace-pre-wrap break-all">
-              {JSON.stringify(args, null, 2)}
+              {safeStringify(args)}
             </pre>
           </div>
 
@@ -1157,7 +1199,7 @@ export function ToolCallRenderer({
                   isError ? "bg-status-critical/10 text-status-critical" : "bg-background"
                 )}
               >
-                {typeof result === "string" ? result : JSON.stringify(result, null, 2)}
+                {typeof result === "string" ? result : safeStringify(result)}
               </pre>
             </div>
           )}
