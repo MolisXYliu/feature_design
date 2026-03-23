@@ -1408,28 +1408,35 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Maximum timeout for background tasks (10 minutes). */
   private static readonly BACKGROUND_TIMEOUT_MS = 600_000
 
-  /** Active background tasks. */
-  private backgroundTasks = new Map<string, {
+  /** Active background tasks (static — shared across instances so tasks survive re-creation). */
+  private static backgroundTasks = new Map<string, {
     id: string
     command: string
     startedAt: number
     completed: boolean
+    outputChunks: string[]
     result?: ExecuteResponse
   }>()
 
   /**
    * Execute a command in the background — returns immediately with a task ID.
    * The command runs asynchronously with a long timeout.
-   * Use `getTaskOutput(taskId)` to retrieve the result.
+   * Use `getTaskOutput(taskId)` to retrieve the result or check progress.
    */
   async executeBackground(command: string): Promise<string> {
     const taskId = randomUUID().slice(0, 8)
-    const task = { id: taskId, command, startedAt: Date.now(), completed: false as boolean, result: undefined as ExecuteResponse | undefined }
-    this.backgroundTasks.set(taskId, task)
+    const task = {
+      id: taskId, command, startedAt: Date.now(), completed: false as boolean,
+      outputChunks: [] as string[], result: undefined as ExecuteResponse | undefined
+    }
+    LocalSandbox.backgroundTasks.set(taskId, task)
 
     // Fire and forget — don't await. Uses extended timeout for background execution.
-    this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS).then(result => {
+    // Background tasks must survive conversation switches (abort), so use ignoreAbort flag.
+    this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS, true).then(result => {
       task.result = result
+      // Append final output to chunks for completeness
+      if (result.output) task.outputChunks.push(result.output)
       task.completed = true
       console.log(`[LocalSandbox] background task ${taskId} completed: exitCode=${result.exitCode}`)
     }).catch(err => {
@@ -1443,12 +1450,22 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   /**
    * Retrieve a background task's current status and output.
+   * When still running, returns elapsed time and command info so the agent can report progress.
    */
-  getTaskOutput(taskId: string): { completed: boolean; output?: string; exitCode?: number | null } | null {
-    const task = this.backgroundTasks.get(taskId)
+  getTaskOutput(taskId: string): {
+    completed: boolean
+    output?: string
+    exitCode?: number | null
+    elapsedSeconds?: number
+    command?: string
+  } | null {
+    const task = LocalSandbox.backgroundTasks.get(taskId)
     if (!task) return null
-    if (!task.completed) return { completed: false }
-    return { completed: true, output: task.result?.output, exitCode: task.result?.exitCode }
+    const elapsedSeconds = Math.round((Date.now() - task.startedAt) / 1000)
+    if (!task.completed) {
+      return { completed: false, elapsedSeconds, command: task.command }
+    }
+    return { completed: true, output: task.result?.output, exitCode: task.result?.exitCode, elapsedSeconds }
   }
 
   async execute(command: string): Promise<ExecuteResponse> {
@@ -1527,14 +1544,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Called directly by the orchestrator after approval is granted,
    * or as fallback when no orchestrator is configured.
    */
-  async executeRaw(command: string, sandboxModeOverride?: string, timeoutMs?: number): Promise<ExecuteResponse> {
+  async executeRaw(command: string, sandboxModeOverride?: string, timeoutMs?: number, ignoreAbort?: boolean): Promise<ExecuteResponse> {
     const effectiveSandboxMode = (sandboxModeOverride ?? this.windowsSandbox) as typeof this.windowsSandbox
     const effectiveTimeout = timeoutMs ?? this.timeout
-    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride} timeout=${effectiveTimeout}ms`)
+    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride} timeout=${effectiveTimeout}ms ignoreAbort=${!!ignoreAbort}`)
 
     if (process.platform === "win32" && effectiveSandboxMode !== "none") {
       console.log(`[LocalSandbox] → executeInWindowsSandbox (elevated path)`)
-      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode, effectiveTimeout)
+      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode, effectiveTimeout, ignoreAbort)
     }
 
     const isWindows = process.platform === "win32"
@@ -1552,7 +1569,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // contention). Retry up to SPAWN_RETRY_COUNT times with a short delay.
     const maxAttempts = isWindows ? LocalSandbox.SPAWN_RETRY_COUNT + 1 : 1
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.executeOnce(effectiveCommand, shell, isWindows, effectiveTimeout)
+      const result = await this.executeOnce(effectiveCommand, shell, isWindows, effectiveTimeout, ignoreAbort)
       const isSpawnEperm =
         result.exitCode === 1
         && result.output.startsWith("Error: Failed to execute command:")
@@ -1576,7 +1593,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * - elevated: dedicated sandbox user + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number, ignoreAbort?: boolean): Promise<ExecuteResponse> {
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
     const isElevatedSandbox = effectiveMode === "elevated"
 
@@ -1768,7 +1785,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }
-      if (this.abortSignal) {
+      if (this.abortSignal && !ignoreAbort) {
         this.abortSignal.addEventListener("abort", abortHandler, { once: true })
       }
 
@@ -1920,12 +1937,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       && sandboxModeOverride !== "unelevated"
       && LocalSandbox.shouldFallbackToUnelevatedForNetworkAuth(result.output)
     ) {
-      console.warn("[LocalSandbox] elevated network auth failed; blocking instead of auto-fallback")
-      return {
-        output: `⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。\n\n如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
-        exitCode: 1,
-        truncated: false
-      }
+      // Auto-fallback to unelevated mode: elevated sandbox user lacks enterprise network
+      // credentials (Kerberos/NTLM), so commands accessing corporate repos (Maven, npm, etc.)
+      // will fail. Retry with unelevated sandbox which inherits the real user's credentials.
+      console.warn("[LocalSandbox] elevated network auth failed; auto-retrying with unelevated sandbox")
+      return this.executeInWindowsSandbox(command, 1, "unelevated", timeoutMs)
     }
 
     console.log(`[LocalSandbox] executeInWindowsSandbox total: ${Date.now() - execStartMs}ms, command="${command.slice(0, 80)}"`)
@@ -1943,7 +1959,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     command: string,
     shell: string,
     isWindows: boolean,
-    timeoutMs?: number
+    timeoutMs?: number,
+    ignoreAbort?: boolean
   ): Promise<ExecuteResponse> {
     const onceStartMs = Date.now()
     return new Promise<ExecuteResponse>((resolve) => {
@@ -2035,7 +2052,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }
-      if (this.abortSignal) {
+      if (this.abortSignal && !ignoreAbort) {
         this.abortSignal.addEventListener("abort", abortHandler, { once: true })
       }
 
