@@ -1912,12 +1912,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       && sandboxModeOverride !== "unelevated"
       && LocalSandbox.shouldFallbackToUnelevatedForNetworkAuth(result.output)
     ) {
-      console.warn("[LocalSandbox] elevated network auth failed; blocking instead of auto-fallback")
-      return {
-        output: `⚠️ 操作被沙箱拦截：Elevated 沙箱用户缺少企业网络认证凭据，无法执行此命令。\n\n如需执行网络相关操作，请在设置中切换到 Unelevated 沙箱模式后重试。`,
-        exitCode: 1,
-        truncated: false
-      }
+      // Auto-fallback to unelevated mode: elevated sandbox user lacks enterprise network
+      // credentials (Kerberos/NTLM), so commands accessing corporate repos (Maven, npm, etc.)
+      // will fail. Retry with unelevated sandbox which inherits the real user's credentials.
+      console.warn("[LocalSandbox] elevated network auth failed; auto-retrying with unelevated sandbox")
+      return this.executeInWindowsSandbox(command, 1, "unelevated", timeoutMs)
     }
 
     console.log(`[LocalSandbox] executeInWindowsSandbox total: ${Date.now() - execStartMs}ms, command="${command.slice(0, 80)}"`)
