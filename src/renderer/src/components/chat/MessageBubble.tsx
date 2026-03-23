@@ -1,29 +1,13 @@
 import type { Message, HITLRequest } from "@/types"
 import { ToolCallRenderer } from "./ToolCallRenderer";
 import { StreamingMarkdown } from "./StreamingMarkdown"
+import { getToolLabel } from "@/lib/tool-labels"
 import { useState } from "react"
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react"
 
 // 获取工具调用的简要描述
 function getToolCallSummary(toolCall: { name: string; args?: Record<string, unknown> }): string {
-  const toolLabels: Record<string, string> = {
-    read_file: "读取文件",
-    write_file: "写入文件",
-    edit_file: "编辑文件",
-    execute: "执行命令",
-    ls: "列出目录",
-    glob: "查找文件",
-    grep: "搜索内容",
-    write_todos: "更新任务",
-    task: "子任务执行",
-    git_workflow:"git代码批量提交（点击展开）",
-    chrome_setup: "Chrome MCP 环境检查",
-    mcp_call: "调用MCP工具",
-    search_tool: "搜索MCP工具",
-    load_tool: "加载MCP工具"
-  }
-
-  const label = toolLabels[toolCall.name] || toolCall.name
+  const label = getToolLabel(toolCall.name)
   const args = toolCall.args || {}
 
   // 获取主要参数用于显示

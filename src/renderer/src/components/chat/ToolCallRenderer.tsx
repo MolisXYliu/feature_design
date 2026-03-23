@@ -26,6 +26,7 @@ import {
 import { memo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { getToolLabel } from "@/lib/tool-labels"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview"
@@ -61,19 +62,6 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   task: GitBranch,
   git_push: GitBranch,
   git_workflow: GitBranch
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  read_file: "Read File",
-  write_file: "Write File",
-  edit_file: "Edit File",
-  ls: "List Directory",
-  glob: "Find Files",
-  grep: "Search Content",
-  execute: "Execute Command",
-  write_todos: "Update Tasks",
-  task: "Subagent Task",
-  git_workflow: "Git Workflow (Add, Commit, Push)"
 }
 
 // Tools whose results are shown in the UI panels and don't need verbose display
@@ -678,7 +666,7 @@ export function ToolCallRenderer({
   }
 
   const Icon = TOOL_ICONS[toolCall.name] || Terminal
-  const label = TOOL_LABELS[toolCall.name] || toolCall.name
+  const label = getToolLabel(toolCall.name)
   const isPanelSynced = PANEL_SYNCED_TOOLS.has(toolCall.name)
 
   const handleReject = (e: React.MouseEvent): void => {
