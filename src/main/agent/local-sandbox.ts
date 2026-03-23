@@ -1644,9 +1644,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       if (tmpDir && !aclDirs.includes(tmpDir)) {
         aclDirs.push(tmpDir)
       }
+      const aclGrantStart = Date.now()
       await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
+      console.log(`[LocalSandbox] ACL grant took ${Date.now() - aclGrantStart}ms for ${aclDirs.length} dirs`)
     }
 
+    const execStartMs = Date.now()
     try {
     const result = await new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
@@ -1654,6 +1657,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let totalBytes = 0
       let resolved = false
       let exited = false
+      let firstDataAt = 0 // timestamp of first stdout/stderr data
 
       // Early return if already aborted — avoid spawning a process just to kill it.
       if (this.abortSignal?.aborted) {
@@ -1671,7 +1675,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         stdio: ["ignore", "pipe", "pipe"]
       })
 
-      console.log(`[LocalSandbox] spawned pid=${proc.pid}`)
+      console.log(`[LocalSandbox] spawned pid=${proc.pid} at +${Date.now() - execStartMs}ms`)
+      if (!proc.pid) {
+        console.warn(`[LocalSandbox] WARNING: spawn returned no pid — process may not have started`)
+      }
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
@@ -1711,6 +1718,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       proc.stdout?.on("data", (chunk: Buffer) => {
+        if (!firstDataAt) { firstDataAt = Date.now(); console.log(`[LocalSandbox] first data at +${firstDataAt - execStartMs}ms pid=${proc.pid}`) }
         if (totalBytes < this.maxOutputBytes) {
           stdoutChunks.push(chunk)
           totalBytes += chunk.length
@@ -1718,6 +1726,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       proc.stderr?.on("data", (chunk: Buffer) => {
+        if (!firstDataAt) { firstDataAt = Date.now(); console.log(`[LocalSandbox] first data at +${firstDataAt - execStartMs}ms pid=${proc.pid}`) }
         if (totalBytes < this.maxOutputBytes) {
           stderrChunks.push(chunk)
           totalBytes += chunk.length
@@ -1730,8 +1739,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           return
         }
         try {
+          const elapsed = Date.now() - execStartMs
           const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
-          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
+          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}, elapsed=${elapsed}ms, bytes=${totalBytes}`)
           resolved = true
           exited = true
           LocalSandbox.activeProcesses.delete(proc)
@@ -1788,6 +1798,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       proc.on("exit", (code, signal) => {
+        console.log(`[LocalSandbox] event=exit pid=${proc.pid} code=${code} signal=${signal} at +${Date.now() - execStartMs}ms resolved=${resolved}`)
         exited = true
         windowsExitTimerId = setTimeout(() => {
           collectAndResolve(code, signal as string | null)
@@ -1795,11 +1806,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       proc.on("close", (code, signal) => {
+        console.log(`[LocalSandbox] event=close pid=${proc.pid} code=${code} signal=${signal} at +${Date.now() - execStartMs}ms resolved=${resolved}`)
         exited = true
         collectAndResolve(code, signal as string | null)
       })
 
       proc.on("error", (err) => {
+        console.log(`[LocalSandbox] event=error pid=${proc.pid} err=${(err as Error).message} at +${Date.now() - execStartMs}ms resolved=${resolved}`)
         if (resolved) return
         resolved = true
         exited = true
@@ -1860,10 +1873,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
+    console.log(`[LocalSandbox] executeInWindowsSandbox total: ${Date.now() - execStartMs}ms, command="${command.slice(0, 80)}"`)
     return result
     } finally {
       if (aclDirs.length > 0) {
+        const aclRevokeStart = Date.now()
         await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
+        console.log(`[LocalSandbox] ACL revoke took ${Date.now() - aclRevokeStart}ms`)
       }
     }
   }
@@ -1874,6 +1890,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     isWindows: boolean,
     timeoutMs?: number
   ): Promise<ExecuteResponse> {
+    const onceStartMs = Date.now()
     return new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
       const stderrChunks: Buffer[] = []
@@ -1881,6 +1898,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let byteCapReached = false
       let resolved = false
       let exited = false
+      let firstDataAt = 0
 
       // On Windows with bash-like shells (Git Bash / MSYS2), non-ASCII
       // characters in command-line arguments get corrupted: MSYS2's runtime
@@ -1925,6 +1943,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         proc.stdin.end()
       }
 
+      console.log(`[LocalSandbox] executeOnce: spawned pid=${proc.pid} shell=${shellBase} at +${Date.now() - onceStartMs}ms`)
+      if (!proc.pid) {
+        console.warn(`[LocalSandbox] WARNING: spawn returned no pid — process may not have started`)
+      }
       LocalSandbox.activeProcesses.add(proc)
 
       let windowsExitTimerId: ReturnType<typeof setTimeout> | null = null
@@ -1963,6 +1985,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       proc.stdout.on("data", (chunk: Buffer) => {
+        if (!firstDataAt) { firstDataAt = Date.now(); console.log(`[LocalSandbox] first data at +${firstDataAt - onceStartMs}ms pid=${proc.pid}`) }
         if (byteCapReached) return
         stdoutChunks.push(chunk)
         totalBytes += chunk.length
@@ -1970,6 +1993,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
 
       proc.stderr.on("data", (chunk: Buffer) => {
+        if (!firstDataAt) { firstDataAt = Date.now(); console.log(`[LocalSandbox] first data at +${firstDataAt - onceStartMs}ms pid=${proc.pid}`) }
         if (byteCapReached) return
         stderrChunks.push(chunk)
         totalBytes += chunk.length
@@ -1982,8 +2006,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           return
         }
         try {
+          const elapsed = Date.now() - onceStartMs
           const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
-          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
+          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}, elapsed=${elapsed}ms, bytes=${totalBytes}`)
           resolved = true
           exited = true
           LocalSandbox.activeProcesses.delete(proc)
@@ -2063,6 +2088,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // which can block indefinitely. Listen for 'exit' and resolve after a grace period.
       if (isWindows) {
         proc.on("exit", (code, signal) => {
+          console.log(`[LocalSandbox] event=exit pid=${proc.pid} code=${code} signal=${signal} at +${Date.now() - onceStartMs}ms resolved=${resolved}`)
           exited = true
           windowsExitTimerId = setTimeout(() => {
             collectAndResolve(code, signal as string | null)
@@ -2071,11 +2097,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
 
       proc.on("close", (code, signal) => {
+        console.log(`[LocalSandbox] event=close pid=${proc.pid} code=${code} signal=${signal} at +${Date.now() - onceStartMs}ms resolved=${resolved}`)
         exited = true
         collectAndResolve(code, signal as string | null)
       })
 
       proc.on("error", (err) => {
+        console.log(`[LocalSandbox] event=error pid=${proc.pid} err=${(err as Error).message} at +${Date.now() - onceStartMs}ms resolved=${resolved}`)
         if (resolved) return
         resolved = true
         exited = true
