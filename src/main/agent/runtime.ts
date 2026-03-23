@@ -245,6 +245,63 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
     } else {
       console.warn("[Runtime] grep tool schema patch skipped: tool or pattern field not found")
     }
+
+    // Replace the default execute tool with a version that supports run_in_background.
+    // Long-running commands (builds, dependency downloads) can be started in background
+    // and their output retrieved later via task_output tool.
+    const { tool: lcTool } = require("langchain") as typeof import("langchain")
+    const { z } = require("zod") as typeof import("zod")
+
+    const executeIdx = mw.tools?.findIndex((t: any) => t.name === "execute") ?? -1
+    if (executeIdx >= 0) {
+      const oldExecute = mw.tools![executeIdx]
+      const customExecute = lcTool(async (input: { command: string; run_in_background?: boolean }) => {
+        if (input.run_in_background) {
+          const taskId = await (filesystemBackend as LocalSandbox).executeBackground(input.command)
+          return `Background task started (id: ${taskId}). Use task_output tool with this id to check results later.`
+        }
+        // Delegate to original execute handler for foreground execution
+        return (oldExecute as any).invoke(input)
+      }, {
+        name: "execute",
+        description: (oldExecute as any).description,
+        schema: z.object({
+          command: z.string().describe("The shell command to execute"),
+          run_in_background: z.boolean().optional().describe(
+            "Set to true to run the command in the background. Returns a task ID immediately. " +
+            "Use this for long-running commands like builds, dependency downloads, or test suites. " +
+            "Retrieve the result later with the task_output tool."
+          )
+        })
+      })
+      mw.tools![executeIdx] = customExecute
+      console.log("[Runtime] execute tool patched: added run_in_background support")
+    }
+
+    // Add task_output tool for retrieving background task results
+    const taskOutputTool = lcTool(async (input: { task_id: string }) => {
+      const result = (filesystemBackend as LocalSandbox).getTaskOutput(input.task_id)
+      if (!result) return `Error: No background task found with id "${input.task_id}".`
+      if (!result.completed) {
+        return `Task ${input.task_id} is still running. Try again later.`
+      }
+      const status = result.exitCode === 0 ? "succeeded" : "failed"
+      const parts = [result.output ?? "<no output>"]
+      if (result.exitCode !== null && result.exitCode !== undefined) {
+        parts.push(`\n[Command ${status} with exit code ${result.exitCode}]`)
+      }
+      return parts.join("")
+    }, {
+      name: "task_output",
+      description: "Retrieve the output of a background task started with execute(run_in_background=true).",
+      schema: z.object({
+        task_id: z.string().describe("The task ID returned by execute when run_in_background was true")
+      })
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mw.tools = [...(mw.tools || []), taskOutputTool] as any
+    console.log("[Runtime] task_output tool added")
+
     return mw
   }
 

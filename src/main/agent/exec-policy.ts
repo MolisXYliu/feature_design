@@ -86,8 +86,23 @@ const BANNED_PERSISTENT_PREFIXES: string[][] = [
 ]
 
 const PERSISTABLE_EXECUTABLES = new Set([
-  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "java", "make",
-  "mvn", "npm", "pnpm", "poetry", "pytest", "uv", "yarn"
+  // Build tools & package managers
+  "bun", "cargo", "cmake", "go", "gradle", "gradlew", "java", "javac", "make",
+  "mvn", "npm", "npx", "pnpm", "poetry", "pip", "pip3", "pytest", "uv", "yarn",
+  "dotnet", "msbuild", "ant",
+  // Version control
+  "git", "svn",
+  // Common dev tools
+  "node", "python", "python3", "ruby", "perl", "php",
+  "rustc", "gcc", "g++", "clang", "clang++",
+  "docker", "docker-compose", "kubectl",
+  "curl", "wget",
+  // Shell utilities (read-only / safe)
+  "ls", "dir", "cat", "head", "tail", "find", "grep", "rg", "awk", "sed",
+  "wc", "sort", "uniq", "diff", "tree", "file", "which", "where", "echo",
+  "pwd", "env", "printenv", "whoami", "hostname", "date", "df", "du",
+  // Windows-specific
+  "type", "findstr", "icacls", "net", "sc", "tasklist", "systeminfo"
 ])
 
 // ── Forbidden patterns ───────────────────────────────────────────────────────

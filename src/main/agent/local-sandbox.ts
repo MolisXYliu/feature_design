@@ -167,10 +167,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // own profile TEMP (C:\Users\CodexSandboxOnline\...\Temp) is NOT granted write access
     // by the ACL setup, so we must NOT redirect TEMP/TMP to it.
     const mavenRepoLocal = path.win32.join(realTempDir, "m2-sandbox-repo")
-    // Host user's Maven settings.xml — company private repos, mirrors, auth, etc.
-    // Pass via MAVEN_ARGS (Maven 3.9+) so Maven uses the real settings instead of
-    // the sandbox user's empty/default settings.
-    const mavenSettingsPath = path.win32.join(realUserHome, ".m2", "settings.xml")
+    // JVM user.home override: the sandbox redirects USERPROFILE, which causes JVM
+    // tools (Maven, Gradle, sbt, etc.) to look for configs under the sandbox user's
+    // empty home. Setting -Duser.home to the real user home lets all JVM tools find
+    // their default configs (~/.m2/settings.xml, ~/.gradle/, etc.) without us having
+    // to know the exact location of each config file.
     const envOverrides: Array<[string, string]> = [
       ["USERPROFILE", profileRoot],
       ["HOME", profileRoot],
@@ -188,21 +189,20 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      // Set maven.repo.local + conditionally pass host user's settings.xml via MAVEN_ARGS
-      const mavenOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)}"`
-      const mavenArgs = `if exist "${cmdSetLiteral(mavenSettingsPath)}" set "MAVEN_ARGS=-s ${cmdSetLiteral(mavenSettingsPath)}"`
-      return `${base} & ${mavenOpts} & ${mavenArgs}`
+      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
+      // real user home so all JVM tools find their configs automatically.
+      const jvmOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)} -Duser.home=${cmdSetLiteral(realUserHome)}"`
+      return `${base} & ${jvmOpts}`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      // Set maven.repo.local + conditionally pass host user's settings.xml via MAVEN_ARGS
-      const mavenOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")}"`
-      const settingsEscaped = mavenSettingsPath.replace(/\\/g, "\\\\")
-      const mavenArgs = `if (Test-Path ${powershellSingleQuote(mavenSettingsPath)}) { $env:MAVEN_ARGS="-s ${settingsEscaped}" }`
-      return `${base}; ${mavenOpts}; ${mavenArgs}`
+      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
+      // real user home so all JVM tools find their configs automatically.
+      const jvmOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")} -Duser.home=${realUserHome.replace(/\\/g, "\\\\")}"`
+      return `${base}; ${jvmOpts}`
     }
 
     return ""
@@ -1369,18 +1369,50 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    */
   private static readonly SPAWN_RETRY_COUNT = 2
   private static readonly SPAWN_RETRY_DELAY_MS = 300
-  /** Extended timeout for build tool commands that may download dependencies. */
-  private static readonly BUILD_TOOL_TIMEOUT_MS = 300_000 // 5 minutes
+  /** Maximum timeout for background tasks (10 minutes). */
+  private static readonly BACKGROUND_TIMEOUT_MS = 600_000
+
+  /** Active background tasks. */
+  private backgroundTasks = new Map<string, {
+    id: string
+    command: string
+    startedAt: number
+    completed: boolean
+    result?: ExecuteResponse
+  }>()
 
   /**
-   * Detect build tool commands that may need a longer timeout (e.g. dependency download).
-   * Returns the extended timeout if the command matches, otherwise the default timeout.
+   * Execute a command in the background — returns immediately with a task ID.
+   * The command runs asynchronously with a long timeout.
+   * Use `getTaskOutput(taskId)` to retrieve the result.
    */
-  private getEffectiveTimeout(command: string): number {
-    if (/\b(mvn|gradle|gradlew|npm|pnpm|yarn|cargo|dotnet)\b/i.test(command)) {
-      return Math.max(this.timeout, LocalSandbox.BUILD_TOOL_TIMEOUT_MS)
-    }
-    return this.timeout
+  async executeBackground(command: string): Promise<string> {
+    const taskId = randomUUID().slice(0, 8)
+    const task = { id: taskId, command, startedAt: Date.now(), completed: false as boolean, result: undefined as ExecuteResponse | undefined }
+    this.backgroundTasks.set(taskId, task)
+
+    // Fire and forget — don't await. Uses extended timeout for background execution.
+    this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS).then(result => {
+      task.result = result
+      task.completed = true
+      console.log(`[LocalSandbox] background task ${taskId} completed: exitCode=${result.exitCode}`)
+    }).catch(err => {
+      task.result = { output: `Error: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1, truncated: false }
+      task.completed = true
+      console.log(`[LocalSandbox] background task ${taskId} errored: ${err}`)
+    })
+
+    return taskId
+  }
+
+  /**
+   * Retrieve a background task's current status and output.
+   */
+  getTaskOutput(taskId: string): { completed: boolean; output?: string; exitCode?: number | null } | null {
+    const task = this.backgroundTasks.get(taskId)
+    if (!task) return null
+    if (!task.completed) return { completed: false }
+    return { completed: true, output: task.result?.output, exitCode: task.result?.exitCode }
   }
 
   async execute(command: string): Promise<ExecuteResponse> {
@@ -1458,13 +1490,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Called directly by the orchestrator after approval is granted,
    * or as fallback when no orchestrator is configured.
    */
-  async executeRaw(command: string, sandboxModeOverride?: string): Promise<ExecuteResponse> {
+  async executeRaw(command: string, sandboxModeOverride?: string, timeoutMs?: number): Promise<ExecuteResponse> {
     const effectiveSandboxMode = (sandboxModeOverride ?? this.windowsSandbox) as typeof this.windowsSandbox
-    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride}`)
+    const effectiveTimeout = timeoutMs ?? this.timeout
+    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride} timeout=${effectiveTimeout}ms`)
 
     if (process.platform === "win32" && effectiveSandboxMode !== "none") {
       console.log(`[LocalSandbox] → executeInWindowsSandbox (elevated path)`)
-      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode)
+      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode, effectiveTimeout)
     }
 
     const isWindows = process.platform === "win32"
@@ -1482,7 +1515,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // contention). Retry up to SPAWN_RETRY_COUNT times with a short delay.
     const maxAttempts = isWindows ? LocalSandbox.SPAWN_RETRY_COUNT + 1 : 1
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.executeOnce(effectiveCommand, shell, isWindows)
+      const result = await this.executeOnce(effectiveCommand, shell, isWindows, effectiveTimeout)
       const isSpawnEperm =
         result.exitCode === 1
         && result.output.startsWith("Error: Failed to execute command:")
@@ -1506,7 +1539,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * - elevated: dedicated sandbox user + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated"): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number): Promise<ExecuteResponse> {
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
     const isElevatedSandbox = effectiveMode === "elevated"
 
@@ -1650,17 +1683,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         void LocalSandbox.killTree(proc, () => exited)
       }
 
-      const effectiveTimeout = this.getEffectiveTimeout(command)
+      const cmdTimeout = timeoutMs ?? this.timeout
       const timeoutId = setTimeout(() => {
         if (resolved || timedOut || aborted) return
-        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${effectiveTimeout}ms`)
+        console.log(`[LocalSandbox] timeout: pid=${proc.pid}, killing after ${cmdTimeout}ms`)
         timedOut = true
         killProc()
         drainTimerId = setTimeout(() => {
           console.log(`[LocalSandbox] drain timeout: pid=${proc.pid}, force-resolving after ${LocalSandbox.IO_DRAIN_TIMEOUT_MS}ms`)
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
-      }, effectiveTimeout)
+      }, cmdTimeout)
 
       const abortHandler = (): void => {
         if (resolved || timedOut || aborted) return
@@ -1696,44 +1729,61 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           console.log(`[LocalSandbox] collectAndResolve: skip (already resolved), pid=${proc.pid}`)
           return
         }
-        const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
-        console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
-        resolved = true
-        exited = true
-        LocalSandbox.activeProcesses.delete(proc)
-        clearTimeout(timeoutId)
-        if (drainTimerId) clearTimeout(drainTimerId)
-        if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+        try {
+          const reason = aborted ? "abort" : timedOut ? "timeout" : "normal"
+          console.log(`[LocalSandbox] collectAndResolve: pid=${proc.pid}, reason=${reason}, code=${code}, signal=${signal}`)
+          resolved = true
+          exited = true
+          LocalSandbox.activeProcesses.delete(proc)
+          clearTimeout(timeoutId)
+          if (drainTimerId) clearTimeout(drainTimerId)
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
 
-        const stdoutBuf = Buffer.concat(stdoutChunks)
-        const stderrBuf = Buffer.concat(stderrChunks)
-        const enc = this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
+          const stdoutBuf = Buffer.concat(stdoutChunks)
+          const stderrBuf = Buffer.concat(stderrChunks)
+          const enc = this.detectCmdEncoding(Buffer.concat([stdoutBuf, stderrBuf]))
 
-        let output = ""
-        if (stdoutBuf.length > 0) output += iconv.decode(stdoutBuf, enc)
-        if (stderrBuf.length > 0) {
-          const errText = iconv.decode(stderrBuf, enc)
-            .split("\n").filter((l) => l.length > 0)
-            .map((l) => `[stderr] ${l}`).join("\n")
-          if (errText) output += (output ? "\n" : "") + errText
-        }
+          let output = ""
+          if (stdoutBuf.length > 0) output += iconv.decode(stdoutBuf, enc)
+          if (stderrBuf.length > 0) {
+            const errText = iconv.decode(stderrBuf, enc)
+              .split("\n").filter((l) => l.length > 0)
+              .map((l) => `[stderr] ${l}`).join("\n")
+            if (errText) output += (output ? "\n" : "") + errText
+          }
 
-        let truncated = false
-        if (output.length > this.maxOutputBytes) {
-          output = output.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
-          truncated = true
-        }
-        if (!output.trim()) output = "<no output>"
+          let truncated = false
+          if (output.length > this.maxOutputBytes) {
+            output = output.slice(0, this.maxOutputBytes) + `\n\n... Output truncated at ${this.maxOutputBytes} bytes.`
+            truncated = true
+          }
+          if (!output.trim()) output = "<no output>"
 
-        if (aborted) {
-          const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
-          resolve({ output: metadata + output, exitCode: 130, truncated })
-        } else if (timedOut) {
-          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(effectiveTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
-          resolve({ output: metadata + output, exitCode: 124, truncated })
-        } else {
-          resolve({ output, exitCode: signal ? null : code, truncated })
+          if (aborted) {
+            const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
+            resolve({ output: metadata + output, exitCode: 130, truncated })
+          } else if (timedOut) {
+            const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(cmdTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+            resolve({ output: metadata + output, exitCode: 124, truncated })
+          } else {
+            resolve({ output, exitCode: signal ? null : code, truncated })
+          }
+        } catch (err) {
+          // Encoding detection or iconv.decode can throw on unusual binary output.
+          // Ensure the promise always resolves — a stuck promise means the UI hangs on RUNNING forever.
+          console.error(`[LocalSandbox] collectAndResolve error: pid=${proc.pid}`, err)
+          resolved = true
+          LocalSandbox.activeProcesses.delete(proc)
+          clearTimeout(timeoutId)
+          if (drainTimerId) clearTimeout(drainTimerId)
+          if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
+          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          resolve({
+            output: `Error processing command output: ${err instanceof Error ? err.message : String(err)}`,
+            exitCode: code ?? 1,
+            truncated: false
+          })
         }
       }
 
@@ -1821,7 +1871,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private executeOnce(
     command: string,
     shell: string,
-    isWindows: boolean
+    isWindows: boolean,
+    timeoutMs?: number
   ): Promise<ExecuteResponse> {
     return new Promise<ExecuteResponse>((resolve) => {
       const stdoutChunks: Buffer[] = []
@@ -1886,7 +1937,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         void LocalSandbox.killTree(proc, () => exited)
       }
 
-      const effectiveTimeout = this.getEffectiveTimeout(command)
+      const cmdTimeout = timeoutMs ?? this.timeout
       const timeoutId = setTimeout(() => {
         if (resolved || timedOut || aborted) return
         timedOut = true
@@ -1896,7 +1947,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         drainTimerId = setTimeout(() => {
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
-      }, effectiveTimeout)
+      }, cmdTimeout)
 
       const abortHandler = (): void => {
         if (resolved || timedOut || aborted) return
@@ -1983,7 +2034,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           const metadata = `<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 130, truncated })
         } else if (timedOut) {
-          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(effectiveTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
+          const metadata = `<execute_metadata>\nexecute tool killed the running process and terminated command after exceeding timeout ${(cmdTimeout / 1000).toFixed(1)}s\n</execute_metadata>\n\n`
           resolve({ output: metadata + output, exitCode: 124, truncated })
         } else {
           resolve({ output, exitCode: signal ? null : code, truncated })

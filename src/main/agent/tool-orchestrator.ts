@@ -73,8 +73,11 @@ export class ToolOrchestrator {
 
     // 5. Needs approval → check cache, then ask user
     const key = this.approvalStore.makeKey(command, cwd, sandboxMode)
-    const patternKey = derivePermanentApprovalPattern(command) ?? this.approvalStore.makePatternKey(command)
-    const allowPermanentApproval = patternKey !== this.approvalStore.makePatternKey(command)
+    // derivePermanentApprovalPattern returns a prefix-based pattern for known safe executables,
+    // or null for unknown executables. For unknown executables, fall back to exact-match pattern
+    // (the raw command text) — this still allows "always allow" but requires exact same command.
+    const prefixPattern = derivePermanentApprovalPattern(command)
+    const patternKey = prefixPattern ?? this.approvalStore.makePatternKey(command)
 
     console.log("[Orchestrator] needs_approval → requesting user approval...")
 
@@ -90,15 +93,15 @@ export class ToolOrchestrator {
           cwd,
           reason: safety.reason,
           allowed_decisions: ["approve", "reject"],
-          allowed_approval_types: allowPermanentApproval
-            ? ["approve", "approve_session", "approve_permanent", "reject"]
-            : ["approve", "approve_session", "reject"]
+          // Always offer permanent approval — for known executables it uses prefix match,
+          // for unknown executables it uses exact match (still useful for repeated commands).
+          allowed_approval_types: ["approve", "approve_session", "approve_permanent", "reject"]
         })
         return this.mapDecisionToReview(approval.type)
       },
       {
-        allowPermanentMatch: allowPermanentApproval,
-        allowPermanentStore: allowPermanentApproval,
+        allowPermanentMatch: true,
+        allowPermanentStore: true,
         commandForPatternMatch: command
       }
     )
