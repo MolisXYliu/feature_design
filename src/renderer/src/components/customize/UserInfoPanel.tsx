@@ -15,12 +15,18 @@ interface UserInfoConfig {
 
 const UserInfoPanel: React.FC = () => {
     const [user, setUser] = useState<UserInfoConfig>({} as UserInfoConfig);
-
+    const [initFlag, setInitFlag] = useState(false)//初始化标志，用于判断是否已经初始化
     useEffect(() => {
+        window.electron.onNotifyMsg(() => {
+            initUser()
+        })
+        initUser()
+    }, []);
+    const initUser = () => {
         window.api.models.getUserInfo().then(user => {
             const userInfo = user as UserInfoConfig || {}
             if (userInfo.sapId) {
-                fetch('https://archguardservice.paas.twf.cn/cowork/login-info', {
+                fetch(`https://archguardservice.paas.${import.meta.env.VITE_LOGIN_PT}.cn/cowork/login-info`, {
                     method: 'GET',
                     headers: {
                         ystCode: userInfo.ystCode,
@@ -42,10 +48,14 @@ const UserInfoPanel: React.FC = () => {
                     }
                 }).catch(err => {
                     console.log(err)
+                }).finally(() => {
+                    setInitFlag(true)
                 })
+            } else {
+                setInitFlag(true)
             }
         });
-    }, []);
+    };
 
     const handleLogin = async () => {
         window.electron.openLoginWindow()
@@ -71,6 +81,10 @@ const UserInfoPanel: React.FC = () => {
         if (!name) return ''
         return name.split(' ').map(word => word[0]).join('').toUpperCase();
     };
+
+    if (!initFlag) {
+        return null
+    }
     return (
         <Card className="w-full">
             <CardContent>

@@ -23,6 +23,11 @@ const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
   openLoginWindow:()=>ipcRenderer.invoke('open-login-window'),
   closeLoginWindow:()=>ipcRenderer.invoke('close-login-window'),
+  onNotifyMsg: (callback: (msg:string)=>void)=>{
+    ipcRenderer.on('notify-login-msg', (_event, data) => {
+      callback(data)
+    })
+  },
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {
