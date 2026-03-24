@@ -31,6 +31,7 @@ import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview"
 import { GitPush } from "@/components/chat/GitPush/GitPush"
+import { HtmlPreview } from "./previews/HtmlPreview"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -818,7 +819,6 @@ export function ToolCallRenderer({
         // When expanded, output is shown in CommandDisplay - just show status
         // When collapsed, show the output preview
         const output = typeof result === "string" ? result : safeStringify(result)
-        const command = args.command as string
 
         // Special handling for git diff commands
         // todo 暂时注释，看后续是否要放开
@@ -887,10 +887,26 @@ export function ToolCallRenderer({
         const oldString = (args.old_string as string) || (args.old_str as string) || ""
         const newString = (args.new_string as string) || (args.new_str as string) || ""
         const isMarkdownFile = path && (path.endsWith(".md") || path.endsWith(".markdown"))
+        const isHtmlFile = path && (path.endsWith(".html") || path.endsWith(".htm"))
 
         // For edit_file, we want to show the new content (new_str)
         // For write_file, we want to show the content
         const markdownContent = toolCall.name === "edit_file" ? newStr : content
+        const htmlContent = toolCall.name === "edit_file" ? newStr : content
+
+        if (isHtmlFile && htmlContent && !isExpanded) {
+          return (
+            <div className="space-y-2">
+              <div className="text-xs text-status-nominal flex items-center gap-1.5">
+                <CheckCircle2 className="size-3" />
+                <span>
+                  {toolCall.name === "edit_file" ? "HTML file edited" : "HTML file created"}
+                </span>
+              </div>
+              <HtmlPreview content={htmlContent} path={path} />
+            </div>
+          )
+        }
 
         if (isMarkdownFile && markdownContent && !isExpanded) {
           // Show markdown preview for collapsed view

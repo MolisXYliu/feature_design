@@ -25,6 +25,15 @@ function getToolCallSummary(toolCall: { name: string; args?: Record<string, unkn
   return param ? `${label}: ${param}` : label
 }
 
+function isHtmlRenderToolCall(toolCall: { name: string; args?: Record<string, unknown> }): boolean {
+  if (toolCall.name !== "write_file" && toolCall.name !== "edit_file") return false
+  const args = toolCall.args || {}
+  const path = (args.path || args.file_path) as string | undefined
+  if (!path) return false
+  const lowerPath = path.toLowerCase()
+  return lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+}
+
 interface ToolResultInfo {
   content: string | unknown
   is_error?: boolean
@@ -50,6 +59,7 @@ export function MessageBubble({
   threadId
 }: MessageBubbleProps): React.JSX.Element | null {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+  const [collapsedHtmlTools, setCollapsedHtmlTools] = useState<Set<string>>(new Set())
   const isUser = message.role === "user"
   const isTool = message.role === "tool"
 
@@ -57,7 +67,20 @@ export function MessageBubble({
   const shouldShowMessageHead = !isUser && (!previousMessage || previousMessage.role === "user")
 
   // 切换工具调用详情的展开状态
-  const toggleToolExpansion = (toolId: string) => {
+  const toggleToolExpansion = (toolId: string, defaultExpanded = false) => {
+    if (defaultExpanded) {
+      setCollapsedHtmlTools((prev) => {
+        const newSet = new Set(prev)
+        if (newSet.has(toolId)) {
+          newSet.delete(toolId)
+        } else {
+          newSet.add(toolId)
+        }
+        return newSet
+      })
+      return
+    }
+
     setExpandedTools((prev) => {
       const newSet = new Set(prev)
       if (newSet.has(toolId)) {
@@ -184,7 +207,8 @@ export function MessageBubble({
                   ? pendingIds.includes(toolCall.id)
                   : pendingApproval?.tool_call?.id && pendingApproval.tool_call.id === toolCall.id
               );
-              const isExpanded = expandedTools.has(toolId);
+              const isHtmlTool = isHtmlRenderToolCall(toolCall);
+              const isExpanded = isHtmlTool ? !collapsedHtmlTools.has(toolId) : expandedTools.has(toolId);
               const summary = getToolCallSummary(toolCall);
 
               // 如果工具需要审批，使用原来的ToolCallRenderer（批量时隐藏按钮）
@@ -211,7 +235,7 @@ export function MessageBubble({
                 <div key={toolId} className="rounded-sm border overflow-hidden border-border bg-background-elevated">
                   {/* 可折叠的工具标题 */}
                   <button
-                    onClick={() => toggleToolExpansion(toolId)}
+                    onClick={() => toggleToolExpansion(toolId, isHtmlTool)}
                     className="flex w-full items-center gap-2 px-3 py-2 hover:bg-background-interactive transition-colors"
                   >
                     {isExpanded ? (
