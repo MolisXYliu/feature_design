@@ -2036,15 +2036,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
     })
 
-    // Elevated mode: if "setup refresh failed", run elevated setup for this workspace (one-time UAC) and retry
-    if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed")) {
-      console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC...`)
+    // Elevated mode: if "setup refresh failed", run elevated setup for this workspace (one-time UAC) and retry.
+    // Only retry once (attempt === 1) to prevent infinite recursion if setup succeeds but codex.exe keeps failing.
+    if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed") && attempt <= 1) {
+      console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC (attempt=${attempt})...`)
       // runElevatedSetupForPaths / markWorkspaceElevatedSetupDone already imported statically
       const setupResult = await runElevatedSetupForPaths([this.workingDir])
       if (setupResult.success) {
         markWorkspaceElevatedSetupDone(this.workingDir)
-        // Retry the command now that ACLs are in place
-        return this.executeInWindowsSandbox(command, attempt, sandboxModeOverride)
+        // Retry the command once now that ACLs are in place (increment attempt to prevent further retries)
+        return this.executeInWindowsSandbox(command, attempt + 1, sandboxModeOverride, timeoutMs, ignoreAbort)
       }
       return {
         output: `沙箱工作目录配置失败: ${setupResult.error || "未知错误"}。\n请在设置中切换沙箱模式或以管理员身份运行应用。`,

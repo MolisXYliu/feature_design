@@ -127,8 +127,15 @@ function psEscape(s: string): string {
   return s.replace(/'/g, "''")
 }
 
+let _cachedIsCurrentProcessElevated: boolean | null = null
+
 function isCurrentProcessElevated(): boolean {
-  if (process.platform !== "win32") return false
+  if (_cachedIsCurrentProcessElevated !== null) return _cachedIsCurrentProcessElevated
+
+  if (process.platform !== "win32") {
+    _cachedIsCurrentProcessElevated = false
+    return false
+  }
 
   // Use whoami /groups to check for High Mandatory Level SID (S-1-16-12288).
   // This is the only reliable way to confirm the process is truly elevated.
@@ -138,10 +145,11 @@ function isCurrentProcessElevated(): boolean {
   const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
   try {
     const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
-    return output.includes("S-1-16-12288")
+    _cachedIsCurrentProcessElevated = output.includes("S-1-16-12288")
   } catch {
-    return false
+    _cachedIsCurrentProcessElevated = false
   }
+  return _cachedIsCurrentProcessElevated
 }
 
 /**
