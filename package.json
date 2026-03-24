@@ -66,6 +66,9 @@
       }
     ]
   },
+  "optionalDependencies": {
+    "nodejieba": "^3.5.8"
+  },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
     "@fontsource/rajdhani": "^5.2.7",
@@ -103,7 +106,6 @@
     "langchain": "^1.2.28",
     "lucide-react": "^0.469.0",
     "micromatch": "^4.0.8",
-    "nodejieba": "^3.5.8",
     "playwright": "^1.58.2",
     "react-diff-viewer-continued": "^4.1.2",
     "react-markdown": "^10.1.0",
