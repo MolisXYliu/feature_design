@@ -8,65 +8,15 @@
  */
 
 import { tool } from "langchain"
-import { createRequire } from "node:module"
 import { z } from "zod"
-
-type NodeJieba = {
-  cut: (text: string) => string[]
-}
-
-let cachedNodeJieba: NodeJieba | null | undefined
-let didLogNodeJiebaFallback = false
-const nodeRequire = createRequire(__filename)
-
-function getNodeJieba(): NodeJieba | null {
-  if (cachedNodeJieba !== undefined) {
-    return cachedNodeJieba
-  }
-
-  try {
-    const loaded = nodeRequire("nodejieba") as NodeJieba | { default?: NodeJieba }
-    const instance = "cut" in loaded ? loaded : loaded.default
-    cachedNodeJieba = instance?.cut ? instance : null
-  } catch {
-    cachedNodeJieba = null
-  }
-
-  if (!cachedNodeJieba && !didLogNodeJiebaFallback) {
-    console.warn(
-      '[McpToolRegistry] Optional dependency "nodejieba" is unavailable. Falling back to basic Chinese tokenization.'
-    )
-    didLogNodeJiebaFallback = true
-  }
-
-  return cachedNodeJieba
-}
-
-function fallbackCutChinese(segment: string): string[] {
-  const chars = [...segment].map((c) => c.trim()).filter(Boolean)
-  const tokens = new Set<string>()
-  const trimmed = segment.trim()
-  if (trimmed) {
-    tokens.add(trimmed)
-  }
-
-  for (const char of chars) {
-    tokens.add(char)
-  }
-
-  for (let i = 0; i < chars.length - 1; i++) {
-    tokens.add(`${chars[i]}${chars[i + 1]}`)
-  }
-
-  return Array.from(tokens)
-}
+import * as nodejieba from "nodejieba"
 
 // =============================================================================
 // Types
 // =============================================================================
 
 export interface McpToolMetadata {
-  toolId: string // Format: "serverName.toolName"
+  toolId: string        // Format: "serverName.toolName"
   serverName: string
   toolName: string
   description: string
@@ -80,7 +30,7 @@ export interface SearchOptions {
 
 interface McpToolEntry {
   metadata: McpToolMetadata
-  tool: unknown // The actual tool object
+  tool: unknown  // The actual tool object
   schema?: object
 }
 
@@ -104,7 +54,7 @@ export function fixMcpToolSchema(tool: any): void {
 // =============================================================================
 
 class SimpleBM25 {
-  private documents: Map<string, { tokens: string[]; doc: McpToolMetadata }> = new Map()
+  private documents: Map<string, { tokens: string[], doc: McpToolMetadata }> = new Map()
   private avgDocLength = 0
   private documentFrequency: Map<string, number> = new Map()
   private totalDocs = 0
@@ -137,9 +87,9 @@ class SimpleBM25 {
 
   search(query: string, topK: number): McpToolMetadata[] {
     const queryTokens = this.tokenize(query)
-    const scores: { doc: McpToolMetadata; score: number }[] = []
+    const scores: { doc: McpToolMetadata, score: number }[] = []
 
-    for (const { tokens, doc } of this.documents.values()) {
+    for (const [_id, { tokens, doc }] of this.documents) {
       const score = this.computeScore(queryTokens, tokens)
       if (score > 0) {
         scores.push({ doc, score })
@@ -149,7 +99,7 @@ class SimpleBM25 {
     return scores
       .sort((a, b) => b.score - a.score)
       .slice(0, topK)
-      .map((s) => s.doc)
+      .map(s => s.doc)
   }
 
   private computeScore(queryTokens: string[], docTokens: string[]): number {
@@ -195,8 +145,7 @@ class SimpleBM25 {
 
       if (chineseRegex.test(segment)) {
         // Chinese segment: use jieba for word segmentation
-        const jieba = getNodeJieba()
-        const chineseTokens = jieba ? jieba.cut(segment) : fallbackCutChinese(segment)
+        const chineseTokens = nodejieba.cut(segment)
         for (const token of chineseTokens) {
           const trimmed = token.trim().toLowerCase()
           if (trimmed.length > 0) {
@@ -205,14 +154,13 @@ class SimpleBM25 {
         }
       } else {
         // Non-Chinese segment: use original tokenization logic
-        const englishTokens = segment
-          .toLowerCase()
+        const englishTokens = segment.toLowerCase()
           // Handle camelCase and PascalCase: insert space before uppercase letters
-          .replace(/([a-z])([A-Z])/g, "$1 $2") // camelCase: "testName" → "test Name"
+          .replace(/([a-z])([A-Z])/g, "$1 $2")      // camelCase: "testName" → "test Name"
           .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2") // PascalCase/ACRONYM: "APIResponse" → "API Response"
           .replace(/[-_]/g, " ")
-          .split(/[\s\-_.,;:!?()[\]{}'"/\\]+/)
-          .filter((t) => t.length > 1)
+          .split(/[\s\-_.,;:!?()[\]{}'"\/\\]+/)
+          .filter(t => t.length > 1)
 
         tokens.push(...englishTokens)
       }
@@ -286,9 +234,7 @@ export class McpToolRegistry {
       this.bm25.index(toolId, searchText, metadata)
     }
 
-    console.log(
-      `[McpToolRegistry] Registered ${registered} tools from server "${serverName}" (${tools.length - registered} duplicates skipped)`
-    )
+    console.log(`[McpToolRegistry] Registered ${registered} tools from server "${serverName}" (${tools.length - registered} duplicates skipped)`)
   }
 
   /**
@@ -318,7 +264,7 @@ export class McpToolRegistry {
 
     // Apply server filter if specified
     if (serverFilter && serverFilter.length > 0) {
-      results = results.filter((r) => serverFilter.includes(r.serverName))
+      results = results.filter(r => serverFilter.includes(r.serverName))
     }
 
     return results.slice(0, topK)
@@ -326,7 +272,7 @@ export class McpToolRegistry {
 
   private searchKeyword(query: string, limit: number): McpToolMetadata[] {
     const queryLower = query.toLowerCase()
-    const results: { doc: McpToolMetadata; score: number }[] = []
+    const results: { doc: McpToolMetadata, score: number }[] = []
 
     for (const { metadata } of this.tools.values()) {
       const serverMatch = metadata.serverName.toLowerCase().includes(queryLower)
@@ -352,7 +298,7 @@ export class McpToolRegistry {
     return results
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map((r) => r.doc)
+      .map(r => r.doc)
   }
 
   private searchRegex(pattern: string, limit: number): McpToolMetadata[] {
@@ -368,11 +314,7 @@ export class McpToolRegistry {
 
     for (const { metadata } of this.tools.values()) {
       try {
-        if (
-          regex.test(metadata.serverName) ||
-          regex.test(metadata.toolName) ||
-          regex.test(metadata.description)
-        ) {
+        if (regex.test(metadata.serverName) || regex.test(metadata.toolName) || regex.test(metadata.description)) {
           results.push(metadata)
           if (results.length >= limit) break
         }
@@ -473,17 +415,12 @@ export class McpToolRegistry {
 const searchToolSchema = z.object({
   query: z.string().describe("Search query describing the tool capability you need"),
   top_k: z.number().optional().default(5).describe("Maximum number of results to return"),
-  mode: z
-    .enum(["bm25", "keyword", "regex"])
-    .optional()
-    .default("bm25")
-    .describe(
-      "Search mode: bm25 (semantic ranking), keyword (simple contains match), regex (pattern match)"
-    ),
-  server_filter: z
-    .array(z.string())
-    .optional()
-    .describe("Optional list of server names to filter results")
+  mode: z.enum(["bm25", "keyword", "regex"]).optional().default("bm25").describe(
+    "Search mode: bm25 (semantic ranking), keyword (simple contains match), regex (pattern match)"
+  ),
+  server_filter: z.array(z.string()).optional().describe(
+    "Optional list of server names to filter results"
+  )
 })
 
 const loadToolSchema = z.object({
@@ -519,7 +456,7 @@ export function createSearchTool(registry: McpToolRegistry) {
         query,
         mode: options.mode,
         total: results.length,
-        tools: results.map((r) => ({
+        tools: results.map(r => ({
           tool_id: r.toolId,
           server: r.serverName,
           name: r.toolName,
@@ -627,15 +564,10 @@ export function createMcpCallTool(registry: McpToolRegistry) {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           // Retry on connection-related errors (terminated, disconnected, etc.)
-          if (
-            retries > 0 &&
-            (message.includes("terminated") ||
-              message.includes("disconnected") ||
-              message.includes("ECONN"))
-          ) {
+          if (retries > 0 && (message.includes("terminated") || message.includes("disconnected") || message.includes("ECONN"))) {
             console.log(`[mcp_call] Connection error for ${tool_id}, retrying...`)
             // Small delay before retry
-            await new Promise((resolve) => setTimeout(resolve, 500))
+            await new Promise(resolve => setTimeout(resolve, 500))
             return executeWithRetry(retries - 1)
           }
           throw error
@@ -647,7 +579,7 @@ export function createMcpCallTool(registry: McpToolRegistry) {
 
         // Handle MCP tool response format
         if (Array.isArray(result) && result.length === 2) {
-          const [content] = result
+          const [content, _artifact] = result
           return JSON.stringify({
             tool_id,
             success: true,
@@ -685,5 +617,9 @@ export function createMcpCallTool(registry: McpToolRegistry) {
  * Create all three tool search tools
  */
 export function createToolSearchTools(registry: McpToolRegistry): unknown[] {
-  return [createSearchTool(registry), createLoadTool(registry), createMcpCallTool(registry)]
+  return [
+    createSearchTool(registry),
+    createLoadTool(registry),
+    createMcpCallTool(registry)
+  ]
 }
