@@ -1,6 +1,6 @@
 {
   "name": "CMBDevClaw",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "CMBDevClaw description",
   "main": "./out/main/index.js",
   "files": [
@@ -36,7 +36,6 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "generate:update-md": "node scripts/generate-update-md.js",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac"
