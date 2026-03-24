@@ -724,7 +724,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     codexExePath: codexExists ? codexExePath : undefined,
     // Pass a getter so hooks are always read fresh from storage at call time
     hooks: getEnabledHooks,
-    abortSignal: options.abortSignal
+    abortSignal: options.abortSignal,
+    runId: threadId
   })
 
   // ── Wire up the approval orchestrator ──
