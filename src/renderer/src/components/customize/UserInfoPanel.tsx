@@ -26,7 +26,7 @@ const UserInfoPanel: React.FC = () => {
         window.api.models.getUserInfo().then(user => {
             const userInfo = user as UserInfoConfig || {}
             if (userInfo.sapId) {
-                fetch('https://archguardservice.paas.twf.cn/cowork/login-info', {
+                fetch(`https://archguardservice.paas.${import.meta.env.VITE_LOGIN_PT}.cn/cowork/login-info`, {
                     method: 'GET',
                     headers: {
                         ystCode: userInfo.ystCode,
