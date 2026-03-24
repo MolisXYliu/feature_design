@@ -112,6 +112,15 @@ interface AppState {
   evolutionRunProgress: Record<string, EvolutionRunProgress>
   setEvolutionRunProgress: (progress: Record<string, EvolutionRunProgress>) => void
   mergeEvolutionRunProgress: (payload: EvolutionRunProgress) => void
+  // Streaming text from the current/last optimizer LLM call
+  evolutionStreamedText: string
+  setEvolutionStreamedText: (text: string) => void
+  appendEvolutionStreamedText: (chunk: string) => void
+  evolutionStreamError: string | null
+  setEvolutionStreamError: (err: string | null) => void
+  // Options used for the last optimizer run (for retry)
+  evolutionLastRunOpts: { mode?: "auto" | "selected"; traceIds?: string[]; threadId?: string; traceLimit?: number } | null
+  setEvolutionLastRunOpts: (opts: { mode?: "auto" | "selected"; traceIds?: string[]; threadId?: string; traceLimit?: number } | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -136,6 +145,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   evolutionSummary: null,
   evolutionSelectedTraceIds: new Set<string>(),
   evolutionRunProgress: {},
+  evolutionStreamedText: "",
+  evolutionStreamError: null,
+  evolutionLastRunOpts: null,
 
   // Thread actions
   loadThreads: async () => {
@@ -390,7 +402,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.evolutionRunProgress,
         [payload.traceId]: payload
       }
-    }))
+    })),
+  setEvolutionStreamedText: (text) => set({ evolutionStreamedText: text }),
+  appendEvolutionStreamedText: (chunk) =>
+    set((state) => ({ evolutionStreamedText: state.evolutionStreamedText + chunk })),
+  setEvolutionStreamError: (err) => set({ evolutionStreamError: err }),
+  setEvolutionLastRunOpts: (opts) => set({ evolutionLastRunOpts: opts })
 }))
 
 // ─────────────────────────────────────────────────────────

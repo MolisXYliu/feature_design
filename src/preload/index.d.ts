@@ -353,6 +353,9 @@ interface CustomAPI {
         candidateCount?: number
       }) => void
     ) => () => void
+    onStreamStart: (cb: () => void) => () => void
+    onStreamChunk: (cb: (payload: { chunk: string }) => void) => () => void
+    onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void) => () => void
     getCandidates: () => Promise<Array<{
       candidateId: string
       action: "create" | "patch"
