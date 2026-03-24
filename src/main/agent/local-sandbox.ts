@@ -29,6 +29,14 @@ import * as chardet from "jschardet"
 import micromatch from "micromatch"
 import { replace } from "./replace"
 import type { ToolOrchestrator } from "./tool-orchestrator"
+import { assessCommandSafety } from "./exec-policy"
+import {
+  isWorkspaceElevatedSetupDone,
+  isElevatedSetupComplete,
+  runElevatedSetupForPaths,
+  markWorkspaceElevatedSetupDone,
+  normalizeDirKey
+} from "../ipc/sandbox"
 import { homedir, tmpdir } from "node:os"
 import type { HookConfig } from "../hooks/types"
 import { runHooks } from "../hooks/runner"
@@ -100,6 +108,8 @@ export interface LocalSandboxOptions {
    *  When signalled, any in-flight execute() will kill its child process immediately
    *  (SIGTERM → 200ms → SIGKILL), matching OpenCode/Codex abort behaviour. */
   abortSignal?: AbortSignal
+  /** Unique run/thread identifier used for ACL ref-counting across concurrent runs. */
+  runId?: string
 }
 
 /**
@@ -124,6 +134,8 @@ export interface LocalSandboxOptions {
 export class LocalSandbox extends FilesystemBackend implements SandboxBackendProtocol {
   /** Unique identifier for this sandbox instance */
   readonly id: string
+  /** Run/thread identifier for ACL ref-counting (falls back to this.id). */
+  readonly runId: string
 
   private readonly timeout: number
   private readonly maxOutputBytes: number
@@ -227,6 +239,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     })
 
     this.id = `local-sandbox-${randomUUID().slice(0, 8)}`
+    this.runId = options.runId ?? this.id
     this.timeout = options.timeout ?? 60_000 // 1 minute default
     this.maxOutputBytes = options.maxOutputBytes ?? 100_000 // ~100KB default
     const baseEnv = options.env ?? ({ ...process.env } as Record<string, string>)
@@ -1133,16 +1146,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Git Bash (MSYS2) crashes under restricted tokens (NtSetInformationToken fails),
    * so we must skip it and use PowerShell or cmd.exe instead.
    */
+  private static _cachedSandboxShell: { shell: string; flags: string[] } | null = null
+
   private static resolveWindowsSandboxShell(): { shell: string; flags: string[] } {
+    if (LocalSandbox._cachedSandboxShell) return LocalSandbox._cachedSandboxShell
     for (const ps of ["pwsh", "powershell"]) {
       const fullPath = LocalSandbox.whichSync(ps)
       if (fullPath) {
         // -NoProfile: skip user profile scripts to avoid side-effects in output
         // -Command: accept command string (consistent with Codex SDK behavior)
-        return { shell: fullPath, flags: ["-NoProfile", "-Command"] }
+        LocalSandbox._cachedSandboxShell = { shell: fullPath, flags: ["-NoProfile", "-Command"] }
+        return LocalSandbox._cachedSandboxShell
       }
     }
-    return { shell: process.env.COMSPEC || "cmd.exe", flags: ["/c"] }
+    LocalSandbox._cachedSandboxShell = { shell: process.env.COMSPEC || "cmd.exe", flags: ["/c"] }
+    return LocalSandbox._cachedSandboxShell
   }
 
   /** Public accessor for the Windows sandbox shell (PowerShell or cmd.exe). */
@@ -1284,38 +1302,120 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return false
   }
 
-  /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done. */
-  private static grantSandboxWriteAcl(dir: string): Promise<void> {
+  /** Directories that currently have the Everyone ACE granted, with reference count.
+   *  Key = normalized dir path, value = number of active runs using that grant.
+   *  ACL is only revoked when the count drops to 0. */
+  private static readonly _grantedAclRefCount = new Map<string, number>()
+  /** Per-run tracking: which dirs each runId has granted (for correct decrement on cleanup). */
+  private static readonly _runAclDirs = new Map<string, Set<string>>()
+  /** Directories that should never be revoked (e.g. TEMP — public dir, safe to leave open). */
+  private static readonly _permanentAclDirs = new Set<string>()
+
+  /** Grant Everyone Modify on dir (for sandbox restricted token). Returns when done.
+   *  @param runId — identifies the agent run requesting the grant (for ref-counting). */
+  private static grantSandboxWriteAcl(dir: string, runId: string): Promise<void> {
+    const key = normalizeDirKey(dir)
+    // Track this dir for the given run (so cleanup decrements correctly).
+    let runDirs = LocalSandbox._runAclDirs.get(runId)
+    if (!runDirs) {
+      runDirs = new Set()
+      LocalSandbox._runAclDirs.set(runId, runDirs)
+    }
+    // Only increment ref count once per (run, dir) pair — the same run may
+    // call grantSandboxWriteAcl multiple times for the same workingDir.
+    if (!runDirs.has(key)) {
+      runDirs.add(key)
+      const prevCount = LocalSandbox._grantedAclRefCount.get(key) ?? 0
+      LocalSandbox._grantedAclRefCount.set(key, prevCount + 1)
+      // If already granted by another run, skip the icacls call.
+      if (prevCount > 0) {
+        return Promise.resolve()
+      }
+    } else {
+      // Same run already granted this dir — skip entirely.
+      return Promise.resolve()
+    }
     // (OI)(CI) = inherit to files & subdirs so the restricted token can
     // read/write/delete at any depth. Uses async spawn to avoid blocking
     // the event loop on large repos (NTFS propagates inherited ACEs to
     // all existing descendants, which can take tens of seconds).
     return new Promise<void>((resolve) => {
       const proc = spawn("icacls", [dir, "/grant", `${LocalSandbox.EVERYONE_SID}:(OI)(CI)(M)`], { stdio: "ignore" })
+      const timeoutId = setTimeout(() => {
+        console.warn(`[LocalSandbox] icacls grant timed out after ${LocalSandbox.ICACLS_TIMEOUT_MS}ms on ${dir}, killing`)
+        try { proc.kill() } catch { /* already exited */ }
+        resolve()
+      }, LocalSandbox.ICACLS_TIMEOUT_MS)
       proc.on("exit", (code) => {
-        if (code !== 0) console.warn(`[LocalSandbox] icacls grant exited ${code} on ${dir}`)
+        clearTimeout(timeoutId)
+        if (code !== 0) {
+          console.warn(`[LocalSandbox] icacls grant exited ${code} on ${dir}`)
+        }
         resolve()
       })
       proc.on("error", (err) => {
+        clearTimeout(timeoutId)
         console.warn(`[LocalSandbox] icacls grant error on ${dir}:`, err.message)
         resolve()
       })
     })
   }
 
-  /** Remove the Everyone ACE added by grantSandboxWriteAcl. Returns when done. */
+  /** Remove the Everyone ACE added by grantSandboxWriteAcl. Only actually calls
+   *  icacls when the ref count drops to 0 (no other runs using this dir). */
   private static revokeSandboxWriteAcl(dir: string): Promise<void> {
+    const key = normalizeDirKey(dir)
+    const count = LocalSandbox._grantedAclRefCount.get(key) ?? 0
+    // Nothing to revoke if we never granted (or already revoked).
+    if (count <= 0) {
+      LocalSandbox._grantedAclRefCount.delete(key)
+      return Promise.resolve()
+    }
+    // Still in use by other runs — don't revoke yet.
+    if (count > 1) {
+      LocalSandbox._grantedAclRefCount.set(key, count - 1)
+      return Promise.resolve()
+    }
+    // count === 1 → last user, actually revoke
+    LocalSandbox._grantedAclRefCount.delete(key)
     return new Promise<void>((resolve) => {
       const proc = spawn("icacls", [dir, "/remove:g", LocalSandbox.EVERYONE_SID], { stdio: "ignore" })
+      const timeoutId = setTimeout(() => {
+        console.warn(`[LocalSandbox] icacls revoke timed out after ${LocalSandbox.ICACLS_TIMEOUT_MS}ms on ${dir}, killing`)
+        try { proc.kill() } catch { /* already exited */ }
+        resolve()
+      }, LocalSandbox.ICACLS_TIMEOUT_MS)
       proc.on("exit", (code) => {
+        clearTimeout(timeoutId)
         if (code !== 0) console.warn(`[LocalSandbox] icacls revoke exited ${code} on ${dir}`)
         resolve()
       })
       proc.on("error", (err) => {
+        clearTimeout(timeoutId)
         console.warn(`[LocalSandbox] icacls revoke error on ${dir}:`, err.message)
         resolve()
       })
     })
+  }
+
+  /**
+   * Release ACL grants for a specific run. Decrements ref counts and only
+   * actually revokes the ACL when no other runs are using the directory.
+   * @param runId — the agent run that is ending.
+   */
+  static async revokeGrantedAclsForRun(runId: string): Promise<void> {
+    const runDirs = LocalSandbox._runAclDirs.get(runId)
+    if (!runDirs || runDirs.size === 0) {
+      LocalSandbox._runAclDirs.delete(runId)
+      return
+    }
+    const dirsToRevoke = [...runDirs].filter(
+      (key) => !LocalSandbox._permanentAclDirs.has(key)
+    )
+    LocalSandbox._runAclDirs.delete(runId)
+    if (dirsToRevoke.length === 0) return
+    console.log(`[LocalSandbox] revokeGrantedAclsForRun(${runId}): releasing ${dirsToRevoke.length} dirs`)
+    await Promise.all(dirsToRevoke.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
   }
 
   /** Sandbox user names used by elevated mode. */
@@ -1325,25 +1425,42 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Grant elevated sandbox users read+write ACL on a workspace directory via icacls.
    * No UAC needed — the current user owns the directory so they can modify its ACLs.
    */
+  /** Timeout for icacls ACL operations (30 seconds). */
+  private static readonly ICACLS_TIMEOUT_MS = 30_000
+
   private static grantElevatedWorkspaceAcl(dir: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      // Grant both sandbox users Modify permission with inheritance
+      // Grant both sandbox users Modify permission with inheritance.
+      // (OI)(CI) = Object Inherit + Container Inherit — new files/dirs inherit automatically.
+      // Intentionally NO /T flag: /T recursively touches every existing file's ACL, which
+      // can take minutes on large repos (node_modules alone can have 100k+ files).
+      // codex.exe handles existing-file access internally; we only need the top-level grant
+      // so the sandbox user can enter the directory and inheritance covers the rest.
       const args: string[] = [dir]
       for (const user of LocalSandbox.ELEVATED_SANDBOX_USERS) {
         args.push("/grant", `${user}:(OI)(CI)(M)`)
       }
-      args.push("/T", "/Q")
+      args.push("/Q")
       const proc = spawn("icacls", args, { stdio: "pipe" })
       let stderr = ""
+      const timeoutId = setTimeout(() => {
+        console.warn(`[LocalSandbox] icacls elevated grant timed out after ${LocalSandbox.ICACLS_TIMEOUT_MS}ms on ${dir}, killing`)
+        try { proc.kill() } catch { /* already exited */ }
+        resolve() // Don't block execution — codex.exe will handle ACL internally
+      }, LocalSandbox.ICACLS_TIMEOUT_MS)
       proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString() })
       proc.on("exit", (code) => {
+        clearTimeout(timeoutId)
         if (code === 0) {
           resolve()
         } else {
           reject(new Error(`icacls exited ${code}: ${stderr.trim()}`))
         }
       })
-      proc.on("error", (err) => reject(err))
+      proc.on("error", (err) => {
+        clearTimeout(timeoutId)
+        reject(err)
+      })
     })
   }
 
@@ -1439,10 +1556,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       if (result.output) task.outputChunks.push(result.output)
       task.completed = true
       console.log(`[LocalSandbox] background task ${taskId} completed: exitCode=${result.exitCode}`)
+      // Auto-cleanup completed tasks after 10 minutes to prevent memory leaks.
+      // The agent has plenty of time to poll for the result before it expires.
+      setTimeout(() => {
+        LocalSandbox.backgroundTasks.delete(taskId)
+        console.log(`[LocalSandbox] background task ${taskId} expired, cleaned up`)
+      }, 10 * 60 * 1000)
     }).catch(err => {
       task.result = { output: `Error: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1, truncated: false }
       task.completed = true
       console.log(`[LocalSandbox] background task ${taskId} errored: ${err}`)
+      setTimeout(() => {
+        LocalSandbox.backgroundTasks.delete(taskId)
+      }, 10 * 60 * 1000)
     })
 
     return taskId
@@ -1480,7 +1606,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     console.log(`[LocalSandbox] execute: hasOrchestrator=${!!this.orchestrator} sandbox=${this.windowsSandbox}`)
 
     // Always check forbidden commands, even without orchestrator (YOLO mode safety net)
-    const { assessCommandSafety } = await import("./exec-policy")
     const safety = assessCommandSafety(command, this.workingDir, {
       windowsShell: process.platform === "win32" && this.windowsSandbox !== "none" ? "powershell" : "unknown",
       enforceGitWorkflowCommitOnly: this.enforceGitWorkflowCommitOnly
@@ -1594,6 +1719,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
   private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number, ignoreAbort?: boolean): Promise<ExecuteResponse> {
+    const methodStartMs = Date.now()
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
     const isElevatedSandbox = effectiveMode === "elevated"
 
@@ -1602,8 +1728,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // "setup refresh failed" (which triggers a reactive UAC mid-command).
     // Using persistent cache so workspaces only need setup once, across restarts.
     if (isElevatedSandbox && attempt === 1) {
-      const { isWorkspaceElevatedSetupDone, isElevatedSetupComplete, runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } =
-        await import("../ipc/sandbox")
+      console.log(`[LocalSandbox] elevated: checking workspace setup at +${Date.now() - methodStartMs}ms`)
       if (!isWorkspaceElevatedSetupDone(this.workingDir)) {
         if (isElevatedSetupComplete()) {
           // Initial setup already done (sandbox user exists). For new workspaces, just grant
@@ -1636,6 +1761,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
+    console.log(`[LocalSandbox] elevated: pre-setup done at +${Date.now() - methodStartMs}ms, resolving shell...`)
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
 
     // Force UTF-8 for all output streams (stdout + stderr).
@@ -1710,14 +1836,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       if (!isReadonly || elevated) {
         aclDirs.push(this.workingDir)
       }
-      // Always grant TEMP write for non-elevated sandbox modes — even readonly non-admin
-      // needs it for commands that create temp files.
+      // TEMP is granted once and marked permanent — never revoked because it's a public
+      // temp directory. This avoids 2 icacls spawns (grant + revoke) per command.
       const tmpDir = process.env.TEMP || process.env.TMP
-      if (tmpDir && !aclDirs.includes(tmpDir)) {
-        aclDirs.push(tmpDir)
+      if (tmpDir) {
+        const tmpKey = normalizeDirKey(tmpDir)
+        if (!LocalSandbox._permanentAclDirs.has(tmpKey)) {
+          aclDirs.push(tmpDir)
+          LocalSandbox._permanentAclDirs.add(tmpKey)
+        }
       }
       const aclGrantStart = Date.now()
-      await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir)))
+      await Promise.all(aclDirs.map((dir) => LocalSandbox.grantSandboxWriteAcl(dir, this.runId)))
       console.log(`[LocalSandbox] ACL grant took ${Date.now() - aclGrantStart}ms for ${aclDirs.length} dirs`)
     }
 
@@ -1914,15 +2044,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       })
     })
 
-    // Elevated mode: if "setup refresh failed", run elevated setup for this workspace (one-time UAC) and retry
-    if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed")) {
-      console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC...`)
-      const { runElevatedSetupForPaths, markWorkspaceElevatedSetupDone } = await import("../ipc/sandbox")
+    // Elevated mode: if "setup refresh failed", run elevated setup for this workspace (one-time UAC) and retry.
+    // Only retry once (attempt === 1) to prevent infinite recursion if setup succeeds but codex.exe keeps failing.
+    if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed") && attempt <= 1) {
+      console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC (attempt=${attempt})...`)
+      // runElevatedSetupForPaths / markWorkspaceElevatedSetupDone already imported statically
       const setupResult = await runElevatedSetupForPaths([this.workingDir])
       if (setupResult.success) {
         markWorkspaceElevatedSetupDone(this.workingDir)
-        // Retry the command now that ACLs are in place
-        return this.executeInWindowsSandbox(command, attempt, sandboxModeOverride)
+        // Retry the command once now that ACLs are in place (increment attempt to prevent further retries)
+        return this.executeInWindowsSandbox(command, attempt + 1, sandboxModeOverride, timeoutMs, ignoreAbort)
       }
       return {
         output: `沙箱工作目录配置失败: ${setupResult.error || "未知错误"}。\n请在设置中切换沙箱模式或以管理员身份运行应用。`,
@@ -1947,11 +2078,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     console.log(`[LocalSandbox] executeInWindowsSandbox total: ${Date.now() - execStartMs}ms, command="${command.slice(0, 80)}"`)
     return result
     } finally {
-      if (aclDirs.length > 0) {
-        const aclRevokeStart = Date.now()
-        await Promise.all(aclDirs.map((dir) => LocalSandbox.revokeSandboxWriteAcl(dir)))
-        console.log(`[LocalSandbox] ACL revoke took ${Date.now() - aclRevokeStart}ms`)
-      }
+      // ACL revoke is deferred — kept granted across commands in the same session
+      // to avoid redundant icacls spawns. Cleanup happens in revokeGrantedAclsForRun()
+      // which is called when the agent run ends (decrements ref-count per run).
     }
   }
 

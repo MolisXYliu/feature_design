@@ -25,6 +25,11 @@ const SETUP_VERSION = 5
 /** Persistent + session cache of workspace dirs that have had elevated ACL setup done. */
 const elevatedSetupDirs = new Set<string>()
 
+/** Normalize a directory path for consistent cache lookups (lowercase, no trailing slash, backslashes). */
+export function normalizeDirKey(dir: string): string {
+  return resolve(dir).replace(/\/+/g, "\\").replace(/\\+$/, "").toLowerCase()
+}
+
 /** Load previously configured workspace paths from disk into the in-memory set. */
 function loadElevatedWorkspaceDirs(): void {
   try {
@@ -32,7 +37,7 @@ function loadElevatedWorkspaceDirs(): void {
     const data = JSON.parse(readFileSync(ELEVATED_WORKSPACES_PATH, "utf-8"))
     if (Array.isArray(data.paths)) {
       for (const p of data.paths) {
-        if (typeof p === "string") elevatedSetupDirs.add(p)
+        if (typeof p === "string") elevatedSetupDirs.add(normalizeDirKey(p))
       }
     }
   } catch {
@@ -122,8 +127,15 @@ function psEscape(s: string): string {
   return s.replace(/'/g, "''")
 }
 
+let _cachedIsCurrentProcessElevated: boolean | null = null
+
 function isCurrentProcessElevated(): boolean {
-  if (process.platform !== "win32") return false
+  if (_cachedIsCurrentProcessElevated !== null) return _cachedIsCurrentProcessElevated
+
+  if (process.platform !== "win32") {
+    _cachedIsCurrentProcessElevated = false
+    return false
+  }
 
   // Use whoami /groups to check for High Mandatory Level SID (S-1-16-12288).
   // This is the only reliable way to confirm the process is truly elevated.
@@ -133,10 +145,11 @@ function isCurrentProcessElevated(): boolean {
   const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
   try {
     const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
-    return output.includes("S-1-16-12288")
+    _cachedIsCurrentProcessElevated = output.includes("S-1-16-12288")
   } catch {
-    return false
+    _cachedIsCurrentProcessElevated = false
   }
+  return _cachedIsCurrentProcessElevated
 }
 
 /**
@@ -294,7 +307,7 @@ export async function runElevatedSetupForPaths(
   // Mark these directories as set up for this session
   if (workspacePaths) {
     for (const p of workspacePaths) {
-      if (p) elevatedSetupDirs.add(p)
+      if (p) elevatedSetupDirs.add(normalizeDirKey(p))
     }
   }
 
@@ -304,14 +317,13 @@ export async function runElevatedSetupForPaths(
   return { success: false, error: "沙箱配置未完成，请重试" }
 }
 
-/** Check if a workspace directory has had elevated ACL setup in this session. */
 export function isWorkspaceElevatedSetupDone(dir: string): boolean {
-  return elevatedSetupDirs.has(dir)
+  return elevatedSetupDirs.has(normalizeDirKey(dir))
 }
 
 /** Mark a workspace directory as having elevated ACL setup done, and persist to disk. */
 export function markWorkspaceElevatedSetupDone(dir: string): void {
-  elevatedSetupDirs.add(dir)
+  elevatedSetupDirs.add(normalizeDirKey(dir))
   saveElevatedWorkspaceDirs()
 }
 

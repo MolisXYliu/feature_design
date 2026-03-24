@@ -28,6 +28,7 @@ import {
 import { mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import { v4 as uuid } from "uuid"
+import { LocalSandbox } from "../agent/local-sandbox"
 import { SkillUsageDetector } from "../agent/skill-evolution/usage-detector"
 import { ToolCallCounter } from "../agent/skill-evolution/tool-call-counter"
 import {
@@ -1098,6 +1099,12 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       }
     } finally {
       activeRuns.delete(threadId)
+      // Clean up sandbox ACLs granted during this run (unelevated mode keeps them
+      // across commands for performance, so we revoke them when the run ends).
+      // Uses threadId to only release this run's ref-counts, not other concurrent runs'.
+      LocalSandbox.revokeGrantedAclsForRun(threadId).catch((err) => {
+        console.warn("[Agent] ACL cleanup error:", err)
+      })
     }
   })
 
