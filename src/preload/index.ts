@@ -23,6 +23,11 @@ const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
   openLoginWindow:()=>ipcRenderer.invoke('open-login-window'),
   closeLoginWindow:()=>ipcRenderer.invoke('close-login-window'),
+  onNotifyMsg: (callback: (msg:string)=>void)=>{
+    ipcRenderer.on('notify-login-msg', (_event, data) => {
+      callback(data)
+    })
+  },
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
     on: (channel: string, listener: (...args: unknown[]) => void) => {
@@ -713,6 +718,24 @@ const api = {
       })
       ipcRenderer.on("optimizer:runProgress", handler)
       return () => ipcRenderer.removeListener("optimizer:runProgress", handler)
+    },
+    /** Listen to optimizer LLM stream start (resets buffer). */
+    onStreamStart: (cb: () => void): (() => void) => {
+      const handler = () => cb()
+      ipcRenderer.on("optimizer:streamStart", handler)
+      return () => ipcRenderer.removeListener("optimizer:streamStart", handler)
+    },
+    /** Listen to optimizer LLM stream chunks. */
+    onStreamChunk: (cb: (payload: { chunk: string }) => void): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as { chunk: string })
+      ipcRenderer.on("optimizer:streamChunk", handler)
+      return () => ipcRenderer.removeListener("optimizer:streamChunk", handler)
+    },
+    /** Listen to optimizer LLM stream end. */
+    onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void): (() => void) => {
+      const handler = (_: unknown, payload: unknown) => cb(payload as { success: boolean; error?: string })
+      ipcRenderer.on("optimizer:streamEnd", handler)
+      return () => ipcRenderer.removeListener("optimizer:streamEnd", handler)
     },
     /** Get current in-memory candidates */
     getCandidates: (): Promise<Array<{

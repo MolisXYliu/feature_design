@@ -354,9 +354,9 @@ if (!gotTheLock) {
           },
         })
       }
-      loginWindow.loadURL("https://oa-auth.paas.twf.com/auth/sso-login" +
+      loginWindow.loadURL(`https://oa-auth.paas.${import.meta.env.VITE_LOGIN_PT}.com/auth/sso-login` +
         "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
-        "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.twf.cn/login.html`) +
+        "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.${import.meta.env.VITE_LOGIN_PT}.cn/login.html`) +
         "&response_type=code")
     })
 
@@ -366,7 +366,7 @@ if (!gotTheLock) {
         loginWindow = null
       }
       if(mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.reload()
+        mainWindow.webContents.send("notify-login-msg",'login')
       }
     })
 

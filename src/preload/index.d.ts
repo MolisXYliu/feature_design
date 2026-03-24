@@ -21,6 +21,7 @@ interface ElectronAPI {
   openExternal: Promise
   openLoginWindow:()=>void
   closeLoginWindow:()=>void
+  onNotifyMsg: (callback: (msg:string)=>void)=>void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void
@@ -353,6 +354,9 @@ interface CustomAPI {
         candidateCount?: number
       }) => void
     ) => () => void
+    onStreamStart: (cb: () => void) => () => void
+    onStreamChunk: (cb: (payload: { chunk: string }) => void) => () => void
+    onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void) => () => void
     getCandidates: () => Promise<Array<{
       candidateId: string
       action: "create" | "patch"
