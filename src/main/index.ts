@@ -326,7 +326,7 @@ if (!gotTheLock) {
         loginWindow = null
       }
       if(mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.reload()
+        mainWindow.webContents.send("notify-login-msg",'login')
       }
     })
 
