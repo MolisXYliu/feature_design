@@ -67,5 +67,5 @@ export function getToolLabel(toolName: string): string {
     return formatMappedLabel(toolName, "Chrome 计算机操作")
   }
 
-  return `未知工具（${toolName}）`
+  return toolName
 }
