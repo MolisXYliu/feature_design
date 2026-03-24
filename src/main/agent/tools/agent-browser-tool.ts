@@ -138,13 +138,20 @@ function runCommand(
 }
 
 function looksLikeMissingBinary(result: CommandRunResult): boolean {
-  const text = `${result.spawnError ?? ""}\n${result.stderr}`.toLowerCase()
-  return (
-    text.includes("enoent") ||
-    text.includes("not found") ||
-    text.includes("not recognized as an internal or external command") ||
-    text.includes("could not determine executable to run")
-  )
+  const spawnText = (result.spawnError ?? "").toLowerCase()
+  const stderrText = result.stderr.toLowerCase()
+  const combined = `${spawnText}\n${stderrText}`
+
+  if (combined.includes("enoent")) return true
+  if (combined.includes("could not determine executable to run")) return true
+  if (combined.includes("not recognized as an internal or external command")) return true
+
+  // Avoid false positives like "Element not found" from runtime command failures.
+  if (stderrText.includes("command not found")) return true
+  if (stderrText.includes("agent-browser: not found")) return true
+  if (stderrText.includes("'agent-browser' is not recognized")) return true
+
+  return false
 }
 
 function buildAgentBrowserArgs(
@@ -168,6 +175,27 @@ function buildAgentBrowserArgs(
   return args
 }
 
+function normalizeLegacyCommandArgs(args: string[]): {
+  normalizedArgs: string[]
+  normalizedFrom?: string
+} {
+  if (args.length === 0) return { normalizedArgs: args }
+
+  const [command, ...rest] = args
+  const lower = command.toLowerCase()
+
+  // Compatibility for older prompts/examples that used `page`.
+  // Current agent-browser CLI uses `snapshot` for page accessibility output.
+  if (lower === "page") {
+    return {
+      normalizedArgs: ["snapshot", ...rest],
+      normalizedFrom: command
+    }
+  }
+
+  return { normalizedArgs: args }
+}
+
 function buildMissingInstallGuidance(attempts: CommandRunResult[]): string {
   return JSON.stringify({
     success: false,
@@ -187,7 +215,11 @@ export function createAgentBrowserTool(workspacePath: string) {
   return tool(
     async (input) => {
       const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
-      const args = buildAgentBrowserArgs(workspacePath, input)
+      const normalized = normalizeLegacyCommandArgs(input.args)
+      const args = buildAgentBrowserArgs(workspacePath, {
+        ...input,
+        args: normalized.normalizedArgs
+      })
 
       const firstAttempt = await runCommand("agent-browser", args, timeoutMs, input.stdin)
       if (!looksLikeMissingBinary(firstAttempt)) {
@@ -196,6 +228,7 @@ export function createAgentBrowserTool(workspacePath: string) {
           command: `${firstAttempt.command} ${firstAttempt.args.join(" ")}`.trim(),
           exitCode: firstAttempt.exitCode,
           timedOut: firstAttempt.timedOut,
+          normalizedFrom: normalized.normalizedFrom,
           stdout: firstAttempt.stdout.trim(),
           stderr: firstAttempt.stderr.trim()
         })
@@ -209,6 +242,7 @@ export function createAgentBrowserTool(workspacePath: string) {
           command: `${secondAttempt.command} ${secondAttempt.args.join(" ")}`.trim(),
           exitCode: secondAttempt.exitCode,
           timedOut: secondAttempt.timedOut,
+          normalizedFrom: normalized.normalizedFrom,
           stdout: secondAttempt.stdout.trim(),
           stderr: secondAttempt.stderr.trim()
         })
