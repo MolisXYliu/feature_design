@@ -36,9 +36,14 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "clean:win-code-exe": "node -e \"require('fs').rmSync('resources/bin/win32/codex.exe', { force: true })\"",
+    "predist": "npm run clean:win-code-exe",
+    "predist:win": "npm run clean:win-code-exe && npm run server:cache",
+    "predist:mac": "npm run clean:win-code-exe",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac"
+    "dist:mac": "npm run build && electron-builder --mac",
+    "server:cache": "node scripts/server-cache.js"
   },
   "build": {
     "appId": "com.cmbdevclaw.com",
