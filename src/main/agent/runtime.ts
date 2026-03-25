@@ -439,7 +439,15 @@ function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unele
   const shellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
-      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      ? `- **CRITICAL: Commands run in PowerShell (not bash).** You MUST use PowerShell syntax:
+  - Chain commands: use \`; \` instead of \`&&\` (PowerShell 5.1 does NOT support \`&&\`)
+  - Logic operators: use \`-and\`, \`-or\` instead of \`&&\`, \`||\`
+  - Environment variables: use \`$env:VAR\` instead of \`$VAR\`
+  - Null redirect: use \`$null\` or \`Out-Null\` instead of \`/dev/null\`
+  - Line continuation: use backtick \` instead of \`\\\`
+  - Common equivalents: \`Get-ChildItem\` (ls), \`Get-Content\` (cat), \`Select-String\` (grep), \`Remove-Item\` (rm)
+  - You may also use standard Windows commands: dir, type, findstr, del, copy, move, mkdir, rmdir
+  - NEVER use bash-specific syntax: $(), \${}, <<<, <(), 2>&1 |, [[ ]], etc.`
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -836,7 +844,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
-      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      ? `- **CRITICAL: Commands run in PowerShell (not bash).** Use \`; \` instead of \`&&\`, \`$env:VAR\` instead of \`$VAR\`, \`-and\`/\`-or\` instead of \`&&\`/\`||\`. NEVER use bash syntax.`
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.
