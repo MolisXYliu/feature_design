@@ -1168,6 +1168,40 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return LocalSandbox.resolveWindowsSandboxShell().shell
   }
 
+  /**
+   * Build a sandbox-safe copy of env with PATH reordered:
+   * System32 and System32\Wbem are moved to the front so native Windows
+   * executables (whoami, find, sort, etc.) are found before MSYS2/Git
+   * equivalents that crash under restricted tokens (STATUS_DLL_NOT_FOUND).
+   */
+  private static buildSandboxEnv(env: Record<string, string>): Record<string, string> {
+    const result = { ...env }
+    const sep = path.delimiter
+    const sys32 = (env.SystemRoot || env.windir || "C:\\Windows") + "\\System32"
+    const sys32Lower = sys32.toLowerCase()
+    const parts = (result.PATH || result.Path || "").split(sep)
+    // Partition: system32 paths first, then the rest (filtering out Git usr/bin MSYS2 paths)
+    const system: string[] = []
+    const rest: string[] = []
+    for (const p of parts) {
+      const lower = p.toLowerCase()
+      if (lower.startsWith(sys32Lower)) {
+        system.push(p)
+      } else if (lower.includes("\\usr\\bin") && lower.includes("git")) {
+        // Skip Git MSYS2 usr/bin — these binaries crash under restricted tokens
+      } else {
+        rest.push(p)
+      }
+    }
+    // Ensure System32 is present even if not in original PATH
+    if (!system.some(s => s.toLowerCase() === sys32Lower)) {
+      system.unshift(sys32)
+    }
+    const pathKey = result.PATH !== undefined ? "PATH" : "Path"
+    result[pathKey] = [...system, ...rest].join(sep)
+    return result
+  }
+
   private static resolveShell(): string {
     const isWindows = process.platform === "win32"
     const userShell = process.env.SHELL
@@ -1870,10 +1904,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       console.log(`[LocalSandbox] spawn: ${this.codexExePath} ${JSON.stringify(sandboxArgs)}`)
       console.log(`[LocalSandbox] cwd: ${this.workingDir}`)
 
+      // Build sandbox-safe env: ensure System32 is before Git usr/bin in PATH.
+      // MSYS2 binaries (from Git usr/bin) crash under restricted tokens due to
+      // DLL load failures (0xC0000135). Prioritizing System32 ensures native
+      // Windows executables (whoami, find, sort, etc.) are found first.
+      const sandboxEnv = LocalSandbox.buildSandboxEnv(this.env)
+
       // spawn() reports ENOENT asynchronously via the "error" event, not by throwing
       const proc = spawn(this.codexExePath, sandboxArgs, {
         cwd: this.workingDir,
-        env: this.env,
+        env: sandboxEnv,
         stdio: ["ignore", "pipe", "pipe"]
       })
 
