@@ -9,7 +9,15 @@
 
 import { tool } from "langchain"
 import { z } from "zod"
-import * as nodejieba from "nodejieba"
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Segment = require("segment") as new () => {
+  useDefault(): void
+  doSegment(text: string, options?: { simple?: boolean; stripPunctuation?: boolean }): string[]
+}
+
+const segmenter = new Segment()
+segmenter.useDefault()
 
 // =============================================================================
 // Types
@@ -144,8 +152,8 @@ class SimpleBM25 {
       const segment = match[0]
 
       if (chineseRegex.test(segment)) {
-        // Chinese segment: use jieba for word segmentation
-        const chineseTokens = nodejieba.cut(segment)
+        // Chinese segment: use segment for word segmentation
+        const chineseTokens = segmenter.doSegment(segment, { simple: true, stripPunctuation: true })
         for (const token of chineseTokens) {
           const trimmed = token.trim().toLowerCase()
           if (trimmed.length > 0) {
