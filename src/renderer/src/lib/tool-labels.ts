@@ -50,21 +50,36 @@ function titleCaseWords(text: string): string {
     .join(" ")
 }
 
-function formatMappedLabel(toolName: string, chineseLabel: string): string {
+interface ToolLabelOptions {
+  showToolName?: boolean
+}
+
+function formatMappedLabel(
+  toolName: string,
+  chineseLabel: string,
+  options?: ToolLabelOptions
+): string {
+  if (options?.showToolName === false) return chineseLabel
   return `${chineseLabel}（${toolName}）`
 }
 
-export function getToolLabel(toolName: string): string {
+export function getToolLabel(toolName: string, options?: ToolLabelOptions): string {
   const exact = TOOL_LABELS[toolName]
-  if (exact) return formatMappedLabel(toolName, exact)
+  if (exact) return formatMappedLabel(toolName, exact, options)
+
+  // For compact/collapsed display, if no explicit Chinese mapping exists,
+  // keep the original tool name instead of synthesizing a Chinese label.
+  if (options?.showToolName === false) {
+    return toolName
+  }
 
   if (toolName.startsWith("chrome_")) {
     const suffix = toolName.slice("chrome_".length)
-    return formatMappedLabel(toolName, `Chrome 工具：${titleCaseWords(suffix)}`)
+    return formatMappedLabel(toolName, `Chrome 工具：${titleCaseWords(suffix)}`, options)
   }
 
   if (toolName.includes("computer")) {
-    return formatMappedLabel(toolName, "Chrome 计算机操作")
+    return formatMappedLabel(toolName, "Chrome 计算机操作", options)
   }
 
   return toolName
