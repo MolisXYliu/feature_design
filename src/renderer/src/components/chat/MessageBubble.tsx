@@ -58,7 +58,7 @@ export function MessageBubble({
   onApprovalDecision,
   threadId
 }: MessageBubbleProps): React.JSX.Element | null {
-  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+  const [collapsedTools, setCollapsedTools] = useState<Set<string>>(new Set())
   const [collapsedHtmlTools, setCollapsedHtmlTools] = useState<Set<string>>(new Set())
   const isUser = message.role === "user"
   const isTool = message.role === "tool"
@@ -81,7 +81,7 @@ export function MessageBubble({
       return
     }
 
-    setExpandedTools((prev) => {
+    setCollapsedTools((prev) => {
       const newSet = new Set(prev)
       if (newSet.has(toolId)) {
         newSet.delete(toolId)
@@ -208,7 +208,7 @@ export function MessageBubble({
                   : pendingApproval?.tool_call?.id && pendingApproval.tool_call.id === toolCall.id
               );
               const isHtmlTool = isHtmlRenderToolCall(toolCall);
-              const isExpanded = isHtmlTool ? !collapsedHtmlTools.has(toolId) : expandedTools.has(toolId);
+              const isExpanded = isHtmlTool ? collapsedHtmlTools.has(toolId) : collapsedTools.has(toolId);
               const summary = getToolCallSummary(toolCall);
 
               // 如果工具需要审批，使用原来的ToolCallRenderer（批量时隐藏按钮）
