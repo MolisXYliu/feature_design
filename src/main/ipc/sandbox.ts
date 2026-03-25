@@ -1,7 +1,7 @@
 import { app, BrowserWindow, IpcMain } from "electron"
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from "fs"
 import { execFile, execSync } from "child_process"
-import { homedir } from "os"
+import { homedir, tmpdir } from "os"
 import { join, resolve } from "path"
 import {
   getWindowsSandboxMode,
@@ -274,27 +274,38 @@ export async function runElevatedSetupForPaths(
         })
       })
     } else {
-      // Use array-based arguments to avoid PowerShell parsing issues with special characters
-      const psScript = `
-        $p = Start-Process -FilePath "${setupExe.replace(/"/g, '`"')}" \`
-          -ArgumentList "${b64.replace(/"/g, '`"')}" \`
-          -Verb RunAs \`
-          -Wait \`
-          -PassThru \`
-          -WindowStyle Hidden
-        if ($null -eq $p) { exit 1 }
-        exit $p.ExitCode
-      `.trim()
+      // Write PS script to a temp file to avoid command-line length limits and encoding
+      // corruption that occur when passing long base64 payloads via -Command inline.
+      const tmpScript = join(tmpdir(), `sandbox-setup-${process.pid}-${Date.now()}.ps1`)
+      const psScript = [
+        `$p = Start-Process -FilePath '${setupExe.replace(/'/g, "''")}' \``,
+        `  -ArgumentList '${b64}' \``,
+        `  -Verb RunAs \``,
+        `  -Wait \``,
+        `  -PassThru \``,
+        `  -WindowStyle Hidden`,
+        `if ($null -eq $p) { exit 1 }`,
+        `exit $p.ExitCode`,
+      ].join("\r\n")
+      writeFileSync(tmpScript, psScript, "utf-8")
 
-      await new Promise<void>((resolve, reject) => {
-        execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command", psScript], {
-          timeout: 120_000,
-          windowsHide: false
-        }, (err) => {
-          if (err) reject(err)
-          else resolve()
+      try {
+        await new Promise<void>((resolve, reject) => {
+          execFile("powershell", [
+            "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-File", tmpScript
+          ], {
+            timeout: 120_000,
+            windowsHide: false
+          }, (err) => {
+            if (err) reject(err)
+            else resolve()
+          })
         })
-      })
+      } finally {
+        try { unlinkSync(tmpScript) } catch {}
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -379,7 +390,12 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
         if (!isElevatedSetupComplete()) {
           const result = await runElevatedSetupForPaths()
           if (!result.success) {
-            throw new Error(result.error || "管理员沙箱配置失败")
+            // Elevated setup failed — fall back to unelevated mode instead of blocking the app
+            console.warn(`[Sandbox NUX] elevated setup failed, falling back to unelevated: ${result.error}`)
+            setWindowsSandboxMode("unelevated")
+            setSandboxNuxCompleted()
+            notifyChanged()
+            return
           }
         }
         setWindowsSandboxMode(mode)
