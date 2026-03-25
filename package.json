@@ -70,9 +70,6 @@
       }
     ]
   },
-  "optionalDependencies": {
-    "nodejieba": "^3.5.8"
-  },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
     "@fontsource/rajdhani": "^5.2.7",
