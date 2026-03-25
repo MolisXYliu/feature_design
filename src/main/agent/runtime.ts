@@ -56,6 +56,9 @@ import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
 import { createGitWorkflowTool } from "./tools/git-workflow-tool"
+import { createAgentBrowserTool } from "./tools/agent-browser-tool"
+import { createPlaywrightTool } from "./tools/playwright-tool"
+import { createPlaywrightCliTool } from "./tools/playwright-cli-tool"
 import {
   McpToolRegistry,
   createToolSearchTools,
@@ -108,6 +111,42 @@ export function getOrCreateApprovalStore(threadId: string): ApprovalStore {
 
 const BASE_PROMPT =
   "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+
+const BUILTIN_MCP_CHROME_URL = "http://127.0.0.1:12306/mcp"
+const BUILTIN_MCP_CHROME_ID = "__builtin_mcp_chrome__"
+const BUILTIN_MCP_CHROME_NAME = "mcp-chrome"
+
+function normalizeMcpUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "").toLowerCase()
+}
+
+function isChromeToolName(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false
+  const normalized = toolName.trim().toLowerCase()
+  return (
+    normalized.startsWith("chrome_")
+    || normalized.includes("chrome_computer")
+    || normalized === "computer"
+    || normalized === "computer_use"
+  )
+}
+
+function isChromeMcpUnavailableError(message: string): boolean {
+  const msg = message.toLowerCase()
+  return (
+    msg.includes("econnrefused") ||
+    msg.includes("127.0.0.1:12306") ||
+    msg.includes("connect") ||
+    msg.includes("connection") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("fetch failed") ||
+    msg.includes("server disconnected") ||
+    msg.includes("socket hang up") ||
+    msg.includes("mcp") ||
+    msg.includes("transport")
+  )
+}
 
 const SEQUENTIAL_TASK_PROMPT = `## \`task\` (subagent spawner)
 
@@ -724,7 +763,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     codexExePath: codexExists ? codexExePath : undefined,
     // Pass a getter so hooks are always read fresh from storage at call time
     hooks: getEnabledHooks,
-    abortSignal: options.abortSignal
+    abortSignal: options.abortSignal,
+    runId: threadId
   })
 
   // ── Wire up the approval orchestrator ──
@@ -813,6 +853,13 @@ ${subagentShellGuidance}
 - glob: find files matching a pattern (e.g., "**/*.py")
 - grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
 - git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
+- When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
+- chrome_*: browser automation and page interaction tools provided by mcp-chrome via MCP (http://127.0.0.1:12306/mcp). These tools become available after the mcp-chrome extension bridge is connected.
+- browser_playwright: browser automation and page interaction tool powered by project-local Playwright (no extra global install step required).
+- playwright_cli: browser automation via @playwright/cli command interface.
+- agent_browser: legacy browser automation tool powered by vercel-labs/agent-browser CLI.
+- Browser tool priority: always prefer chrome_* tools first for browser tasks; if chrome_* is unavailable/unreachable, fallback to browser_playwright first, then playwright_cli; only use agent_browser when explicitly requested or other browser tools are unavailable.
+- If any chrome_* call fails because MCP is unavailable/unreachable, immediately fallback to browser_playwright for the same browsing task.
 
 The workspace root is: ${workspacePath}`
 
@@ -847,7 +894,28 @@ The workspace root is: ${workspacePath}`
     console.log("[Runtime] Memory disabled by user setting")
   }
 
-  const mcpConnectors = getEnabledMcpConnectors()
+  const enabledMcpConnectors = getEnabledMcpConnectors()
+  const hasBuiltinChromeConnector = enabledMcpConnectors.some((c) => {
+    const byUrl = normalizeMcpUrl(c.url) === normalizeMcpUrl(BUILTIN_MCP_CHROME_URL)
+    const byName = c.name.trim().toLowerCase().includes("mcp-chrome")
+      || c.name.trim().toLowerCase().includes("chrome mcp")
+    return byUrl || byName
+  })
+  const mcpConnectors = hasBuiltinChromeConnector
+    ? enabledMcpConnectors
+    : [
+      ...enabledMcpConnectors,
+      {
+        id: BUILTIN_MCP_CHROME_ID,
+        name: BUILTIN_MCP_CHROME_NAME,
+        url: BUILTIN_MCP_CHROME_URL,
+        enabled: true,
+        advanced: { transport: "streamable-http" as const },
+        lazyLoad: false,
+        createdAt: "",
+        updatedAt: ""
+      }
+    ]
   const pluginMcpConfigs = getEnabledPluginMcpConfigs()
 
   // Create instance-level registry for lazy tools (avoid global state)
@@ -967,9 +1035,13 @@ The workspace root is: ${workspacePath}`
           return await originalFunc(...args)
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e)
-          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, msg)
+          const shouldFallbackToAgentBrowser = isChromeToolName(t.name) && isChromeMcpUnavailableError(msg)
+          const finalMsg = shouldFallbackToAgentBrowser
+            ? `${msg}\nFallback: chrome MCP seems unavailable. Please use browser_playwright (or playwright_cli) for this browser task.`
+            : msg
+          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, finalMsg)
           // MCP tools use responseFormat: "content_and_artifact", must return [content, artifact]
-          return [`MCP tool error: ${msg}`, []]
+          return [`MCP tool error: ${finalMsg}`, []]
         }
       }
     }
@@ -1002,6 +1074,9 @@ The workspace root is: ${workspacePath}`
   // Add git_push tool
   // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
+  extraTools.push(createPlaywrightTool(workspacePath))
+  extraTools.push(createPlaywrightCliTool(workspacePath))
+  extraTools.push(createAgentBrowserTool(workspacePath))
 
   // Add tool search tools if there are lazy-loaded MCP tools
   const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
@@ -1017,9 +1092,14 @@ The workspace root is: ${workspacePath}`
   const trimForSummary = Math.min(12_000, Math.floor(maxTokens * 0.25))
   console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", triggerTokens, "→ keep:", keepTokens, "→ tool evict limit:", toolEvictLimit, "→ trim for summary:", trimForSummary, "→ max output bytes:", maxOutputBytes)
 
+  const finalTools = [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools]
+  const hasGitWorkflowTool = finalTools.some((t) => (t as { name?: string }).name === "git_workflow")
+  backend.setGitWorkflowCommitOnly(hasGitWorkflowTool)
+  console.log("[Runtime] Final tool list:", finalTools.map((t) => (t as { name?: string }).name ?? "(unnamed)"))
+
   const agent = createDeepAgent({
     model,
-    tools: [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools],
+    tools: finalTools,
     checkpointer,
     backend,
     systemPrompt,

@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage } from "electron"
+import { existsSync } from "fs"
 import { join } from "path"
 import { writeMainLog, writeRendererLog } from "./logging"
 
@@ -89,6 +90,26 @@ let loginWindow: BrowserWindow | null = null
 // Simple dev check - replaces @electron-toolkit/utils is.dev
 const isDev = !app.isPackaged
 
+function getFirstExistingPath(paths: string[]): string | undefined {
+  return paths.find((path) => existsSync(path))
+}
+
+function getBuildIconPath(fileName: string): string | undefined {
+  return getFirstExistingPath([
+    join(app.getAppPath(), `build/${fileName}`),
+    join(process.cwd(), `build/${fileName}`),
+    join(__dirname, `../../build/${fileName}`)
+  ])
+}
+
+function getDevWindowsIconPath(): string | undefined {
+  return getBuildIconPath("icon.ico")
+}
+
+function getDevMacDockIconPath(): string | undefined {
+  return getBuildIconPath("icon.png") ?? getBuildIconPath("icon.ico")
+}
+
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
   let localIP = '';
@@ -110,6 +131,8 @@ function getLocalIP() {
 }
 
 function createWindow(): void {
+  const devWindowIcon = process.platform === "win32" && isDev ? getDevWindowsIconPath() : undefined
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -123,6 +146,7 @@ function createWindow(): void {
       preload: join(__dirname, "../preload/index.js"),
       sandbox: false
     },
+    ...(devWindowIcon ? { icon: devWindowIcon } : {}),
     autoHideMenuBar: true // 自动隐藏菜单栏
   })
 
@@ -209,13 +233,29 @@ if (!gotTheLock) {
 
     // Set dock icon on macOS
     if (process.platform === "darwin" && app.dock) {
-      const iconPath = join(__dirname, "../../resources/icon.png")
+      const iconPath = getFirstExistingPath([
+        ...(isDev ? [getDevMacDockIconPath()] : []),
+        join(__dirname, "../../resources/icon.png"),
+        join(app.getAppPath(), "resources/icon.png"),
+        join(__dirname, "../resources/icon.png")
+      ].filter((path): path is string => Boolean(path)))
+      if (isDev) {
+        console.log(`[icon] mac dock icon path: ${iconPath ?? "not found"}`)
+      }
       try {
-        const icon = nativeImage.createFromPath(iconPath)
-        if (!icon.isEmpty()) {
+        const icon = iconPath ? nativeImage.createFromPath(iconPath) : null
+        if (icon && !icon.isEmpty()) {
           app.dock.setIcon(icon)
+          if (isDev) {
+            console.log("[icon] mac dock icon applied")
+          }
+        } else if (isDev) {
+          console.log("[icon] mac dock icon is empty")
         }
       } catch {
+        if (isDev) {
+          console.log("[icon] mac dock icon apply failed")
+        }
         // Icon not found, use default
       }
     }
