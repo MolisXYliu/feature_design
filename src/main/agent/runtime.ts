@@ -317,24 +317,58 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
       console.log("[Runtime] execute tool patched: added run_in_background support")
     }
 
-    // Add task_output tool for retrieving background task results
-    const taskOutputTool = lcTool(async (input: { task_id: string }) => {
-      const result = (filesystemBackend as LocalSandbox).getTaskOutput(input.task_id)
-      if (!result) return `Error: No background task found with id "${input.task_id}".`
-      if (!result.completed) {
-        return `Task ${input.task_id} is still running (elapsed: ${result.elapsedSeconds}s, command: ${result.command}). Try again in a few seconds.`
+    // Add task_output tool for retrieving background task results.
+    // Mirrors Claude Code's TaskOutput: blocks internally (100ms poll loop)
+    // until the task completes or the timeout expires, so the LLM only needs
+    // one tool call per check instead of burning tokens on repeated polls.
+    const taskOutputTool = lcTool(async (input: { task_id: string; block?: boolean; timeout?: number }) => {
+      const sandbox = filesystemBackend as LocalSandbox
+      const block = input.block !== false  // default true
+      const timeout = input.timeout ?? 30_000 // default 30s, max 600s
+
+      // Non-blocking: return immediately
+      if (!block) {
+        const result = sandbox.getTaskOutput(input.task_id)
+        if (!result) return `Error: No background task found with id "${input.task_id}".`
+        if (!result.completed) {
+          return JSON.stringify({ retrieval_status: "not_ready", elapsed: result.elapsedSeconds, command: result.command })
+        }
+        const status = result.exitCode === 0 ? "succeeded" : "failed"
+        return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
       }
-      const status = result.exitCode === 0 ? "succeeded" : "failed"
-      const parts = [result.output ?? "<no output>"]
-      if (result.exitCode !== null && result.exitCode !== undefined) {
-        parts.push(`\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`)
+
+      // Blocking: poll internally every 100ms until completed or timeout
+      const start = Date.now()
+      while (Date.now() - start < timeout) {
+        const result = sandbox.getTaskOutput(input.task_id)
+        if (!result) return `Error: No background task found with id "${input.task_id}".`
+        if (result.completed) {
+          const status = result.exitCode === 0 ? "succeeded" : "failed"
+          return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
+        }
+        await new Promise<void>(r => setTimeout(r, 100))
       }
-      return parts.join("")
+
+      // Timeout — return current status so the LLM can decide to call again
+      const final = sandbox.getTaskOutput(input.task_id)
+      if (!final) return `Error: No background task found with id "${input.task_id}".`
+      if (final.completed) {
+        const status = final.exitCode === 0 ? "succeeded" : "failed"
+        return `${final.output ?? "<no output>"}\n[Command ${status} with exit code ${final.exitCode}, elapsed: ${final.elapsedSeconds}s]`
+      }
+      return JSON.stringify({ retrieval_status: "timeout", elapsed: final.elapsedSeconds, command: final.command })
     }, {
       name: "task_output",
-      description: "Retrieve the output of a background task started with execute(run_in_background=true). When the task is still running, returns elapsed time. Poll every 5-10 seconds until completion. Tell the user the elapsed time so they know the build is still in progress.",
+      description:
+        "Retrieve the output of a background task started with execute(run_in_background=true). " +
+        "By default blocks up to 30 seconds waiting for the task to complete. " +
+        "If the task finishes within the timeout, returns the full output. " +
+        "If it times out, returns current status — call again to continue waiting. " +
+        "Set block=false for a non-blocking status check.",
       schema: z.object({
-        task_id: z.string().describe("The task ID returned by execute when run_in_background was true")
+        task_id: z.string().describe("The task ID returned by execute when run_in_background was true"),
+        block: z.boolean().optional().describe("Whether to wait for completion (default: true)"),
+        timeout: z.number().min(0).max(600_000).optional().describe("Max wait time in ms (default: 30000)")
       })
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -480,8 +514,10 @@ ${shellGuidance}
 
 使用方法：
 1. 调用 execute({ command: "mvn clean package -DskipTests", run_in_background: true })
-2. 获得 task_id 后，用 task_output({ task_id: "..." }) 轮询结果
-3. 如果 task_output 返回 "still running"，等待几秒后再次轮询
+2. 获得 task_id 后，调用 task_output({ task_id: "..." }) 获取结果
+3. task_output 默认会阻塞等待最多 30 秒，如果任务在 30 秒内完成则直接返回结果
+4. 如果返回 timeout，再次调用 task_output 继续等待即可
+5. 对于预计非常长的任务，可以设置更大的 timeout：task_output({ task_id: "...", timeout: 120000 })
 
 **切勿**对编译、安装依赖等命令使用前台执行，否则会因超时被终止。
 `
