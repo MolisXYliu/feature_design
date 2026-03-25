@@ -88,22 +88,22 @@ const UserInfoPanel: React.FC = () => {
     return (
         <Card className="w-full">
             <CardContent>
-                {user ? (
+                {user.sapId ? (
                     // 登录状态
-                    <div className="text-center space-y-4">
-                        <div className="flex items-center ">
+                    <div className="space-y-4">
+                        <div className="flex items-center mt-2">
                             <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
                                 <span className="text-blue-600 font-semibold text-lg">
                                     {getInitials(user.userName)}
                                 </span>
                             </div>
-                            <div className="flex-1 min-w-0">
+                            <div className="flex-1 min-w-0 ml-2">
                                 <h3 className="text-lg font-semibold truncate">{user.userName}</h3>
                                 <p className="text-sm text-gray-600 truncate">{user.orgName}</p >
                             </div>
                         </div>
 
-                        <Button variant="outline" onClick={handleLogout} className="w-full">
+                        <Button variant="outline" onClick={handleLogout} className="w-40">
                             退出登录
                         </Button>
                     </div>
