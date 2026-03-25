@@ -379,7 +379,12 @@ export function registerSandboxHandlers(ipcMain: IpcMain): void {
         if (!isElevatedSetupComplete()) {
           const result = await runElevatedSetupForPaths()
           if (!result.success) {
-            throw new Error(result.error || "管理员沙箱配置失败")
+            // Elevated setup failed — fall back to unelevated mode instead of blocking the app
+            console.warn(`[Sandbox NUX] elevated setup failed, falling back to unelevated: ${result.error}`)
+            setWindowsSandboxMode("unelevated")
+            setSandboxNuxCompleted()
+            notifyChanged()
+            return
           }
         }
         setWindowsSandboxMode(mode)

@@ -413,7 +413,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
   }, [threadId])
 
-  // Check if NUX (first-run sandbox setup) is needed, then auto-start elevated setup
+  // Check if NUX (first-run sandbox setup) is needed, then auto-start elevated setup.
+  // If elevated setup fails (UAC cancelled, setup exe missing, etc.), the main process
+  // automatically falls back to unelevated mode — so the app is always usable.
   useEffect(() => {
     window.api.sandbox.isNuxNeeded().then((needed) => {
       if (!needed) return
@@ -422,9 +424,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       setNuxError(null)
       window.api.sandbox.completeNux("elevated")
         .then(() => setShowNux(false))
-        .catch((e) => {
-          setNuxError(e instanceof Error ? e.message : String(e))
-          setNuxLoading(false)
+        .catch(() => {
+          // Elevated failed but main process already fell back to unelevated — just close NUX
+          setShowNux(false)
         })
     }).catch((e) => console.warn("[NUX] Failed to check:", e))
   }, [])
@@ -1366,24 +1368,36 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             {/* Error state */}
             {nuxError && (
               <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-600 dark:text-red-400 space-y-2">
-                <p className="font-medium">管理员沙箱配置失败</p>
+                <p className="font-medium">强隔离沙箱配置失败</p>
                 <p className="text-xs opacity-80">{nuxError}</p>
-                <p className="text-xs">如重试仍失败，请联系管理员。</p>
-                <button
-                  className="mt-1 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                  onClick={() => {
-                    setNuxError(null)
-                    setNuxLoading(true)
-                    window.api.sandbox.completeNux("elevated")
-                      .then(() => setShowNux(false))
-                      .catch((e) => {
-                        setNuxError(e instanceof Error ? e.message : String(e))
-                        setNuxLoading(false)
-                      })
-                  }}
-                >
-                  重试
-                </button>
+                <p className="text-xs">可重试或选择受限沙箱模式继续使用。</p>
+                <div className="flex gap-2 mt-1">
+                  <button
+                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                    onClick={() => {
+                      setNuxError(null)
+                      setNuxLoading(true)
+                      window.api.sandbox.completeNux("elevated")
+                        .then(() => setShowNux(false))
+                        .catch(() => {
+                          // Main process falls back to unelevated on failure
+                          setShowNux(false)
+                        })
+                    }}
+                  >
+                    重试强隔离模式
+                  </button>
+                  <button
+                    className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-accent transition-colors"
+                    onClick={() => {
+                      window.api.sandbox.completeNux("unelevated")
+                        .then(() => setShowNux(false))
+                        .catch(() => setShowNux(false))
+                    }}
+                  >
+                    使用受限沙箱模式
+                  </button>
+                </div>
               </div>
             )}
           </div>
