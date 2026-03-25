@@ -150,6 +150,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly _realUserHome: string
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
+  /** When true, block direct git add/commit/push and force git_workflow usage. */
+  private enforceGitWorkflowCommitOnly = false
   /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
   private abortSignal?: AbortSignal
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
@@ -300,6 +302,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Inject the approval orchestrator (called from runtime.ts). */
   setOrchestrator(orch: ToolOrchestrator): void {
     this.orchestrator = orch
+  }
+
+  /** Toggle direct git submit command blocking when git_workflow is available. */
+  setGitWorkflowCommitOnly(enabled: boolean): void {
+    this.enforceGitWorkflowCommitOnly = enabled
   }
 
   /** Expose the sandbox mode for the orchestrator. */
@@ -1600,7 +1607,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     // Always check forbidden commands, even without orchestrator (YOLO mode safety net)
     const safety = assessCommandSafety(command, this.workingDir, {
-      windowsShell: process.platform === "win32" && this.windowsSandbox !== "none" ? "powershell" : "unknown"
+      windowsShell: process.platform === "win32" && this.windowsSandbox !== "none" ? "powershell" : "unknown",
+      enforceGitWorkflowCommitOnly: this.enforceGitWorkflowCommitOnly
     })
     if (safety.level === "forbidden") {
       console.log(`[LocalSandbox] execute: FORBIDDEN — ${safety.reason}`)
