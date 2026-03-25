@@ -154,6 +154,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private enforceGitWorkflowCommitOnly = false
   /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
   private abortSignal?: AbortSignal
+  /** Whether the conversation-level abort signal has been triggered. */
+  get isAborted(): boolean { return this.abortSignal?.aborted ?? false }
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
   private readonly _virtualMode: boolean
@@ -1153,8 +1155,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     for (const ps of ["pwsh", "powershell"]) {
       const fullPath = LocalSandbox.whichSync(ps)
       if (fullPath) {
-        // -NoProfile: skip user profile scripts to avoid side-effects in output
-        // -Command: accept command string (consistent with Codex SDK behavior)
         LocalSandbox._cachedSandboxShell = { shell: fullPath, flags: ["-NoProfile", "-Command"] }
         return LocalSandbox._cachedSandboxShell
       }
@@ -1166,6 +1166,40 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Public accessor for the Windows sandbox shell (PowerShell or cmd.exe). */
   static resolvedWindowsSandboxShell(): string {
     return LocalSandbox.resolveWindowsSandboxShell().shell
+  }
+
+  /**
+   * Build a sandbox-safe copy of env with PATH reordered:
+   * System32 and System32\Wbem are moved to the front so native Windows
+   * executables (whoami, find, sort, etc.) are found before MSYS2/Git
+   * equivalents that crash under restricted tokens (STATUS_DLL_NOT_FOUND).
+   */
+  private static buildSandboxEnv(env: Record<string, string>): Record<string, string> {
+    const result = { ...env }
+    const sep = path.delimiter
+    const sys32 = (env.SystemRoot || env.windir || "C:\\Windows") + "\\System32"
+    const sys32Lower = sys32.toLowerCase()
+    const parts = (result.PATH || result.Path || "").split(sep)
+    // Partition: system32 paths first, then the rest (filtering out Git usr/bin MSYS2 paths)
+    const system: string[] = []
+    const rest: string[] = []
+    for (const p of parts) {
+      const lower = p.toLowerCase()
+      if (lower.startsWith(sys32Lower)) {
+        system.push(p)
+      } else if (lower.includes("\\usr\\bin") && lower.includes("git")) {
+        // Skip Git MSYS2 usr/bin — these binaries crash under restricted tokens
+      } else {
+        rest.push(p)
+      }
+    }
+    // Ensure System32 is present even if not in original PATH
+    if (!system.some(s => s.toLowerCase() === sys32Lower)) {
+      system.unshift(sys32)
+    }
+    const pathKey = result.PATH !== undefined ? "PATH" : "Path"
+    result[pathKey] = [...system, ...rest].join(sep)
+    return result
   }
 
   private static resolveShell(): string {
@@ -1528,10 +1562,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /** Active background tasks (static — shared across instances so tasks survive re-creation). */
   private static backgroundTasks = new Map<string, {
     id: string
+    threadId: string
     command: string
     startedAt: number
     completed: boolean
     outputChunks: string[]
+    abortController: AbortController
     result?: ExecuteResponse
   }>()
 
@@ -1542,15 +1578,20 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    */
   async executeBackground(command: string): Promise<string> {
     const taskId = randomUUID().slice(0, 8)
+    const taskAbortController = new AbortController()
     const task = {
-      id: taskId, command, startedAt: Date.now(), completed: false as boolean,
-      outputChunks: [] as string[], result: undefined as ExecuteResponse | undefined
+      id: taskId, threadId: this.runId, command, startedAt: Date.now(), completed: false as boolean,
+      outputChunks: [] as string[], abortController: taskAbortController,
+      result: undefined as ExecuteResponse | undefined
     }
     LocalSandbox.backgroundTasks.set(taskId, task)
 
     // Fire and forget — don't await. Uses extended timeout for background execution.
-    // Background tasks must survive conversation switches (abort), so use ignoreAbort flag.
-    this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS, true).then(result => {
+    // Background tasks use their own AbortController (not the conversation's abortSignal)
+    // so they survive conversation switches but can still be cancelled explicitly.
+    this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS, taskAbortController.signal).then(result => {
+      // Guard: if already completed (e.g. cancelled via cancelBackgroundTasks), don't overwrite.
+      if (task.completed) return
       task.result = result
       // Append final output to chunks for completeness
       if (result.output) task.outputChunks.push(result.output)
@@ -1563,6 +1604,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         console.log(`[LocalSandbox] background task ${taskId} expired, cleaned up`)
       }, 10 * 60 * 1000)
     }).catch(err => {
+      // Guard: if already completed (e.g. cancelled via cancelBackgroundTasks), don't overwrite.
+      if (task.completed) return
       task.result = { output: `Error: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1, truncated: false }
       task.completed = true
       console.log(`[LocalSandbox] background task ${taskId} errored: ${err}`)
@@ -1592,6 +1635,32 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       return { completed: false, elapsedSeconds, command: task.command }
     }
     return { completed: true, output: task.result?.output, exitCode: task.result?.exitCode, elapsedSeconds }
+  }
+
+  /**
+   * Cancel all running background tasks for a given thread (conversation).
+   * Called when the user explicitly stops the current conversation.
+   */
+  static cancelBackgroundTasks(threadId: string): void {
+    for (const [taskId, task] of LocalSandbox.backgroundTasks) {
+      if (task.threadId === threadId && !task.completed) {
+        console.log(`[LocalSandbox] cancelling background task ${taskId} (command: ${task.command}) for thread ${threadId}`)
+        task.abortController.abort()
+        // Mark as completed immediately to prevent zombie entries if the
+        // process kill path doesn't trigger the .then/.catch callbacks.
+        task.completed = true
+        task.result = task.result ?? {
+          output: "Task cancelled by user.",
+          exitCode: 130,
+          truncated: false
+        }
+        // Schedule cleanup (mirrors the auto-cleanup in the normal completion path).
+        setTimeout(() => {
+          LocalSandbox.backgroundTasks.delete(taskId)
+          console.log(`[LocalSandbox] cancelled background task ${taskId} expired, cleaned up`)
+        }, 10 * 60 * 1000)
+      }
+    }
   }
 
   async execute(command: string): Promise<ExecuteResponse> {
@@ -1669,14 +1738,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Called directly by the orchestrator after approval is granted,
    * or as fallback when no orchestrator is configured.
    */
-  async executeRaw(command: string, sandboxModeOverride?: string, timeoutMs?: number, ignoreAbort?: boolean): Promise<ExecuteResponse> {
+  async executeRaw(command: string, sandboxModeOverride?: string, timeoutMs?: number, overrideAbortSignal?: AbortSignal): Promise<ExecuteResponse> {
     const effectiveSandboxMode = (sandboxModeOverride ?? this.windowsSandbox) as typeof this.windowsSandbox
     const effectiveTimeout = timeoutMs ?? this.timeout
-    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride} timeout=${effectiveTimeout}ms ignoreAbort=${!!ignoreAbort}`)
+    console.log(`[LocalSandbox] executeRaw: command="${command}" effectiveMode=${effectiveSandboxMode} override=${sandboxModeOverride} timeout=${effectiveTimeout}ms overrideAbort=${!!overrideAbortSignal}`)
 
     if (process.platform === "win32" && effectiveSandboxMode !== "none") {
       console.log(`[LocalSandbox] → executeInWindowsSandbox (elevated path)`)
-      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode, effectiveTimeout, ignoreAbort)
+      return this.executeInWindowsSandbox(command, 1, effectiveSandboxMode, effectiveTimeout, overrideAbortSignal)
     }
 
     const isWindows = process.platform === "win32"
@@ -1694,7 +1763,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // contention). Retry up to SPAWN_RETRY_COUNT times with a short delay.
     const maxAttempts = isWindows ? LocalSandbox.SPAWN_RETRY_COUNT + 1 : 1
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.executeOnce(effectiveCommand, shell, isWindows, effectiveTimeout, ignoreAbort)
+      const result = await this.executeOnce(effectiveCommand, shell, isWindows, effectiveTimeout, overrideAbortSignal)
       const isSpawnEperm =
         result.exitCode === 1
         && result.output.startsWith("Error: Failed to execute command:")
@@ -1718,7 +1787,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * - elevated: dedicated sandbox user + strong ACL isolation; codex.exe manages credentials and ACLs internally
    * Retries on EPERM (antivirus transient lock); reports error on other failures.
    */
-  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number, ignoreAbort?: boolean): Promise<ExecuteResponse> {
+  private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number, overrideAbortSignal?: AbortSignal): Promise<ExecuteResponse> {
     const methodStartMs = Date.now()
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
     const isElevatedSandbox = effectiveMode === "elevated"
@@ -1861,8 +1930,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let exited = false
       let firstDataAt = 0 // timestamp of first stdout/stderr data
 
+      // Effective abort signal: per-task override (for background tasks) or conversation-level signal.
+      const effectiveAbortSignal = overrideAbortSignal ?? this.abortSignal
+
       // Early return if already aborted — avoid spawning a process just to kill it.
-      if (this.abortSignal?.aborted) {
+      if (effectiveAbortSignal?.aborted) {
         resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
         return
       }
@@ -1870,10 +1942,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       console.log(`[LocalSandbox] spawn: ${this.codexExePath} ${JSON.stringify(sandboxArgs)}`)
       console.log(`[LocalSandbox] cwd: ${this.workingDir}`)
 
+      // Build sandbox-safe env: ensure System32 is before Git usr/bin in PATH.
+      // MSYS2 binaries (from Git usr/bin) crash under restricted tokens due to
+      // DLL load failures (0xC0000135). Prioritizing System32 ensures native
+      // Windows executables (whoami, find, sort, etc.) are found first.
+      const sandboxEnv = LocalSandbox.buildSandboxEnv(this.env)
+
       // spawn() reports ENOENT asynchronously via the "error" event, not by throwing
       const proc = spawn(this.codexExePath, sandboxArgs, {
         cwd: this.workingDir,
-        env: this.env,
+        env: sandboxEnv,
         stdio: ["ignore", "pipe", "pipe"]
       })
 
@@ -1915,8 +1993,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }
-      if (this.abortSignal && !ignoreAbort) {
-        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      if (effectiveAbortSignal) {
+        effectiveAbortSignal.addEventListener("abort", abortHandler, { once: true })
       }
 
       proc.stdout?.on("data", (chunk: Buffer) => {
@@ -1950,7 +2028,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           clearTimeout(timeoutId)
           if (drainTimerId) clearTimeout(drainTimerId)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
 
           const stdoutBuf = Buffer.concat(stdoutChunks)
           const stderrBuf = Buffer.concat(stderrChunks)
@@ -1990,7 +2068,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           clearTimeout(timeoutId)
           if (drainTimerId) clearTimeout(drainTimerId)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
           resolve({
             output: `Error processing command output: ${err instanceof Error ? err.message : String(err)}`,
             exitCode: code ?? 1,
@@ -2022,7 +2100,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         clearTimeout(timeoutId)
         if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+        if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
 
         const errno = err as NodeJS.ErrnoException
         if (errno.code === "EPERM" && attempt <= LocalSandbox.SPAWN_RETRY_COUNT) {
@@ -2053,7 +2131,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       if (setupResult.success) {
         markWorkspaceElevatedSetupDone(this.workingDir)
         // Retry the command once now that ACLs are in place (increment attempt to prevent further retries)
-        return this.executeInWindowsSandbox(command, attempt + 1, sandboxModeOverride, timeoutMs, ignoreAbort)
+        return this.executeInWindowsSandbox(command, attempt + 1, sandboxModeOverride, timeoutMs, overrideAbortSignal)
       }
       return {
         output: `沙箱工作目录配置失败: ${setupResult.error || "未知错误"}。\n请在设置中切换沙箱模式或以管理员身份运行应用。`,
@@ -2089,7 +2167,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     shell: string,
     isWindows: boolean,
     timeoutMs?: number,
-    ignoreAbort?: boolean
+    overrideAbortSignal?: AbortSignal
   ): Promise<ExecuteResponse> {
     const onceStartMs = Date.now()
     return new Promise<ExecuteResponse>((resolve) => {
@@ -2100,6 +2178,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       let resolved = false
       let exited = false
       let firstDataAt = 0
+
+      // Effective abort signal: per-task override (for background tasks) or conversation-level signal.
+      const effectiveAbortSignal = overrideAbortSignal ?? this.abortSignal
 
       // On Windows with bash-like shells (Git Bash / MSYS2), non-ASCII
       // characters in command-line arguments get corrupted: MSYS2's runtime
@@ -2115,7 +2196,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // so changing to "pipe" has no practical side effects.
 
       // Early return if already aborted — avoid spawning a process just to kill it.
-      if (this.abortSignal?.aborted) {
+      if (effectiveAbortSignal?.aborted) {
         resolve({ output: "<execute_metadata>\nUser aborted the command, process has been killed\n</execute_metadata>\n\n<no output>", exitCode: 130, truncated: false })
         return
       }
@@ -2181,8 +2262,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           collectAndResolve(null, "SIGKILL")
         }, LocalSandbox.IO_DRAIN_TIMEOUT_MS)
       }
-      if (this.abortSignal && !ignoreAbort) {
-        this.abortSignal.addEventListener("abort", abortHandler, { once: true })
+      if (effectiveAbortSignal) {
+        effectiveAbortSignal.addEventListener("abort", abortHandler, { once: true })
       }
 
       proc.stdout.on("data", (chunk: Buffer) => {
@@ -2216,7 +2297,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           clearTimeout(timeoutId)
           if (drainTimerId) clearTimeout(drainTimerId)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
 
           const stdoutBuf = Buffer.concat(stdoutChunks)
           const stderrBuf = Buffer.concat(stderrChunks)
@@ -2275,7 +2356,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           clearTimeout(timeoutId)
           if (drainTimerId) clearTimeout(drainTimerId)
           if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-          if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+          if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
           resolve({
             output: `Error processing command output: ${err instanceof Error ? err.message : String(err)}`,
             exitCode: code ?? 1,
@@ -2312,7 +2393,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         clearTimeout(timeoutId)
         if (drainTimerId) clearTimeout(drainTimerId)
         if (windowsExitTimerId) clearTimeout(windowsExitTimerId)
-        if (this.abortSignal) this.abortSignal.removeEventListener("abort", abortHandler)
+        if (effectiveAbortSignal) effectiveAbortSignal.removeEventListener("abort", abortHandler)
         resolve({
           output: `Error: Failed to execute command: ${err.message}`,
           exitCode: 1,

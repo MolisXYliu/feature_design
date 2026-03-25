@@ -1765,7 +1765,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     : "命令需要审批"}
               </span>
             </div>
-            <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm">
+            <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm break-all overflow-hidden">
               {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
                 ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
                 : (pendingApproval as Record<string, unknown>).command

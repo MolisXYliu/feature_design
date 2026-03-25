@@ -604,7 +604,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         threadId,
         workspacePath,
         modelId: effectiveModelId,
-        abortSignal: abortController.signal
+        abortSignal: abortController.signal,
+        noSkillEvolutionTool: true
       })
       const humanMessage = new HumanMessage(message)
 
@@ -1155,7 +1156,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         threadId,
         workspacePath,
         modelId: effectiveModelId,
-        abortSignal: abortController.signal
+        abortSignal: abortController.signal,
+        noSkillEvolutionTool: true
       })
       const config = {
         configurable: { thread_id: threadId },
@@ -1250,7 +1252,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     window.once("closed", onWindowClosed)
 
     try {
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId, abortSignal: abortController.signal })
+      const agent = await createAgentRuntime({ threadId, workspacePath, modelId, abortSignal: abortController.signal, noSkillEvolutionTool: true })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
@@ -1305,6 +1307,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   ipcMain.handle("agent:cancel", async (_event, { threadId }: AgentCancelParams) => {
     const controller = activeRuns.get(threadId)
     console.log(`[Agent] cancel: threadId=${threadId}, hasController=${!!controller}, activeRuns=[${Array.from(activeRuns.keys()).join(", ")}]`)
+    // Cancel any background tasks belonging to this thread (e.g. builds, tests)
+    LocalSandbox.cancelBackgroundTasks(threadId)
     if (controller) {
       controller.abort()
       activeRuns.delete(threadId)
