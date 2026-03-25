@@ -43,7 +43,7 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 
 import { createHash } from "crypto"
 import path from "path"
-import { join, delimiter } from "path"
+import { join, resolve, delimiter } from "path"
 import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
 import { createReadStream } from "fs"
 import { createGunzip } from "zlib"
@@ -729,11 +729,20 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const maxOutputBytes = Math.max(30_000, Math.min(80_000, Math.floor(maxTokens * 4 * 0.2)))
 
   // Inject bundled ripgrep into PATH so deepagents' ripgrepSearch can find it
-  const rgDir = join(
-    app.isPackaged ? process.resourcesPath : join(__dirname, "../../resources"),
-    "bin",
-    process.platform
-  )
+  let resourceBase: string
+  if (app.isPackaged) {
+    resourceBase = process.resourcesPath
+  } else {
+    // Dev mode: __dirname may be relative on some machines.
+    // Try multiple strategies to find the resources directory.
+    const candidates = [
+      resolve(__dirname, "../../resources"),
+      join(app.getAppPath(), "resources"),
+      join(app.getAppPath(), "..", "resources"),
+    ]
+    resourceBase = candidates.find(c => existsSync(join(c, "bin"))) ?? resolve(__dirname, "../../resources")
+  }
+  const rgDir = join(resourceBase, "bin", process.platform)
   const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
   const rgExists = existsSync(rgBin)
   // Mutate process.env.PATH so deepagents' internal ripgrepSearch

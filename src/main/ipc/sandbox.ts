@@ -100,9 +100,21 @@ function notifyChanged(): void {
 
 /** Resolve the directory containing codex.exe and the sandbox helper binaries. */
 function resolveCodexBinDir(): string {
-  // electron-vite bundles everything into out/main/index.js, so __dirname = out/main/
-  const base = app.isPackaged ? process.resourcesPath : join(__dirname, "../../resources")
-  return join(base, "bin", "win32")
+  if (app.isPackaged) {
+    return join(process.resourcesPath, "bin", "win32")
+  }
+  // Dev mode: electron-vite bundles into out/main/index.js. __dirname may be relative
+  // on some machines, so try multiple strategies to find the resources directory.
+  const candidates = [
+    resolve(__dirname, "../../resources"),       // out/main → project root
+    join(app.getAppPath(), "resources"),          // app.getAppPath() = project root in dev
+    join(app.getAppPath(), "..", "resources"),    // fallback
+  ]
+  for (const c of candidates) {
+    if (existsSync(join(c, "bin", "win32"))) return join(c, "bin", "win32")
+  }
+  // Last resort: use __dirname-based path even if it doesn't exist
+  return join(resolve(__dirname, "../../resources"), "bin", "win32")
 }
 
 /** Check whether the elevated sandbox setup has been completed (marker exists with correct version). */
