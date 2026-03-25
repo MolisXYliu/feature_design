@@ -199,10 +199,11 @@ function normalizeLegacyCommandArgs(args: string[]): {
 function buildMissingInstallGuidance(attempts: CommandRunResult[]): string {
   return JSON.stringify({
     success: false,
-    error: "agent-browser CLI is not available in this environment. Use browser_playwright instead.",
+    error: "agent-browser CLI is not available in this environment.",
     fallback: "browser_playwright",
     setup: [
-      "Preferred: use browser_playwright (project-local Playwright, no agent-browser install required).",
+      "Preferred order: playwright_cli -> chrome_* -> agent_browser -> browser_playwright.",
+      "Fallback now: use browser_playwright (project-local Playwright, no agent-browser install required).",
       "Optional legacy path: npm install -g agent-browser",
       "Optional legacy path: agent-browser install"
     ],
@@ -258,7 +259,7 @@ export function createAgentBrowserTool(workspacePath: string) {
     {
       name: "agent_browser",
       description:
-        "Legacy browser automation tool backed by vercel-labs/agent-browser CLI. Prefer browser_playwright unless agent_browser is explicitly requested.",
+        "Legacy browser automation tool backed by vercel-labs/agent-browser CLI. Use when playwright_cli/chrome_* are unavailable, and fallback to browser_playwright only as a last resort.",
       schema: agentBrowserSchema
     }
   )

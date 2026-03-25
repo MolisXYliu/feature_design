@@ -12,6 +12,7 @@ const TOOL_LABELS: Record<string, string> = {
   git_push: "Git 推送",
   agent_browser: "Agent Browser 浏览器操作",
   browser_playwright: "Playwright 浏览器操作",
+  playwright_cli: "Playwright CLI 浏览器操作",
   mcp_call: "调用 MCP 工具",
   search_tool: "搜索 MCP 工具",
   load_tool: "加载 MCP 工具",

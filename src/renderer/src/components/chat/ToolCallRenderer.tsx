@@ -64,7 +64,8 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   git_push: GitBranch,
   git_workflow: GitBranch,
   agent_browser: Terminal,
-  browser_playwright: Terminal
+  browser_playwright: Terminal,
+  playwright_cli: Terminal
 }
 
 // Tools whose results are shown in the UI panels and don't need verbose display

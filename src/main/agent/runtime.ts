@@ -916,8 +916,8 @@ ${subagentShellGuidance}
 - browser_playwright: browser automation and page interaction tool powered by project-local Playwright (no extra global install step required).
 - playwright_cli: browser automation via @playwright/cli command interface.
 - agent_browser: legacy browser automation tool powered by vercel-labs/agent-browser CLI.
-- Browser tool priority: always prefer chrome_* tools first for browser tasks; if chrome_* is unavailable/unreachable, fallback to browser_playwright first, then playwright_cli; only use agent_browser when explicitly requested or other browser tools are unavailable.
-- If any chrome_* call fails because MCP is unavailable/unreachable, immediately fallback to browser_playwright for the same browsing task.
+- Browser tool priority: always prefer playwright_cli first for browser tasks; if playwright_cli is unavailable/unreachable, fallback to chrome_*; if chrome_* is unavailable/unreachable, fallback to agent_browser; use browser_playwright as the final fallback.
+- If any chrome_* call fails because MCP is unavailable/unreachable, immediately fallback to agent_browser for the same browsing task (or browser_playwright as last resort).
 
 The workspace root is: ${workspacePath}`
 
@@ -1095,7 +1095,7 @@ The workspace root is: ${workspacePath}`
           const msg = e instanceof Error ? e.message : String(e)
           const shouldFallbackToAgentBrowser = isChromeToolName(t.name) && isChromeMcpUnavailableError(msg)
           const finalMsg = shouldFallbackToAgentBrowser
-            ? `${msg}\nFallback: chrome MCP seems unavailable. Please use browser_playwright (or playwright_cli) for this browser task.`
+            ? `${msg}\nFallback: chrome MCP seems unavailable. Please use agent_browser for this browser task (or browser_playwright as last resort).`
             : msg
           console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, finalMsg)
           // MCP tools use responseFormat: "content_and_artifact", must return [content, artifact]
@@ -1132,9 +1132,9 @@ The workspace root is: ${workspacePath}`
   // Add git_push tool
   // todo 暂时注释掉git_workflow工具，后续完善权限控制和安全措施后再放开
   extraTools.push(createGitWorkflowTool(workspacePath))
-  extraTools.push(createPlaywrightTool(workspacePath))
   extraTools.push(createPlaywrightCliTool(workspacePath))
   extraTools.push(createAgentBrowserTool(workspacePath))
+  extraTools.push(createPlaywrightTool(workspacePath))
 
   // Add tool search tools if there are lazy-loaded MCP tools
   const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
