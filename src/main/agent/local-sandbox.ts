@@ -154,6 +154,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private enforceGitWorkflowCommitOnly = false
   /** AbortSignal: when signalled, in-flight child processes are killed immediately. */
   private abortSignal?: AbortSignal
+  /** Whether the conversation-level abort signal has been triggered. */
+  get isAborted(): boolean { return this.abortSignal?.aborted ?? false }
   /** Cached from parent's private fields to avoid (this as any) scattered everywhere */
   private readonly _resolvePath: (key: string) => string
   private readonly _virtualMode: boolean
@@ -1588,6 +1590,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Background tasks use their own AbortController (not the conversation's abortSignal)
     // so they survive conversation switches but can still be cancelled explicitly.
     this.executeRaw(command, undefined, LocalSandbox.BACKGROUND_TIMEOUT_MS, taskAbortController.signal).then(result => {
+      // Guard: if already completed (e.g. cancelled via cancelBackgroundTasks), don't overwrite.
+      if (task.completed) return
       task.result = result
       // Append final output to chunks for completeness
       if (result.output) task.outputChunks.push(result.output)
@@ -1600,6 +1604,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         console.log(`[LocalSandbox] background task ${taskId} expired, cleaned up`)
       }, 10 * 60 * 1000)
     }).catch(err => {
+      // Guard: if already completed (e.g. cancelled via cancelBackgroundTasks), don't overwrite.
+      if (task.completed) return
       task.result = { output: `Error: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1, truncated: false }
       task.completed = true
       console.log(`[LocalSandbox] background task ${taskId} errored: ${err}`)
@@ -1640,6 +1646,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       if (task.threadId === threadId && !task.completed) {
         console.log(`[LocalSandbox] cancelling background task ${taskId} (command: ${task.command}) for thread ${threadId}`)
         task.abortController.abort()
+        // Mark as completed immediately to prevent zombie entries if the
+        // process kill path doesn't trigger the .then/.catch callbacks.
+        task.completed = true
+        task.result = task.result ?? {
+          output: "Task cancelled by user.",
+          exitCode: 130,
+          truncated: false
+        }
+        // Schedule cleanup (mirrors the auto-cleanup in the normal completion path).
+        setTimeout(() => {
+          LocalSandbox.backgroundTasks.delete(taskId)
+          console.log(`[LocalSandbox] cancelled background task ${taskId} expired, cleaned up`)
+        }, 10 * 60 * 1000)
       }
     }
   }

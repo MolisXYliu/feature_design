@@ -337,16 +337,21 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
         return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
       }
 
-      // Blocking: poll internally every 100ms until completed or timeout
+      // Blocking: poll with progressive interval until completed, timeout, or abort.
+      // First 2s at 100ms for snappy response, then 500ms to reduce CPU spin.
       const start = Date.now()
       while (Date.now() - start < timeout) {
+        if (sandbox.isAborted) {
+          return "Task polling aborted: conversation was cancelled by user."
+        }
         const result = sandbox.getTaskOutput(input.task_id)
         if (!result) return `Error: No background task found with id "${input.task_id}".`
         if (result.completed) {
           const status = result.exitCode === 0 ? "succeeded" : "failed"
           return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
         }
-        await new Promise<void>(r => setTimeout(r, 100))
+        const elapsed = Date.now() - start
+        await new Promise<void>(r => setTimeout(r, elapsed < 2000 ? 100 : 500))
       }
 
       // Timeout — return current status so the LLM can decide to call again
