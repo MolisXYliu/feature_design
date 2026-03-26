@@ -1903,6 +1903,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           ]
     } else {
       sandboxArgs = [
+        "-c", 'windows.sandbox="unelevated"',
         "-c", "sandbox_workspace_write.network_access=true",
         "sandbox", "windows",
         "--full-auto",
