@@ -27,6 +27,9 @@ export interface ParsedAttachment {
 /** Max text length (characters) to inject into context. ~24k chars ≈ ~6-7k tokens */
 const MAX_TEXT_LENGTH = 24_000
 
+/** Max file size in bytes (5 MB) */
+const MAX_FILE_SIZE = 5 * 1024 * 1024
+
 const SUPPORTED_EXTENSIONS = new Set([".txt", ".md", ".csv", ".docx", ".xlsx", ".xls"])
 
 export function isSupportedFile(filePath: string): boolean {
@@ -94,6 +97,10 @@ export async function parseFile(filePath: string, maxLength?: number): Promise<P
   const ext = path.extname(filePath).toLowerCase()
   const filename = path.basename(filePath)
   const stat = await fs.stat(filePath)
+
+  if (stat.size > MAX_FILE_SIZE) {
+    throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），单文件不超过 5MB`)
+  }
 
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
     throw new Error(`Unsupported file type: ${ext}`)
