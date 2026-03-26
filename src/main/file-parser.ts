@@ -1,0 +1,195 @@
+/**
+ * File parser module – extracts text content from various file formats.
+ *
+ * Supported formats:
+ *   .txt / .csv  – read with auto-detected encoding (GBK, Shift_JIS, UTF-8, etc.)
+ *   .docx        – extract via mammoth → markdown
+ *   .xlsx / .xls – extract via xlsx → CSV text
+ */
+
+import * as fs from "fs/promises"
+import * as path from "path"
+import * as chardet from "jschardet"
+import * as iconv from "iconv-lite"
+
+/** Parsed result returned to the renderer. */
+export interface ParsedAttachment {
+  filename: string
+  filePath: string    // full path for display
+  content: string     // extracted text
+  mimeType: string
+  /** Original file size in bytes */
+  size: number
+  /** true when content was truncated */
+  truncated: boolean
+}
+
+/** Max text length (characters) to inject into context. ~24k chars ≈ ~6-7k tokens */
+const MAX_TEXT_LENGTH = 24_000
+
+const SUPPORTED_EXTENSIONS = new Set([".txt", ".md", ".csv", ".docx", ".xlsx", ".xls"])
+
+export function isSupportedFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase()
+  return SUPPORTED_EXTENSIONS.has(ext)
+}
+
+export function getSupportedExtensions(): string[] {
+  return [...SUPPORTED_EXTENSIONS]
+}
+
+/**
+ * Truncate text content to MAX_TEXT_LENGTH with a clear summary of what was lost.
+ * For line-based content (csv, xlsx), truncates at line boundaries.
+ */
+function truncateContent(content: string, isLineBased: boolean, maxLen: number = MAX_TEXT_LENGTH): { content: string; truncated: boolean } {
+  if (content.length <= maxLen) {
+    return { content, truncated: false }
+  }
+
+  const totalChars = content.length
+  const totalLines = content.split("\n").length
+
+  if (isLineBased) {
+    // Truncate at line boundary to avoid cutting a row in half
+    const lines = content.split("\n")
+    let charCount = 0
+    let keepLines = 0
+    for (const line of lines) {
+      if (charCount + line.length + 1 > maxLen) break
+      charCount += line.length + 1
+      keepLines++
+    }
+    const kept = lines.slice(0, keepLines).join("\n")
+    const droppedLines = totalLines - keepLines
+    return {
+      content: kept + `\n\n... [内容已截取：显示前 ${keepLines} 行（共 ${totalLines} 行），省略了 ${droppedLines} 行、${(totalChars - kept.length).toLocaleString()} 个字符]`,
+      truncated: true
+    }
+  }
+
+  // For prose (txt, docx): truncate at last paragraph/sentence boundary
+  const sliced = content.slice(0, maxLen)
+  const lastParagraph = sliced.lastIndexOf("\n\n")
+  const lastNewline = sliced.lastIndexOf("\n")
+  const cutPoint = lastParagraph > maxLen * 0.8
+    ? lastParagraph
+    : lastNewline > maxLen * 0.8
+      ? lastNewline
+      : maxLen
+  const kept = content.slice(0, cutPoint)
+  const droppedChars = totalChars - kept.length
+
+  return {
+    content: kept + `\n\n... [内容已截取：显示前 ${kept.length.toLocaleString()} 个字符（共 ${totalChars.toLocaleString()} 个字符），省略了 ${droppedChars.toLocaleString()} 个字符]`,
+    truncated: true
+  }
+}
+
+/**
+ * Parse a file and extract its text content.
+ * Throws on unsupported format or read failure.
+ */
+export async function parseFile(filePath: string, maxLength?: number): Promise<ParsedAttachment> {
+  const ext = path.extname(filePath).toLowerCase()
+  const filename = path.basename(filePath)
+  const stat = await fs.stat(filePath)
+
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    throw new Error(`Unsupported file type: ${ext}`)
+  }
+
+  let content: string
+  let mimeType: string
+  let isLineBased = false
+
+  switch (ext) {
+    case ".txt":
+    case ".md": {
+      content = await readTextFileAutoEncoding(filePath)
+      mimeType = ext === ".md" ? "text/markdown" : "text/plain"
+      break
+    }
+    case ".csv": {
+      content = await readTextFileAutoEncoding(filePath)
+      mimeType = "text/csv"
+      isLineBased = true
+      break
+    }
+    case ".docx": {
+      content = await parseDocx(filePath)
+      mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      break
+    }
+    case ".xlsx":
+    case ".xls": {
+      content = await parseExcel(filePath)
+      mimeType = ext === ".xlsx"
+        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "application/vnd.ms-excel"
+      isLineBased = true
+      break
+    }
+    default:
+      throw new Error(`Unsupported file type: ${ext}`)
+  }
+
+  const limit = maxLength !== undefined ? Math.min(maxLength, MAX_TEXT_LENGTH) : MAX_TEXT_LENGTH
+  const { content: finalContent, truncated } = truncateContent(content, isLineBased, limit)
+
+  return { filename, filePath, content: finalContent, mimeType, size: stat.size, truncated }
+}
+
+// ---------------------------------------------------------------------------
+// Encoding detection (reuses jschardet + iconv-lite from local-sandbox)
+// ---------------------------------------------------------------------------
+
+function detectEncoding(buffer: Buffer): string {
+  const detected = chardet.detect(buffer)
+  if (detected && detected.encoding && iconv.encodingExists(detected.encoding)) {
+    if (detected.encoding.toLowerCase() === "ascii") return "utf-8"
+    return detected.encoding
+  }
+  return "utf-8"
+}
+
+async function readTextFileAutoEncoding(filePath: string): Promise<string> {
+  const buffer = await fs.readFile(filePath)
+  const encoding = detectEncoding(buffer)
+  return iconv.decode(buffer, encoding)
+}
+
+// ---------------------------------------------------------------------------
+// Format-specific parsers
+// ---------------------------------------------------------------------------
+
+async function parseDocx(filePath: string): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mammoth = await import("mammoth") as any
+  const buffer = await fs.readFile(filePath)
+  // convertToMarkdown exists at runtime but is missing from type definitions
+  if (typeof mammoth.convertToMarkdown === "function") {
+    const result = await mammoth.convertToMarkdown({ buffer })
+    return result.value
+  }
+  // Fallback to extractRawText
+  const result = await mammoth.extractRawText({ buffer })
+  return result.value
+}
+
+async function parseExcel(filePath: string): Promise<string> {
+  const XLSX = await import("xlsx")
+  const buffer = await fs.readFile(filePath)
+  const workbook = XLSX.read(buffer, { type: "buffer" })
+
+  const parts: string[] = []
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    const csv = XLSX.utils.sheet_to_csv(sheet)
+    if (csv.trim()) {
+      parts.push(`## Sheet: ${sheetName}\n${csv}`)
+    }
+  }
+
+  return parts.join("\n\n")
+}

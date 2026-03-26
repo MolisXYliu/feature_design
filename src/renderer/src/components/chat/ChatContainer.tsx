@@ -26,8 +26,12 @@ import {
   Sparkles,
   Wrench,
   CircleAlert,
-  FilePenLine
+  FilePenLine,
+  Plus,
+  Paperclip,
+  Loader2
 } from "lucide-react"
+import type { FileAttachment } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
@@ -337,6 +341,90 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
   const isLoading = streamData.isLoading || scheduledTaskLoading
+
+  // ── File attachments state ──
+  const MAX_ATTACHMENTS = 3
+  const MAX_TOTAL_CHARS = 24_000
+
+  const [attachments, setAttachments] = useState<FileAttachment[]>([])
+  const [attachmentLoading, setAttachmentLoading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+
+  const totalAttachmentChars = useMemo(
+    () => attachments.reduce((sum, a) => sum + a.content.length, 0),
+    [attachments]
+  )
+
+  const handleFileSelectByPath = useCallback(async (filePaths: string[]) => {
+    if (filePaths.length === 0) return
+    setAttachmentLoading(true)
+    try {
+      let currentCount = attachments.length
+      let currentChars = attachments.reduce((sum, a) => sum + a.content.length, 0)
+
+      for (const filePath of filePaths) {
+        if (currentCount >= MAX_ATTACHMENTS) {
+          setError(`最多只能添加 ${MAX_ATTACHMENTS} 个附件`)
+          break
+        }
+
+        const remaining = MAX_TOTAL_CHARS - currentChars
+        if (remaining <= 0) {
+          setError(`附件总内容已达上限（${MAX_TOTAL_CHARS.toLocaleString()} 字符）`)
+          break
+        }
+        const result = await window.api.file.parse(filePath, remaining)
+        if (result.success && result.attachment) {
+          setAttachments((prev) => [...prev, result.attachment!])
+          currentCount++
+          currentChars += result.attachment.content.length
+        } else {
+          setError(result.error || "文件解析失败")
+        }
+      }
+    } finally {
+      setAttachmentLoading(false)
+    }
+  }, [setError, attachments])
+
+  const handleAttachClick = useCallback(async () => {
+    if (attachments.length >= MAX_ATTACHMENTS) {
+      setError(`最多只能添加 ${MAX_ATTACHMENTS} 个附件`)
+      return
+    }
+    const result = await window.api.file.select()
+    if (!result.canceled && result.filePaths.length > 0) {
+      handleFileSelectByPath(result.filePaths)
+    }
+  }, [handleFileSelectByPath, attachments.length, setError])
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const files = e.dataTransfer.files
+    if (files.length > 0) {
+      const paths = Array.from(files)
+        .map((f) => (f as unknown as { path?: string }).path)
+        .filter((p): p is string => !!p)
+      handleFileSelectByPath(paths)
+    }
+  }, [handleFileSelectByPath])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+  }, [])
+
+  // ── End file attachments ──
 
   // 从模型配置中获取用户设置的上下文窗口大小
   useEffect(() => {
@@ -672,7 +760,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
-    if (!input.trim() || isLoading || !stream) return
+    if ((!input.trim() && attachments.length === 0) || isLoading || !stream) return
 
     if (!currentModel) {
       setError("请先在下方选择模型后再发送消息。")
@@ -713,16 +801,38 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       setPendingApproval(null)
     }
 
-    const message = input.trim()
+    const rawMessage = input.trim()
+    const currentAttachments = attachments.length > 0 ? [...attachments] : undefined
+    // If user only uploaded files without text, add a default prompt
+    const userText = rawMessage || (currentAttachments ? "请分析以下文件内容。" : "")
     setInput("")
-    insertLog('send: '+message)
+    setAttachments([])
+    insertLog('send: '+userText)
 
     const isFirstMessage = threadMessages.length === 0
+
+    // Build the full message with attachments as XML tags (sent to model)
+    let fullMessage = userText
+    if (currentAttachments && currentAttachments.length > 0) {
+      const attachmentTexts = currentAttachments.map((att) => {
+        const truncAttr = att.truncated ? ' truncated="true"' : ""
+        const pathAttr = att.filePath ? ` path="${att.filePath}"` : ""
+        return `\n\n<attachment filename="${att.filename}"${pathAttr} type="${att.mimeType}" size="${att.size}"${truncAttr}>\n${att.content}\n</attachment>`
+      })
+      fullMessage = userText + attachmentTexts.join("")
+    }
+
+    // Build display content: show attachment filenames in user bubble (not full content)
+    let displayContent: string = userText
+    if (currentAttachments && currentAttachments.length > 0) {
+      const fileNames = currentAttachments.map((a) => `📎 ${a.filename}`).join("\n")
+      displayContent = `${fileNames}\n\n${userText}`
+    }
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
-      content: message,
+      content: displayContent,
       created_at: new Date()
     }
     appendMessage(userMessage)
@@ -731,13 +841,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       const currentThread = threads.find((t) => t.thread_id === threadId)
       const hasDefaultTitle = currentThread?.title?.startsWith("Thread ")
       if (hasDefaultTitle) {
-        generateTitleForFirstMessage(threadId, message)
+        generateTitleForFirstMessage(threadId, userText)
       }
     }
 
     await stream.submit(
       {
-        messages: [{ type: "human", content: message }]
+        messages: [{ type: "human", content: fullMessage }]
       },
       {
         config: {
@@ -1837,14 +1947,56 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
-              <div className="relative flex-1 min-w-0 flex">
+              <div
+                className={cn(
+                  "relative flex-1 min-w-0 flex flex-col rounded-xl border border-border shadow-sm transition-colors duration-300",
+                  glowVisible ? "bg-white/80" : "bg-white",
+                  dragOver && "border-primary"
+                )}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+              >
                 {glowVisible && (
                   <div
                     className={cn('siri-bg-glow rounded-xl', !isLoading && 'siri-bg-glow-out')}
-                    // 只响应 siri-fade-out 结束，过滤掉 siri-fade-in 和 ::before 的 siri-spin（infinite 不触发）
                     onAnimationEnd={(e) => { if (e.animationName === 'siri-fade-out' && e.target === e.currentTarget && !isLoading) setGlowVisible(false) }}
                   />
                 )}
+                {dragOver && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/5">
+                    <span className="text-sm text-primary">拖放文件到这里</span>
+                  </div>
+                )}
+                {/* Attachment chips inside input box */}
+                {attachments.length > 0 && (
+                  <div className="flex flex-col gap-1 px-3 pt-2.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      {attachments.map((att, idx) => (
+                        <div
+                          key={`${att.filename}-${idx}`}
+                          className="flex items-center gap-1.5 px-2 py-1 bg-muted/50 rounded-md text-xs group"
+                        >
+                          <FileText className="size-3 text-muted-foreground shrink-0" />
+                          <span className="truncate max-w-[160px]" title={att.filePath}>{att.filename}</span>
+                          {att.truncated && <span className="text-amber-500" title="内容已截取">⚠</span>}
+                          <button
+                            type="button"
+                            onClick={() => removeAttachment(idx)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </div>
+                      ))}
+                      {attachmentLoading && <Loader2 className="size-4 animate-spin text-muted-foreground self-center" />}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/50">
+                      {attachments.length}/{MAX_ATTACHMENTS} 个文件 · {totalAttachmentChars.toLocaleString()}/{MAX_TOTAL_CHARS.toLocaleString()} 字符
+                    </div>
+                  </div>
+                )}
+                {/* Textarea */}
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -1856,42 +2008,47 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     isComposingRef.current = false
                   }}
                   onKeyDown={handleKeyDown}
-                  placeholder="输入消息..."
+                  placeholder={attachments.length > 0 ? "输入消息或直接发送文件..." : "输入消息..."}
                   disabled={isLoading}
                   className={cn(
-                    "relative z-[1] flex-1 resize-none rounded-xl border border-border",
+                    "relative z-[1] flex-1 resize-none bg-transparent",
                     "px-4 py-3 text-sm placeholder:text-muted-foreground",
-                    "focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-70 shadow-sm",
-                    "transition-colors duration-300",
-                    glowVisible ? "bg-white/80" : "bg-white"
+                    "focus:outline-none disabled:opacity-70",
+                    attachments.length > 0 && "pt-1.5"
                   )}
                   rows={1}
-                  style={{ minHeight: "48px", maxHeight: "200px" }}
+                  style={{ minHeight: "44px", maxHeight: "200px" }}
                 />
-              </div>
-              <div className="flex items-center justify-center shrink-0 h-12">
-                {isLoading ? (
-                  <Button
+                {/* Bottom bar: + button left, send button right */}
+                <div className="flex items-center justify-between px-2 pb-2">
+                  <button
                     type="button"
-                    variant="destructive"
-                    size="icon"
-                    onClick={handleCancel}
-                    aria-label="停止生成"
-                    className="rounded-md shadow-sm"
+                    disabled={isLoading || attachmentLoading || attachments.length >= MAX_ATTACHMENTS || totalAttachmentChars >= MAX_TOTAL_CHARS}
+                    onClick={handleAttachClick}
+                    title="添加文件 (txt, md, csv, docx, xlsx)"
+                    className="flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <Square className="size-3.5 fill-current" />
-                  </Button>
-                ) : (
-                  <Button
-                    type="submit"
-                    variant="default"
-                    size="icon"
-                    disabled={!input.trim()}
-                    className="rounded-md"
-                  >
-                    <Send className="size-4" />
-                  </Button>
-                )}
+                    <Plus className="size-4" />
+                  </button>
+                  {isLoading ? (
+                    <button
+                      type="button"
+                      onClick={handleCancel}
+                      aria-label="停止生成"
+                      className="flex items-center justify-center size-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                    >
+                      <Square className="size-3 fill-current" />
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!input.trim() && attachments.length === 0}
+                      className="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Send className="size-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
             <div className="flex items-center justify-between">

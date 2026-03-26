@@ -684,6 +684,51 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
     }
   )
+
+  // Parse a file and extract text content for chat attachments
+  ipcMain.handle(
+    "file:parse",
+    async (_event, filePath: string, maxLength?: number): Promise<{
+      success: boolean
+      attachment?: import("../file-parser").ParsedAttachment
+      error?: string
+    }> => {
+      try {
+        const { parseFile, isSupportedFile } = await import("../file-parser")
+        if (!isSupportedFile(filePath)) {
+          return { success: false, error: "不支持的文件类型，仅支持 txt、md、csv、docx、xlsx、xls" }
+        }
+        const attachment = await parseFile(filePath, maxLength)
+        return { success: true, attachment }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "文件解析失败"
+        }
+      }
+    }
+  )
+
+  // Open native file picker for chat attachments
+  ipcMain.handle("file:select", async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openFile", "multiSelections"],
+      title: "选择附件",
+      filters: [
+        { name: "支持的文件", extensions: ["txt", "md", "csv", "docx", "xlsx", "xls"] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true, filePaths: [] }
+    }
+    return { canceled: false, filePaths: result.filePaths }
+  })
+
+  // Get supported file extensions
+  ipcMain.handle("file:supportedExtensions", async () => {
+    const { getSupportedExtensions } = await import("../file-parser")
+    return getSupportedExtensions()
+  })
 }
 
 export function getDefaultModel(): string {

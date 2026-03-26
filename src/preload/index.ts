@@ -367,6 +367,31 @@ const api = {
       }
     }
   },
+  file: {
+    parse: (
+      filePath: string,
+      maxLength?: number
+    ): Promise<{
+      success: boolean
+      attachment?: {
+        filename: string
+        filePath: string
+        content: string
+        mimeType: string
+        size: number
+        truncated: boolean
+      }
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("file:parse", filePath, maxLength)
+    },
+    select: (): Promise<{ canceled: boolean; filePaths: string[] }> => {
+      return ipcRenderer.invoke("file:select")
+    },
+    supportedExtensions: (): Promise<string[]> => {
+      return ipcRenderer.invoke("file:supportedExtensions")
+    }
+  },
   skills: {
     list: (): Promise<SkillMetadata[]> => {
       return ipcRenderer.invoke("skills:list")
