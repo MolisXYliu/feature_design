@@ -201,16 +201,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
     ]
 
-    // JVM options: set user.home and maven.repo.local for all JVM instances.
-    // JAVA_TOOL_OPTIONS is picked up by ALL JVMs automatically (not just Maven).
-    // MAVEN_OPTS is kept for backward compatibility with older Maven versions.
-    const jvmFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
+    // Two-layer JVM user.home strategy:
+    //   JAVA_TOOL_OPTIONS → user.home = TEMP-based writable dir (for app logs, caches, etc.)
+    //   MAVEN_OPTS        → user.home = real user home (for reading ~/.m2/settings.xml etc.)
+    // Maven reads MAVEN_OPTS which overrides JAVA_TOOL_OPTIONS, so Maven gets the real home
+    // for config reading. All other JVMs (Spring Boot, Nacos, etc.) get the writable TEMP dir
+    // so they can create log files without permission errors.
+    const javaHome = path.win32.join(realTempDir, "sandbox-java-home")
+    const javaToolFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
+    const mavenFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
 
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      const jvmOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(jvmFlags)}" & set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(jvmFlags)}"`
+      const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}"`
       return `${base} & ${jvmOpts}`
     }
 
@@ -218,8 +223,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      const jvmFlagsEscaped = jvmFlags.replace(/\\/g, "\\\\")
-      const jvmOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${jvmFlagsEscaped}"; $env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${jvmFlagsEscaped}"`
+      const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
+      const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
+      const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"`
       return `${base}; ${jvmOpts}`
     }
 
