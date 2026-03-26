@@ -43,7 +43,7 @@ import type * as _lcZodTypes from "@langchain/core/utils/types"
 
 import { createHash } from "crypto"
 import path from "path"
-import { join, delimiter } from "path"
+import { join, resolve, delimiter } from "path"
 import { existsSync, createWriteStream, statSync, unlinkSync } from "fs"
 import { createReadStream } from "fs"
 import { createGunzip } from "zlib"
@@ -317,24 +317,63 @@ function createDeepAgent(params: Record<string, any> = {}): ReactAgent<any> {
       console.log("[Runtime] execute tool patched: added run_in_background support")
     }
 
-    // Add task_output tool for retrieving background task results
-    const taskOutputTool = lcTool(async (input: { task_id: string }) => {
-      const result = (filesystemBackend as LocalSandbox).getTaskOutput(input.task_id)
-      if (!result) return `Error: No background task found with id "${input.task_id}".`
-      if (!result.completed) {
-        return `Task ${input.task_id} is still running (elapsed: ${result.elapsedSeconds}s, command: ${result.command}). Try again in a few seconds.`
+    // Add task_output tool for retrieving background task results.
+    // Mirrors Claude Code's TaskOutput: blocks internally (100ms poll loop)
+    // until the task completes or the timeout expires, so the LLM only needs
+    // one tool call per check instead of burning tokens on repeated polls.
+    const taskOutputTool = lcTool(async (input: { task_id: string; block?: boolean; timeout?: number }) => {
+      const sandbox = filesystemBackend as LocalSandbox
+      const block = input.block !== false  // default true
+      const timeout = input.timeout ?? 30_000 // default 30s, max 600s
+
+      // Non-blocking: return immediately
+      if (!block) {
+        const result = sandbox.getTaskOutput(input.task_id)
+        if (!result) return `Error: No background task found with id "${input.task_id}".`
+        if (!result.completed) {
+          return JSON.stringify({ retrieval_status: "not_ready", elapsed: result.elapsedSeconds, command: result.command })
+        }
+        const status = result.exitCode === 0 ? "succeeded" : "failed"
+        return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
       }
-      const status = result.exitCode === 0 ? "succeeded" : "failed"
-      const parts = [result.output ?? "<no output>"]
-      if (result.exitCode !== null && result.exitCode !== undefined) {
-        parts.push(`\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`)
+
+      // Blocking: poll with progressive interval until completed, timeout, or abort.
+      // First 2s at 100ms for snappy response, then 500ms to reduce CPU spin.
+      const start = Date.now()
+      while (Date.now() - start < timeout) {
+        if (sandbox.isAborted) {
+          return "Task polling aborted: conversation was cancelled by user."
+        }
+        const result = sandbox.getTaskOutput(input.task_id)
+        if (!result) return `Error: No background task found with id "${input.task_id}".`
+        if (result.completed) {
+          const status = result.exitCode === 0 ? "succeeded" : "failed"
+          return `${result.output ?? "<no output>"}\n[Command ${status} with exit code ${result.exitCode}, elapsed: ${result.elapsedSeconds}s]`
+        }
+        const elapsed = Date.now() - start
+        await new Promise<void>(r => setTimeout(r, elapsed < 2000 ? 100 : 500))
       }
-      return parts.join("")
+
+      // Timeout — return current status so the LLM can decide to call again
+      const final = sandbox.getTaskOutput(input.task_id)
+      if (!final) return `Error: No background task found with id "${input.task_id}".`
+      if (final.completed) {
+        const status = final.exitCode === 0 ? "succeeded" : "failed"
+        return `${final.output ?? "<no output>"}\n[Command ${status} with exit code ${final.exitCode}, elapsed: ${final.elapsedSeconds}s]`
+      }
+      return JSON.stringify({ retrieval_status: "timeout", elapsed: final.elapsedSeconds, command: final.command })
     }, {
       name: "task_output",
-      description: "Retrieve the output of a background task started with execute(run_in_background=true). When the task is still running, returns elapsed time. Poll every 5-10 seconds until completion. Tell the user the elapsed time so they know the build is still in progress.",
+      description:
+        "Retrieve the output of a background task started with execute(run_in_background=true). " +
+        "By default blocks up to 30 seconds waiting for the task to complete. " +
+        "If the task finishes within the timeout, returns the full output. " +
+        "If it times out, returns current status — call again to continue waiting. " +
+        "Set block=false for a non-blocking status check.",
       schema: z.object({
-        task_id: z.string().describe("The task ID returned by execute when run_in_background was true")
+        task_id: z.string().describe("The task ID returned by execute when run_in_background was true"),
+        block: z.boolean().optional().describe("Whether to wait for completion (default: true)"),
+        timeout: z.number().min(0).max(600_000).optional().describe("Max wait time in ms (default: 30000)")
       })
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -439,7 +478,15 @@ function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unele
   const shellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
-      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      ? `- **CRITICAL: Commands run in PowerShell (not bash).** You MUST use PowerShell syntax:
+  - Chain commands: use \`; \` instead of \`&&\` (PowerShell 5.1 does NOT support \`&&\`)
+  - Logic operators: use \`-and\`, \`-or\` instead of \`&&\`, \`||\`
+  - Environment variables: use \`$env:VAR\` instead of \`$VAR\`
+  - Null redirect: use \`$null\` or \`Out-Null\` instead of \`/dev/null\`
+  - Line continuation: use backtick \` instead of \`\\\`
+  - Common equivalents: \`Get-ChildItem\` (ls), \`Get-Content\` (cat), \`Select-String\` (grep), \`Remove-Item\` (rm)
+  - You may also use standard Windows commands: dir, type, findstr, del, copy, move, mkdir, rmdir
+  - NEVER use bash-specific syntax: $(), \${}, <<<, <(), 2>&1 |, [[ ]], etc.`
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -472,8 +519,10 @@ ${shellGuidance}
 
 使用方法：
 1. 调用 execute({ command: "mvn clean package -DskipTests", run_in_background: true })
-2. 获得 task_id 后，用 task_output({ task_id: "..." }) 轮询结果
-3. 如果 task_output 返回 "still running"，等待几秒后再次轮询
+2. 获得 task_id 后，调用 task_output({ task_id: "..." }) 获取结果
+3. task_output 默认会阻塞等待最多 30 秒，如果任务在 30 秒内完成则直接返回结果
+4. 如果返回 timeout，再次调用 task_output 继续等待即可
+5. 对于预计非常长的任务，可以设置更大的 timeout：task_output({ task_id: "...", timeout: 120000 })
 
 **切勿**对编译、安装依赖等命令使用前台执行，否则会因超时被终止。
 `
@@ -729,11 +778,20 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const maxOutputBytes = Math.max(30_000, Math.min(80_000, Math.floor(maxTokens * 4 * 0.2)))
 
   // Inject bundled ripgrep into PATH so deepagents' ripgrepSearch can find it
-  const rgDir = join(
-    app.isPackaged ? process.resourcesPath : join(__dirname, "../../resources"),
-    "bin",
-    process.platform
-  )
+  let resourceBase: string
+  if (app.isPackaged) {
+    resourceBase = process.resourcesPath
+  } else {
+    // Dev mode: __dirname may be relative on some machines.
+    // Try multiple strategies to find the resources directory.
+    const candidates = [
+      resolve(__dirname, "../../resources"),
+      join(app.getAppPath(), "resources"),
+      join(app.getAppPath(), "..", "resources"),
+    ]
+    resourceBase = candidates.find(c => existsSync(join(c, "bin"))) ?? resolve(__dirname, "../../resources")
+  }
+  const rgDir = join(resourceBase, "bin", process.platform)
   const rgBin = join(rgDir, process.platform === "win32" ? "rg.exe" : "rg")
   const rgExists = existsSync(rgBin)
   // Mutate process.env.PATH so deepagents' internal ripgrepSearch
@@ -827,7 +885,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const subagentShellGuidance = isBashLike
     ? "- Use Unix/bash commands for shell operations (ls, cat, grep, etc.)"
     : isPowerShell
-      ? "- Use PowerShell syntax: $env:VAR for environment variables, ` for line continuation, -and/-or for logic operators"
+      ? `- **CRITICAL: Commands run in PowerShell (not bash).** Use \`; \` instead of \`&&\`, \`$env:VAR\` instead of \`$VAR\`, \`-and\`/\`-or\` instead of \`&&\`/\`||\`. NEVER use bash syntax.`
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
   const filesystemSystemPrompt = `You have access to a filesystem. All file paths use fully qualified absolute system paths.

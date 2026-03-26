@@ -1306,6 +1306,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
   ipcMain.handle("agent:cancel", async (_event, { threadId }: AgentCancelParams) => {
     const controller = activeRuns.get(threadId)
     console.log(`[Agent] cancel: threadId=${threadId}, hasController=${!!controller}, activeRuns=[${Array.from(activeRuns.keys()).join(", ")}]`)
+    // Cancel any background tasks belonging to this thread (e.g. builds, tests)
+    LocalSandbox.cancelBackgroundTasks(threadId)
     if (controller) {
       controller.abort()
       activeRuns.delete(threadId)
