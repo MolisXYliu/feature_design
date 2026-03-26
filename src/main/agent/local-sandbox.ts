@@ -201,13 +201,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
     ]
 
+    // JVM options: set user.home and maven.repo.local for all JVM instances.
+    // JAVA_TOOL_OPTIONS is picked up by ALL JVMs automatically (not just Maven).
+    // MAVEN_OPTS is kept for backward compatibility with older Maven versions.
+    const jvmFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
+
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
-      // real user home so all JVM tools find their configs automatically.
-      const jvmOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)} -Duser.home=${cmdSetLiteral(realUserHome)}"`
+      const jvmOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(jvmFlags)}" & set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(jvmFlags)}"`
       return `${base} & ${jvmOpts}`
     }
 
@@ -215,9 +218,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
-      // real user home so all JVM tools find their configs automatically.
-      const jvmOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")} -Duser.home=${realUserHome.replace(/\\/g, "\\\\")}"`
+      const jvmFlagsEscaped = jvmFlags.replace(/\\/g, "\\\\")
+      const jvmOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${jvmFlagsEscaped}"; $env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${jvmFlagsEscaped}"`
       return `${base}; ${jvmOpts}`
     }
 
