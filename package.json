@@ -68,7 +68,8 @@
         "from": "resources/bin",
         "to": "bin"
       }
-    ]
+    ],
+    "electronVersion": "39.8.0"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
