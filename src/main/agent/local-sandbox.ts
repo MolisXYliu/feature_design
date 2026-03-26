@@ -1240,6 +1240,41 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * executables (whoami, find, sort, etc.) are found before MSYS2/Git
    * equivalents that crash under restricted tokens (STATUS_DLL_NOT_FOUND).
    */
+  /**
+   * Cached Python installation directory discovered via `py -0p` or `where python`.
+   * The py launcher uses registry, which sandbox users can't access — so we resolve
+   * the real Python path from the main process and inject it into the sandbox PATH.
+   */
+  private static _pythonDir: string | null | undefined = undefined // undefined = not yet checked
+
+  private static resolvePythonDir(): string | null {
+    if (LocalSandbox._pythonDir !== undefined) return LocalSandbox._pythonDir
+    try {
+      // Try py launcher first (reads registry, works even when python not in PATH)
+      const pyOutput = execSync("py -c \"import sys; print(sys.executable)\"", {
+        timeout: 5000, stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8"
+      }).trim()
+      if (pyOutput && existsSync(pyOutput)) {
+        LocalSandbox._pythonDir = path.dirname(pyOutput)
+        console.log(`[LocalSandbox] resolved Python dir via py launcher: ${LocalSandbox._pythonDir}`)
+        return LocalSandbox._pythonDir
+      }
+    } catch { /* py launcher not available */ }
+    try {
+      // Fallback: where python
+      const whereOutput = execSync("where python", {
+        timeout: 5000, stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8"
+      }).trim().split(/\r?\n/)[0]
+      if (whereOutput && existsSync(whereOutput)) {
+        LocalSandbox._pythonDir = path.dirname(whereOutput)
+        console.log(`[LocalSandbox] resolved Python dir via where: ${LocalSandbox._pythonDir}`)
+        return LocalSandbox._pythonDir
+      }
+    } catch { /* python not found */ }
+    LocalSandbox._pythonDir = null
+    return null
+  }
+
   private static buildSandboxEnv(env: Record<string, string>): Record<string, string> {
     const result = { ...env }
     const sep = path.delimiter
@@ -1262,6 +1297,22 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Ensure System32 is present even if not in original PATH
     if (!system.some(s => s.toLowerCase() === sys32Lower)) {
       system.unshift(sys32)
+    }
+    // Inject Python installation directory if not already in PATH.
+    // The py launcher uses registry (inaccessible in sandbox), so we resolve
+    // the real path from the main process and add it to the sandbox PATH.
+    const pythonDir = LocalSandbox.resolvePythonDir()
+    if (pythonDir) {
+      const pythonLower = pythonDir.toLowerCase()
+      if (!system.some(s => s.toLowerCase() === pythonLower)
+        && !rest.some(s => s.toLowerCase() === pythonLower)) {
+        rest.push(pythonDir)
+        // Also add Scripts subdir (where pip.exe lives)
+        const scriptsDir = path.join(pythonDir, "Scripts")
+        if (existsSync(scriptsDir)) {
+          rest.push(scriptsDir)
+        }
+      }
     }
     const pathKey = result.PATH !== undefined ? "PATH" : "Path"
     result[pathKey] = [...system, ...rest].join(sep)

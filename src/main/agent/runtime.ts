@@ -486,6 +486,7 @@ function getSystemPrompt(workspacePath: string, windowsSandbox?: "none" | "unele
   - Line continuation: use backtick \` instead of \`\\\`
   - Common equivalents: \`Get-ChildItem\` (ls), \`Get-Content\` (cat), \`Select-String\` (grep), \`Remove-Item\` (rm)
   - You may also use standard Windows commands: dir, type, findstr, del, copy, move, mkdir, rmdir
+  - Python: use \`python\` instead of \`py\` (the \`py\` launcher depends on Windows registry which may not be accessible in sandbox)
   - NEVER use bash-specific syntax: $(), \${}, <<<, <(), 2>&1 |, [[ ]], etc.`
       : "- Use cmd.exe syntax for shell commands (e.g., dir instead of ls, type instead of cat)\n- Use && to chain commands, use ^ for line continuation, use %VAR% for environment variables"
 
