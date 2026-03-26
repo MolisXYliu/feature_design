@@ -650,6 +650,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const normalizeMessageText = (s: string): string =>
         s.replace(/\r\n/g, "\n").trim()
 
+      // Providers may surface usage as top-level `usage_metadata` or under
+      // `response_metadata.token_usage` / `response_metadata.usage`.
+      // Normalize all variants so trace capture and UI stay aligned.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const getUsageMetadata = (kwargs: any): unknown =>
+        kwargs?.usage_metadata ?? kwargs?.response_metadata?.token_usage ?? kwargs?.response_metadata?.usage
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const extractText = (raw: any): string => {
         if (typeof raw === "string") return trimContent(raw)
@@ -732,7 +739,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                   name?: string
                   tool_call_id?: string
                   usage_metadata?: unknown
-                  response_metadata?: { token_usage?: unknown }
+                  response_metadata?: { token_usage?: unknown; usage?: unknown }
                   tool_calls?: Array<{
                     id?: string
                     name?: string
@@ -819,7 +826,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                       content: extractText(kwargs.content),
                     },
                     toolCalls: outputToolCalls,
-                    tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
+                    tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
                   })
 
                   tracer.endLlmNode({
@@ -827,7 +834,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                     output: extractText(kwargs.content),
                     status: "success",
                     metadata: {
-                      tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
+                      tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
                     }
                   })
                 }

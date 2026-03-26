@@ -42,6 +42,15 @@ interface SerializedMsg {
   name?: string
 }
 
+function getUsageMetadata(kwargs: Record<string, unknown>): Record<string, unknown> | undefined {
+  const responseMetadata = kwargs.response_metadata as Record<string, unknown> | undefined
+  return (
+    (kwargs.usage_metadata as Record<string, unknown> | undefined) ||
+    (responseMetadata?.token_usage as Record<string, unknown> | undefined) ||
+    (responseMetadata?.usage as Record<string, unknown> | undefined)
+  )
+}
+
 function getClassName(msg: SerializedMsg): string {
   const classId = Array.isArray(msg.id) ? msg.id : []
   return classId[classId.length - 1] || ""
@@ -140,10 +149,7 @@ export class StreamConverter {
       }
 
       // Token usage
-      const usageMeta = (kwargs.usage_metadata ||
-        (kwargs.response_metadata as Record<string, unknown> | undefined)?.usage) as
-        | Record<string, unknown>
-        | undefined
+      const usageMeta = getUsageMetadata(kwargs)
       if (usageMeta && typeof usageMeta.input_tokens === "number" && usageMeta.input_tokens > 0) {
         const details = usageMeta.input_token_details as
           | { cache_read?: number; cache_creation?: number }
