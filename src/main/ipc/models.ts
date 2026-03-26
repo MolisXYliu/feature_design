@@ -1,4 +1,4 @@
-import { IpcMain, dialog, app } from "electron"
+import { IpcMain, dialog, app, BrowserWindow } from "electron"
 import Store from "electron-store"
 import * as fs from "fs/promises"
 import * as path from "path"
@@ -710,8 +710,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
   )
 
   // Open native file picker for chat attachments
-  ipcMain.handle("file:select", async () => {
-    const result = await dialog.showOpenDialog({
+  ipcMain.handle("file:select", async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
       properties: ["openFile", "multiSelections"],
       title: "选择附件",
       filters: [
