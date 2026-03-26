@@ -201,13 +201,21 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
     ]
 
+    // Two-layer JVM user.home strategy:
+    //   JAVA_TOOL_OPTIONS → user.home = TEMP-based writable dir (for app logs, caches, etc.)
+    //   MAVEN_OPTS        → user.home = real user home (for reading ~/.m2/settings.xml etc.)
+    // Maven reads MAVEN_OPTS which overrides JAVA_TOOL_OPTIONS, so Maven gets the real home
+    // for config reading. All other JVMs (Spring Boot, Nacos, etc.) get the writable TEMP dir
+    // so they can create log files without permission errors.
+    const javaHome = path.win32.join(realTempDir, "sandbox-java-home")
+    const javaToolFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
+    const mavenFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
+
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
-      // real user home so all JVM tools find their configs automatically.
-      const jvmOpts = `set "MAVEN_OPTS=%MAVEN_OPTS% -Dmaven.repo.local=${cmdSetLiteral(mavenRepoLocal)} -Duser.home=${cmdSetLiteral(realUserHome)}"`
+      const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}"`
       return `${base} & ${jvmOpts}`
     }
 
@@ -215,9 +223,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const base = envOverrides
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
-      // Redirect maven.repo.local to writable temp dir, and set JVM user.home to the
-      // real user home so all JVM tools find their configs automatically.
-      const jvmOpts = `$env:MAVEN_OPTS="$($env:MAVEN_OPTS) -Dmaven.repo.local=${mavenRepoLocal.replace(/\\/g, "\\\\")} -Duser.home=${realUserHome.replace(/\\/g, "\\\\")}"`
+      const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
+      const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
+      const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"`
       return `${base}; ${jvmOpts}`
     }
 
