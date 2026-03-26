@@ -63,7 +63,6 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   task: GitBranch,
   git_push: GitBranch,
   git_workflow: GitBranch,
-  agent_browser: Terminal,
   browser_playwright: Terminal
 }
 

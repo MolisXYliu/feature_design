@@ -3,6 +3,7 @@ import './mmj.js'
 export function initMMJ(){
   if (window.mmjTrack && !window.mmjStart){
     window.mmjStart = true
+    console.log('初始化MMJ')
     window.mmjTrack.setConfig({
       env: 'prodOA',
       appName: 'CMBDevClaw',

@@ -48,6 +48,31 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
+function optionalMmjModule() {
+  const virtualId = "\0virtual:mmj-empty"
+  const mmjPath = resolve("src/renderer/js/mmj.js")
+
+  return {
+    name: "optional-mmj-module",
+    resolveId(source: string, importer?: string) {
+      const normalizedSource = source.replace(/\\/g, "/")
+      const normalizedImporter = (importer || "").replace(/\\/g, "/")
+      const isMmjFromUtils = normalizedSource === "./mmj.js" && normalizedImporter.endsWith("/src/renderer/js/mmjUtils.ts")
+      const isDirectMmjPath = normalizedSource.endsWith("/src/renderer/js/mmj.js")
+      if ((isMmjFromUtils || isDirectMmjPath) && !existsSync(mmjPath)) {
+        return virtualId
+      }
+      return null
+    },
+    load(id: string) {
+      if (id === virtualId) {
+        return "export {}"
+      }
+      return null
+    }
+  }
+}
+
 export default defineConfig({
   main: {
     // Bundle all dependencies into the main process
@@ -74,7 +99,7 @@ export default defineConfig({
         "@renderer": resolve("src/renderer/src")
       }
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [optionalMmjModule(), react(), tailwindcss()],
     server: {
       proxy: {
       }
