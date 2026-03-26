@@ -231,6 +231,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || output.includes("安全包中没有凭据")
       || (lower.includes("schannel") && lower.includes("credential"))
       || (output.includes("Invoke-WebRequest") && output.includes("认证失败"))
+      // SSL certificate errors: elevated sandbox user's certificate store is empty,
+      // missing corporate CA root certs needed for HTTPS inspection/proxy
+      || lower.includes("certificate_verify_failed")
+      || lower.includes("unable to get local issuer certificate")
+      || (lower.includes("ssl") && lower.includes("certificate") && lower.includes("verify"))
   }
 
   constructor(options: LocalSandboxOptions = {}) {
@@ -1845,9 +1850,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       : shellBase === "pwsh" || shellBase === "powershell"
         ? `${psUtf8Preamble}; ${command}`
         : command
+    // Unelevated sandbox: codex.exe may inject HTTP_PROXY=127.0.0.1:9 via apply_no_network_to_env
+    // when the policy's network_access is false (default). Clear proxy vars in the command preamble
+    // so the sandboxed process can access the network normally.
+    const clearProxyPreamble = !isElevatedSandbox && effectiveMode !== "none"
+      ? (shellBase === "cmd"
+          ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE="'
+          : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null')
+      : ""
     const sandboxUserEnvPreamble = isElevatedSandbox
       ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir, this._realUserHome)
-      : ""
+      : clearProxyPreamble
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"
         ? `${sandboxUserEnvPreamble} & ${effectiveCommand}`
