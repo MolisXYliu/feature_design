@@ -53,6 +53,10 @@ When delegating to subagents:
 
 ## Tools
 
+### Browser Operation Priority
+- If the user asks to operate a browser (open pages, click/fill forms, scrape page content, screenshots, web UI workflows), first check whether any enabled **skills** already cover that workflow and follow the skill guidance.
+- Only use built-in browser tooling when no applicable skill is available for the request.
+
 ### File Tools
 - read_file: Read file contents
 - edit_file: Replace exact strings in files (must read first, provide unique old_string)
