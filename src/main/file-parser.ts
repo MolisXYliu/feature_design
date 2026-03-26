@@ -96,14 +96,21 @@ function truncateContent(content: string, isLineBased: boolean, maxLen: number =
 export async function parseFile(filePath: string, maxLength?: number): Promise<ParsedAttachment> {
   const ext = path.extname(filePath).toLowerCase()
   const filename = path.basename(filePath)
-  const stat = await fs.stat(filePath)
+  // Security: reject symlinks to prevent reading sensitive files via symlink
+  const lstat = await fs.lstat(filePath)
+  if (lstat.isSymbolicLink()) {
+    throw new Error("不支持符号链接文件")
+  }
+  if (!lstat.isFile()) {
+    throw new Error("只能解析普通文件")
+  }
 
-  if (stat.size > MAX_FILE_SIZE) {
-    throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)}MB），单文件不超过 5MB`)
+  if (lstat.size > MAX_FILE_SIZE) {
+    throw new Error(`文件过大（${(lstat.size / 1024 / 1024).toFixed(1)}MB），单文件不超过 5MB`)
   }
 
   if (!SUPPORTED_EXTENSIONS.has(ext)) {
-    throw new Error(`Unsupported file type: ${ext}`)
+    throw new Error(`不支持的文件类型: ${ext}，仅支持 txt、md、csv、docx、xlsx、xls`)
   }
 
   let content: string
@@ -144,15 +151,19 @@ export async function parseFile(filePath: string, maxLength?: number): Promise<P
   const limit = maxLength !== undefined ? Math.min(maxLength, MAX_TEXT_LENGTH) : MAX_TEXT_LENGTH
   const { content: finalContent, truncated } = truncateContent(content, isLineBased, limit)
 
-  return { filename, filePath, content: finalContent, mimeType, size: stat.size, truncated }
+  return { filename, filePath, content: finalContent, mimeType, size: lstat.size, truncated }
 }
 
 // ---------------------------------------------------------------------------
 // Encoding detection (reuses jschardet + iconv-lite from local-sandbox)
 // ---------------------------------------------------------------------------
 
+/** Sample first 8KB for encoding detection (sufficient for accuracy, avoids scanning entire file) */
+const ENCODING_SAMPLE_SIZE = 8192
+
 function detectEncoding(buffer: Buffer): string {
-  const detected = chardet.detect(buffer)
+  const sample = buffer.length > ENCODING_SAMPLE_SIZE ? buffer.subarray(0, ENCODING_SAMPLE_SIZE) : buffer
+  const detected = chardet.detect(sample)
   if (detected && detected.encoding && iconv.encodingExists(detected.encoding)) {
     if (detected.encoding.toLowerCase() === "ascii") return "utf-8"
     return detected.encoding
@@ -171,15 +182,8 @@ async function readTextFileAutoEncoding(filePath: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 async function parseDocx(filePath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mammoth = await import("mammoth") as any
+  const mammoth = await import("mammoth")
   const buffer = await fs.readFile(filePath)
-  // convertToMarkdown exists at runtime but is missing from type definitions
-  if (typeof mammoth.convertToMarkdown === "function") {
-    const result = await mammoth.convertToMarkdown({ buffer })
-    return result.value
-  }
-  // Fallback to extractRawText
   const result = await mammoth.extractRawText({ buffer })
   return result.value
 }

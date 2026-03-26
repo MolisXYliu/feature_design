@@ -28,7 +28,6 @@ import {
   CircleAlert,
   FilePenLine,
   Plus,
-  Paperclip,
   Loader2
 } from "lucide-react"
 import type { FileAttachment } from "@/types"
@@ -355,14 +354,31 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     [attachments]
   )
 
+  const SUPPORTED_EXTS = new Set([".txt", ".md", ".csv", ".docx", ".xlsx", ".xls"])
+
   const handleFileSelectByPath = useCallback(async (filePaths: string[]) => {
-    if (filePaths.length === 0) return
+    if (filePaths.length === 0 || attachmentLoading) return
     setAttachmentLoading(true)
     try {
-      let currentCount = attachments.length
-      let currentChars = attachments.reduce((sum, a) => sum + a.content.length, 0)
+      // Use functional state access to avoid stale closure
+      let snapshot: FileAttachment[] = []
+      setAttachments((prev) => { snapshot = prev; return prev })
+
+      let currentCount = snapshot.length
+      let currentChars = snapshot.reduce((sum, a) => sum + a.content.length, 0)
+      const existingPaths = new Set(snapshot.map((a) => a.filePath))
 
       for (const filePath of filePaths) {
+        // #7: skip duplicates
+        if (existingPaths.has(filePath)) continue
+
+        // #6: check extension before calling backend
+        const ext = filePath.substring(filePath.lastIndexOf(".")).toLowerCase()
+        if (!SUPPORTED_EXTS.has(ext)) {
+          setError(`不支持的文件类型: ${ext}，仅支持 txt、md、csv、docx、xlsx、xls`)
+          continue
+        }
+
         if (currentCount >= MAX_ATTACHMENTS) {
           setError(`最多只能添加 ${MAX_ATTACHMENTS} 个附件`)
           break
@@ -375,7 +391,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         }
         const result = await window.api.file.parse(filePath, remaining)
         if (result.success && result.attachment) {
+          // #12: skip empty files
+          if (!result.attachment.content.trim()) {
+            setError(`文件 "${result.attachment.filename}" 内容为空`)
+            continue
+          }
           setAttachments((prev) => [...prev, result.attachment!])
+          existingPaths.add(filePath)
           currentCount++
           currentChars += result.attachment.content.length
         } else {
@@ -385,7 +407,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     } finally {
       setAttachmentLoading(false)
     }
-  }, [setError, attachments])
+  }, [setError, attachmentLoading])
 
   const handleAttachClick = useCallback(async () => {
     if (attachments.length >= MAX_ATTACHMENTS) {
@@ -394,7 +416,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
     const result = await window.api.file.select()
     if (!result.canceled && result.filePaths.length > 0) {
-      handleFileSelectByPath(result.filePaths)
+      await handleFileSelectByPath(result.filePaths)  // #5: add await
     }
   }, [handleFileSelectByPath, attachments.length, setError])
 
@@ -402,26 +424,56 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     setAttachments((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
+  const dropZoneRef = useRef<HTMLDivElement>(null)
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    e.stopPropagation()
     setDragOver(false)
+    if (attachmentLoading) return
     const files = e.dataTransfer.files
     if (files.length > 0) {
       const paths = Array.from(files)
-        .map((f) => (f as unknown as { path?: string }).path)
-        .filter((p): p is string => !!p)
-      handleFileSelectByPath(paths)
+        .map((f) => window.api.file.getFilePath(f))
+        .filter((p) => !!p)
+      if (paths.length > 0) {
+        handleFileSelectByPath(paths)
+      }
     }
-  }, [handleFileSelectByPath])
+  }, [handleFileSelectByPath, attachmentLoading])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    setDragOver(true)
+    e.stopPropagation()
+    // Only show drag indicator if dragging files (not text)
+    if (e.dataTransfer.types.includes("Files")) {
+      setDragOver(true)
+    }
   }, [])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    setDragOver(false)
+    e.stopPropagation()
+    // Only clear if leaving the drop zone (not entering a child element)
+    if (dropZoneRef.current && !dropZoneRef.current.contains(e.relatedTarget as Node)) {
+      setDragOver(false)
+    }
+  }, [])
+
+  // Prevent Electron from navigating to dropped files (default browser behavior)
+  // Use capture phase so it runs before React's synthetic events
+  useEffect(() => {
+    const preventNav = (e: DragEvent): void => {
+      // Allow events on our drop zone to propagate to React handlers
+      if (dropZoneRef.current?.contains(e.target as Node)) return
+      e.preventDefault()
+    }
+    document.addEventListener("dragover", preventNav, true)
+    document.addEventListener("drop", preventNav, true)
+    return () => {
+      document.removeEventListener("dragover", preventNav, true)
+      document.removeEventListener("drop", preventNav, true)
+    }
   }, [])
 
   // ── End file attachments ──
@@ -814,10 +866,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     // Build the full message with attachments as XML tags (sent to model)
     let fullMessage = userText
     if (currentAttachments && currentAttachments.length > 0) {
+      const escXml = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       const attachmentTexts = currentAttachments.map((att) => {
         const truncAttr = att.truncated ? ' truncated="true"' : ""
-        const pathAttr = att.filePath ? ` path="${att.filePath}"` : ""
-        return `\n\n<attachment filename="${att.filename}"${pathAttr} type="${att.mimeType}" size="${att.size}"${truncAttr}>\n${att.content}\n</attachment>`
+        const pathAttr = att.filePath ? ` path="${escXml(att.filePath)}"` : ""
+        return `\n\n<attachment filename="${escXml(att.filename)}"${pathAttr} type="${att.mimeType}" size="${att.size}"${truncAttr}>\n${att.content}\n</attachment>`
       })
       fullMessage = userText + attachmentTexts.join("")
     }
@@ -1948,6 +2001,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
               <div
+                ref={dropZoneRef}
                 className={cn(
                   "relative flex-1 min-w-0 flex flex-col rounded-xl border border-border shadow-sm transition-colors duration-300",
                   glowVisible ? "bg-white/80" : "bg-white",

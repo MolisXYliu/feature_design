@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer,shell } from "electron"
+import { contextBridge, ipcRenderer, shell, webUtils } from "electron"
 import type {
   Thread,
   ModelConfig,
@@ -384,6 +384,9 @@ const api = {
       error?: string
     }> => {
       return ipcRenderer.invoke("file:parse", filePath, maxLength)
+    },
+    getFilePath: (file: File): string => {
+      return webUtils.getPathForFile(file)
     },
     select: (): Promise<{ canceled: boolean; filePaths: string[] }> => {
       return ipcRenderer.invoke("file:select")

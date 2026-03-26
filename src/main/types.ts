@@ -6,19 +6,9 @@ export type ThreadStatus = "idle" | "busy" | "interrupted" | "error"
 // =============================================================================
 
 // Agent IPC
-export interface FileAttachment {
-  filename: string
-  filePath: string    // full path for display
-  content: string     // extracted text content
-  mimeType: string
-  size: number
-  truncated: boolean
-}
-
 export interface AgentInvokeParams {
   threadId: string
   message: string
-  attachments?: FileAttachment[]
   modelId?: string
 }
 

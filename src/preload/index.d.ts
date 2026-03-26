@@ -195,6 +195,7 @@ interface CustomAPI {
       }
       error?: string
     }>
+    getFilePath: (file: File) => string
     select: () => Promise<{ canceled: boolean; filePaths: string[] }>
     supportedExtensions: () => Promise<string[]>
   }
