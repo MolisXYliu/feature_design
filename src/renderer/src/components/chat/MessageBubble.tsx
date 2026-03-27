@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, Wrench } from "lucide-react"
 
 // 获取工具调用的简要描述
 function getToolCallSummary(toolCall: { name: string; args?: Record<string, unknown> }): string {
-  const label = getToolLabel(toolCall.name)
+  const label = getToolLabel(toolCall.name, { showToolName: false })
   const args = toolCall.args || {}
 
   // 获取主要参数用于显示
@@ -246,7 +246,9 @@ export function MessageBubble({
 
                     <Wrench className="size-4 shrink-0 text-status-info" />
 
-                    <span className="text-xs font-medium shrink-0">{summary}</span>
+                    <span className="text-xs font-medium min-w-0 max-w-[420px] truncate text-left">
+                      {summary}
+                    </span>
 
                     {/* 状态指示器 */}
                     {result !== undefined && (

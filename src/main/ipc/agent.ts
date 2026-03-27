@@ -650,6 +650,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const normalizeMessageText = (s: string): string =>
         s.replace(/\r\n/g, "\n").trim()
 
+      // Providers may surface usage as top-level `usage_metadata` or under
+      // `response_metadata.token_usage` / `response_metadata.usage`.
+      // Normalize all variants so trace capture and UI stay aligned.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const getUsageMetadata = (kwargs: any): unknown =>
+        kwargs?.usage_metadata ?? kwargs?.response_metadata?.token_usage ?? kwargs?.response_metadata?.usage
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const extractText = (raw: any): string => {
         if (typeof raw === "string") return trimContent(raw)
@@ -706,246 +713,218 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         return { inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens }
       }
 
-      let lastFinalText = ""  // 最终回复（不含中间工具推理），用于 ChatX HTTP 回复
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break
-
-        const [mode, data] = chunk as [string, unknown]
-
-        // Serialize first — live BaseMessage objects must be serialized before
-        // we can inspect the LangChain class path (msgChunk.id becomes the
-        // class array ["langchain_core","messages","AIMessageChunk"] only after
-        // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
-        const serialized = JSON.parse(JSON.stringify(data))
-
-        if (mode === "values") {
-          try {
-            const state = serialized as {
-              skillsMetadata?: Array<{ name?: string; path?: string }>
-              messages?: Array<{
-                id?: string[]
-                kwargs?: {
-                  id?: string
-                  type?: string
-                  content?: unknown
-                  name?: string
-                  tool_call_id?: string
-                  usage_metadata?: unknown
-                  response_metadata?: { token_usage?: unknown }
-                  tool_calls?: Array<{
-                    id?: string
-                    name?: string
-                    args?: Record<string, unknown>
-                  }>
-                }
-              }>
-            }
-            const skillsMetadata = Array.isArray(state.skillsMetadata) ? state.skillsMetadata : []
-            if (skillsMetadata.length > 0) {
-              skillUsageDetector.onSkillsMetadata(skillsMetadata)
-              tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
-            }
-
-            // Values mode usually carries fuller tool-call args than messages mode.
-            if (Array.isArray(state.messages)) {
-              let currentTurnStartIndex = -1
-              for (let i = state.messages.length - 1; i >= 0; i--) {
-                const msg = state.messages[i]
-                const kwargs = msg?.kwargs || {}
-                const classId = Array.isArray(msg?.id) ? msg.id : []
-                const className = classId[classId.length - 1] || ""
-                const role = toRole(className, kwargs)
-                if (role !== "user") continue
-                if (normalizeMessageText(extractText(kwargs.content)) === normalizeMessageText(message)) {
-                  currentTurnStartIndex = i
-                  break
-                }
-              }
-
-              const valuesStartIndex = currentTurnStartIndex >= 0 ? currentTurnStartIndex + 1 : 0
-
-              for (let i = valuesStartIndex; i < state.messages.length; i++) {
-                const msg = state.messages[i]
-                const tcs = msg?.kwargs?.tool_calls
-
-                const kwargs = msg?.kwargs || {}
-                const classId = Array.isArray(msg?.id) ? msg.id : []
-                const className = classId[classId.length - 1] || ""
-                const isAI = className.includes("AI") || kwargs.type === "ai"
-                const isToolMessage = className.includes("Tool") || kwargs.type === "tool"
-                const aiMsgId = typeof kwargs.id === "string" ? kwargs.id : ""
-                if (isAI && aiMsgId && !_countedModelMsgIds.has(aiMsgId)) {
-                  _countedModelMsgIds.add(aiMsgId)
-
-                  const inputSlice = state.messages
-                    .slice(Math.max(0, i - MODEL_INPUT_WINDOW), i)
-                    .map((m) => {
-                      const k = m?.kwargs || {}
-                      const cid = Array.isArray(m?.id) ? m.id : []
-                      const cname = cid[cid.length - 1] || ""
-                      return {
-                        role: toRole(cname, k),
-                        content: extractText(k.content),
-                        ...(typeof k.name === "string" ? { name: k.name } : {}),
-                        ...(typeof k.tool_call_id === "string" ? { toolCallId: k.tool_call_id } : {})
-                      }
-                    })
-                    .filter((m) => m.content || m.role === "tool")
-
-                  const outputToolCalls = Array.isArray(tcs)
-                    ? tcs.map((tc) => ({
-                      name: tc?.name ?? "unknown",
-                      args: tc?.args ?? {}
-                    }))
-                    : []
-
-                  const llmNodeId = tracer.beginLlmNode({
-                    messageId: aiMsgId,
-                    startedAt: new Date().toISOString(),
-                    input: inputSlice,
-                    metadata: {
-                      toolCallCount: outputToolCalls.length
-                    }
-                  })
-                  _llmNodeByMessageId.set(aiMsgId, llmNodeId)
-
-                  tracer.recordModelCall({
-                    messageId: aiMsgId,
-                    startedAt: new Date().toISOString(),
-                    inputMessages: inputSlice,
-                    outputMessage: {
-                      role: "assistant",
-                      content: extractText(kwargs.content),
-                    },
-                    toolCalls: outputToolCalls,
-                    tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
-                  })
-
-                  tracer.endLlmNode({
-                    nodeId: llmNodeId,
-                    output: extractText(kwargs.content),
-                    status: "success",
-                    metadata: {
-                      tokenUsage: normalizeTokenUsage(kwargs.usage_metadata ?? kwargs.response_metadata?.token_usage)
-                    }
-                  })
-                }
-
-                if (Array.isArray(tcs)) {
-                  for (let tcIndex = 0; tcIndex < tcs.length; tcIndex++) {
-                    const tc = tcs[tcIndex]
-                    const tcId = typeof tc?.id === "string" ? tc.id : ""
-                    const toolRef = tcId || `${aiMsgId || "ai_unknown"}:${tcIndex}:${JSON.stringify(tc?.args ?? {})}`
-                    const counted = toolCallCounter.register(tc, aiMsgId, tcIndex)
-                    if (!_toolNodeByRef.has(toolRef)) {
-                      const parentId = aiMsgId ? _llmNodeByMessageId.get(aiMsgId) : undefined
-                      const toolNodeId = tracer.addToolNode({
-                        name: tc?.name ?? "unknown",
-                        input: tc?.args ?? {},
-                        parentId,
-                        llmMessageId: aiMsgId || undefined,
-                        toolCallId: tcId || undefined,
-                        metadata: { index: tcIndex }
-                      })
-                      _toolNodeByRef.set(toolRef, toolNodeId)
-                    }
-
-                    if (counted) {
-                      const turnCount = toolCallCounter.getCount()
-                      console.log(`[Agent] Turn tool call #${turnCount} (${tc?.name ?? "unknown"}) in thread ${threadId} [values]`)
-                    }
-
-                    if (tc?.name !== "read_file") continue
-                    const readPathRaw =
-                      (typeof tc.args?.path === "string" && tc.args.path) ||
-                      (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
-                      ""
-                    if (readPathRaw) {
-                      skillUsageDetector.onReadFilePath(readPathRaw)
-                    }
-                  }
-                }
-
-                if (isToolMessage) {
-                  const toolMsgId = typeof kwargs.id === "string"
-                    ? kwargs.id
-                    : `${kwargs.tool_call_id ?? "tool"}:${i}:${extractText(kwargs.content)}`
-                  if (_countedToolResultMsgIds.has(toolMsgId)) continue
-                  const toolCallId = typeof kwargs.tool_call_id === "string" ? kwargs.tool_call_id : ""
-                  _countedToolResultMsgIds.add(toolMsgId)
-                  const parentId = toolCallId ? _toolNodeByRef.get(toolCallId) : undefined
-                  tracer.addToolResultNode({
-                    parentId,
-                    toolCallId: toolCallId || undefined,
-                    output: extractText(kwargs.content),
-                    status: "success",
-                    metadata: {
-                      messageId: toolMsgId
-                    }
-                  })
-                }
-              }
-            }
-          } catch (e) {
-            console.error("[Agent] skillsMetadata extraction error:", e)
-          }
+      const extractTextBlocks = (
+        raw: unknown
+      ): string => {
+        if (typeof raw === "string") return raw
+        if (Array.isArray(raw)) {
+          return (raw as Array<{ type?: string; text?: string }>)
+            .filter((b) => b?.type === "text")
+            .map((b) => b.text ?? "")
+            .join("")
         }
+        return ""
+      }
 
-        if (mode === "messages") {
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const [msgChunk] = serialized as [any]
-            if (!msgChunk) continue
+      const forwardStreamChunk = (mode: string, payload: unknown): void => {
+        window.webContents.send(channel, {
+          type: "stream",
+          mode,
+          data: payload
+        })
+      }
 
-            const kwargs = (msgChunk.kwargs || {}) as Record<string, unknown>
-            const classId: string[] = Array.isArray(msgChunk.id) ? msgChunk.id : []
-            const className = classId[classId.length - 1] || ""
-            const isAI = className.includes("AI")
-            if (!isAI) continue
+      const processMessagesSideEffects = (payload: unknown): void => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const [msgChunk] = payload as [any]
+          if (!msgChunk) return
 
-            // Accumulate visible assistant text
-            const rawContent = kwargs.content ?? msgChunk.content
-            if (rawContent) {
-              if (typeof rawContent === "string") {
-                assistantText += rawContent
-              } else if (Array.isArray(rawContent)) {
-                assistantText += (rawContent as Array<{ type?: string; text?: string }>)
-                  .filter((b) => b?.type === "text")
-                  .map((b) => b.text ?? "")
-                  .join("")
+          const kwargs = (msgChunk.kwargs || {}) as Record<string, unknown>
+          const classId: string[] = Array.isArray(msgChunk.id) ? msgChunk.id : []
+          const className = classId[classId.length - 1] || ""
+          const isAI = className.includes("AI")
+          if (!isAI) return
+
+          const rawContent = kwargs.content ?? msgChunk.content
+          const visibleText = extractTextBlocks(rawContent)
+          if (visibleText) assistantText += visibleText
+
+          // Tool-call extraction — deduped by message ID.
+          const toolCalls = kwargs.tool_calls as Array<{
+            id?: string; name?: string; args?: Record<string, unknown>
+          }> | undefined
+          const msgId = (kwargs.id as string) || ""
+          if (!toolCalls || toolCalls.length === 0) return
+          if (msgId && _countedAiMsgIds.has(msgId)) return
+          if (msgId) _countedAiMsgIds.add(msgId)
+
+          tracer.beginStep()
+          for (let tcIndex = 0; tcIndex < toolCalls.length; tcIndex++) {
+            const tc = toolCalls[tcIndex]
+            const tcName = tc.name ?? "unknown"
+            tracer.recordToolCall({ name: tcName, args: tc.args ?? {} })
+            const counted = toolCallCounter.register(tc, msgId, tcIndex)
+
+            if (tcName === "read_file") {
+              const readPathRaw =
+                (typeof tc.args?.path === "string" && tc.args.path) ||
+                (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
+                ""
+              if (readPathRaw) {
+                skillUsageDetector.onReadFilePath(readPathRaw)
               }
             }
 
-            // Tool-call extraction — deduped by message ID
-            const toolCalls = kwargs.tool_calls as Array<{
-              id?: string; name?: string; args?: Record<string, unknown>
-            }> | undefined
-            const msgId = (kwargs.id as string) || ""
-            if (!toolCalls || toolCalls.length === 0) continue
-            if (msgId && _countedAiMsgIds.has(msgId)) continue
-            if (msgId) _countedAiMsgIds.add(msgId)
+            if (counted) {
+              const turnCount = toolCallCounter.getCount()
+              console.log(`[Agent] Turn tool call #${turnCount} (${tcName}) in thread ${threadId}`)
+            }
+          }
+          tracer.endStep(visibleText)
+        } catch (e) {
+          console.error("[Agent] Tool-call extraction error:", e)
+        }
+      }
 
-            // Extract step text (text blocks only from array content)
-            let stepText = ""
-            if (typeof rawContent === "string") {
-              stepText = rawContent
-            } else if (Array.isArray(rawContent)) {
-              stepText = (rawContent as Array<{ type?: string; text?: string }>)
-                .filter((b) => b?.type === "text")
-                .map((b) => b.text ?? "")
-                .join("")
+      const processValuesSideEffects = (payload: unknown): void => {
+        try {
+          const state = payload as {
+            skillsMetadata?: Array<{ name?: string; path?: string }>
+            messages?: Array<{
+              id?: string[]
+              kwargs?: {
+                id?: string
+                type?: string
+                content?: unknown
+                name?: string
+                tool_call_id?: string
+                usage_metadata?: unknown
+                response_metadata?: { token_usage?: unknown; usage?: unknown }
+                tool_calls?: Array<{
+                  id?: string
+                  name?: string
+                  args?: Record<string, unknown>
+                }>
+              }
+            }>
+          }
+          const skillsMetadata = Array.isArray(state.skillsMetadata) ? state.skillsMetadata : []
+          if (skillsMetadata.length > 0) {
+            skillUsageDetector.onSkillsMetadata(skillsMetadata)
+            tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
+          }
+
+          if (!Array.isArray(state.messages)) return
+
+          let currentTurnStartIndex = -1
+          for (let i = state.messages.length - 1; i >= 0; i--) {
+            const msg = state.messages[i]
+            const kwargs = msg?.kwargs || {}
+            const classId = Array.isArray(msg?.id) ? msg.id : []
+            const className = classId[classId.length - 1] || ""
+            const role = toRole(className, kwargs)
+            if (role !== "user") continue
+            if (normalizeMessageText(extractText(kwargs.content)) === normalizeMessageText(message)) {
+              currentTurnStartIndex = i
+              break
+            }
+          }
+
+          const valuesStartIndex = currentTurnStartIndex >= 0 ? currentTurnStartIndex + 1 : 0
+
+          for (let i = valuesStartIndex; i < state.messages.length; i++) {
+            const msg = state.messages[i]
+            const tcs = msg?.kwargs?.tool_calls
+
+            const kwargs = msg?.kwargs || {}
+            const classId = Array.isArray(msg?.id) ? msg.id : []
+            const className = classId[classId.length - 1] || ""
+            const isAI = className.includes("AI") || kwargs.type === "ai"
+            const isToolMessage = className.includes("Tool") || kwargs.type === "tool"
+            const aiMsgId = typeof kwargs.id === "string" ? kwargs.id : ""
+            if (isAI && aiMsgId && !_countedModelMsgIds.has(aiMsgId)) {
+              _countedModelMsgIds.add(aiMsgId)
+
+              const inputSlice = state.messages
+                .slice(Math.max(0, i - MODEL_INPUT_WINDOW), i)
+                .map((m) => {
+                  const k = m?.kwargs || {}
+                  const cid = Array.isArray(m?.id) ? m.id : []
+                  const cname = cid[cid.length - 1] || ""
+                  return {
+                    role: toRole(cname, k),
+                    content: extractText(k.content),
+                    ...(typeof k.name === "string" ? { name: k.name } : {}),
+                    ...(typeof k.tool_call_id === "string" ? { toolCallId: k.tool_call_id } : {})
+                  }
+                })
+                .filter((m) => m.content || m.role === "tool")
+
+              const outputToolCalls = Array.isArray(tcs)
+                ? tcs.map((tc) => ({
+                  name: tc?.name ?? "unknown",
+                  args: tc?.args ?? {}
+                }))
+                : []
+
+              const llmNodeId = tracer.beginLlmNode({
+                messageId: aiMsgId,
+                startedAt: new Date().toISOString(),
+                input: inputSlice,
+                metadata: {
+                  toolCallCount: outputToolCalls.length
+                }
+              })
+              _llmNodeByMessageId.set(aiMsgId, llmNodeId)
+
+              tracer.recordModelCall({
+                messageId: aiMsgId,
+                startedAt: new Date().toISOString(),
+                inputMessages: inputSlice,
+                outputMessage: {
+                  role: "assistant",
+                  content: extractText(kwargs.content),
+                },
+                toolCalls: outputToolCalls,
+                tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
+              })
+
+              tracer.endLlmNode({
+                nodeId: llmNodeId,
+                output: extractText(kwargs.content),
+                status: "success",
+                metadata: {
+                  tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
+                }
+              })
             }
 
-            // Record trace step + increment skill-evolution counter
-            tracer.beginStep()
-            for (let tcIndex = 0; tcIndex < toolCalls.length; tcIndex++) {
-              const tc = toolCalls[tcIndex]
-              const tcName = tc.name ?? "unknown"
-              tracer.recordToolCall({ name: tcName, args: tc.args ?? {} })
-              const counted = toolCallCounter.register(tc, msgId, tcIndex)
+            if (Array.isArray(tcs)) {
+              for (let tcIndex = 0; tcIndex < tcs.length; tcIndex++) {
+                const tc = tcs[tcIndex]
+                const tcId = typeof tc?.id === "string" ? tc.id : ""
+                const toolRef = tcId || `${aiMsgId || "ai_unknown"}:${tcIndex}:${JSON.stringify(tc?.args ?? {})}`
+                const counted = toolCallCounter.register(tc, aiMsgId, tcIndex)
+                if (!_toolNodeByRef.has(toolRef)) {
+                  const parentId = aiMsgId ? _llmNodeByMessageId.get(aiMsgId) : undefined
+                  const toolNodeId = tracer.addToolNode({
+                    name: tc?.name ?? "unknown",
+                    input: tc?.args ?? {},
+                    parentId,
+                    llmMessageId: aiMsgId || undefined,
+                    toolCallId: tcId || undefined,
+                    metadata: { index: tcIndex }
+                  })
+                  _toolNodeByRef.set(toolRef, toolNodeId)
+                }
 
-              if (tcName === "read_file") {
+                if (counted) {
+                  const turnCount = toolCallCounter.getCount()
+                  console.log(`[Agent] Turn tool call #${turnCount} (${tc?.name ?? "unknown"}) in thread ${threadId} [values]`)
+                }
+
+                if (tc?.name !== "read_file") continue
                 const readPathRaw =
                   (typeof tc.args?.path === "string" && tc.args.path) ||
                   (typeof tc.args?.file_path === "string" && tc.args.file_path) ||
@@ -954,50 +933,70 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                   skillUsageDetector.onReadFilePath(readPathRaw)
                 }
               }
-
-              if (counted) {
-                const turnCount = toolCallCounter.getCount()
-                console.log(`[Agent] Turn tool call #${turnCount} (${tcName}) in thread ${threadId}`)
-              }
             }
-            tracer.endStep(stepText)
-          } catch (e) {
-            console.error("[Agent] Tool-call extraction error:", e)
-          }
-        }
 
-        if (mode === "values") {
-          try {
-            const state = serialized as { messages?: Array<{ kwargs?: Record<string, unknown>; id?: string[] }> }
-            if (state?.messages) {
-              const finalMsgs = state.messages.filter((m) => {
-                const cn = Array.isArray(m.id) ? m.id[m.id.length - 1] || "" : ""
-                const kw = m.kwargs || {}
-                return cn.includes("AI") && (!kw.tool_calls || !Array.isArray(kw.tool_calls) || kw.tool_calls.length === 0)
-              })
-              const last = finalMsgs[finalMsgs.length - 1]
-              if (last) {
-                const kw = last.kwargs || {}
-                const content = kw.content
-                let text = ""
-                if (typeof content === "string") text = content
-                else if (Array.isArray(content)) {
-                  text = (content as Array<{ type: string; text?: string }>)
-                    .filter((b) => b.type === "text" && typeof b.text === "string")
-                    .map((b) => b.text!)
-                    .join("")
+            if (isToolMessage) {
+              const toolMsgId = typeof kwargs.id === "string"
+                ? kwargs.id
+                : `${kwargs.tool_call_id ?? "tool"}:${i}:${extractText(kwargs.content)}`
+              if (_countedToolResultMsgIds.has(toolMsgId)) continue
+              const toolCallId = typeof kwargs.tool_call_id === "string" ? kwargs.tool_call_id : ""
+              _countedToolResultMsgIds.add(toolMsgId)
+              const parentId = toolCallId ? _toolNodeByRef.get(toolCallId) : undefined
+              tracer.addToolResultNode({
+                parentId,
+                toolCallId: toolCallId || undefined,
+                output: extractText(kwargs.content),
+                status: "success",
+                metadata: {
+                  messageId: toolMsgId
                 }
-                if (text.trim()) lastFinalText = text.trim()
-              }
+              })
             }
-          } catch { /* best-effort */ }
-        }
+          }
 
-        window.webContents.send(channel, {
-          type: "stream",
-          mode,
-          data: serialized
-        })
+          const finalMsgs = state.messages.filter((m) => {
+            const cn = Array.isArray(m.id) ? m.id[m.id.length - 1] || "" : ""
+            const kw = m.kwargs || {}
+            return cn.includes("AI") && (!kw.tool_calls || !Array.isArray(kw.tool_calls) || kw.tool_calls.length === 0)
+          })
+          const last = finalMsgs[finalMsgs.length - 1]
+          if (last) {
+            const kw = last.kwargs || {}
+            const text = extractTextBlocks(kw.content).trim()
+            if (text) lastFinalText = text
+          }
+        } catch (e) {
+          console.error("[Agent] Values side-effect processing error:", e)
+        }
+      }
+
+      const processChunkSideEffects = (mode: string, payload: unknown): void => {
+        if (mode === "messages") {
+          processMessagesSideEffects(payload)
+          return
+        }
+        if (mode === "values") {
+          processValuesSideEffects(payload)
+        }
+      }
+
+      let lastFinalText = ""  // 最终回复（不含中间工具推理），用于 ChatX HTTP 回复
+
+      for await (const chunk of stream) {
+        if (abortController.signal.aborted) break
+
+        const [mode, data] = chunk as unknown as [string, unknown]
+
+        // Serialize first — live BaseMessage objects must be serialized before
+        // we can inspect the LangChain class path (msgChunk.id becomes the
+        // class array ["langchain_core","messages","AIMessageChunk"] only after
+        // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
+        const serialized = JSON.parse(JSON.stringify(data))
+        // UI forwarding is the primary path. Trace / metrics / skill-evolution
+        // processing below are side effects and must never block streaming.
+        forwardStreamChunk(mode, serialized)
+        processChunkSideEffects(mode, serialized)
       }
 
       if (!abortController.signal.aborted) {

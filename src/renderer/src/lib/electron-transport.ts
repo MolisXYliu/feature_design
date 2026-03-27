@@ -22,6 +22,31 @@ interface UsageMetadata {
   }
 }
 
+function getUsageMetadata(kwargs?: SerializedMessageChunk["kwargs"]): UsageMetadata | undefined {
+  if (!kwargs) return undefined
+  return kwargs.usage_metadata || kwargs.response_metadata?.token_usage || kwargs.response_metadata?.usage
+}
+
+function createTokenUsageEvent(usageMetadata: UsageMetadata): StreamEvent | null {
+  if (usageMetadata.input_tokens === undefined || usageMetadata.input_tokens <= 0) {
+    return null
+  }
+
+  return {
+    event: "custom",
+    data: {
+      type: "token_usage",
+      usage: {
+        inputTokens: usageMetadata.input_tokens,
+        outputTokens: usageMetadata.output_tokens,
+        totalTokens: usageMetadata.total_tokens,
+        cacheReadTokens: usageMetadata.input_token_details?.cache_read,
+        cacheCreationTokens: usageMetadata.input_token_details?.cache_creation
+      }
+    }
+  }
+}
+
 /**
  * Serialized LangGraph message chunk.
  * LangChain uses a special serialization format:
@@ -49,6 +74,7 @@ interface SerializedMessageChunk {
     }
     usage_metadata?: UsageMetadata
     response_metadata?: {
+      token_usage?: UsageMetadata
       usage?: UsageMetadata
       [key: string]: unknown
     }
@@ -483,8 +509,9 @@ export class ElectronIPCTransport implements UseStreamTransport {
             }
           }
 
-          // Extract usage_metadata for context window tracking
-          const usageMetadata = kwargs.usage_metadata || kwargs.response_metadata?.usage
+          // Different providers serialize usage under either `usage_metadata`,
+          // `response_metadata.token_usage`, or `response_metadata.usage`.
+          const usageMetadata = getUsageMetadata(kwargs)
           if (usageMetadata) {
             console.log("[ElectronTransport] Found usage_metadata:", {
               input_tokens: usageMetadata.input_tokens,
@@ -493,21 +520,8 @@ export class ElectronIPCTransport implements UseStreamTransport {
               has_cache_details: !!usageMetadata.input_token_details
             })
 
-            if (usageMetadata.input_tokens !== undefined && usageMetadata.input_tokens > 0) {
-              events.push({
-                event: "custom",
-                data: {
-                  type: "token_usage",
-                  usage: {
-                    inputTokens: usageMetadata.input_tokens,
-                    outputTokens: usageMetadata.output_tokens,
-                    totalTokens: usageMetadata.total_tokens,
-                    cacheReadTokens: usageMetadata.input_token_details?.cache_read,
-                    cacheCreationTokens: usageMetadata.input_token_details?.cache_creation
-                  }
-                }
-              })
-            }
+            const tokenUsageEvent = createTokenUsageEvent(usageMetadata)
+            if (tokenUsageEvent) events.push(tokenUsageEvent)
           }
         }
       }
@@ -595,6 +609,20 @@ export class ElectronIPCTransport implements UseStreamTransport {
               subagent.status = this.isToolMessageError(kwargs) ? "failed" : "completed"
               subagent.completedAt = new Date()
             }
+          }
+
+          // Some providers only attach token usage on the final AIMessage
+          // included in values snapshots, not on streaming message chunks.
+          const usageMetadata = getUsageMetadata(kwargs)
+          if (usageMetadata) {
+            console.log("[ElectronTransport] Found usage_metadata in values:", {
+              input_tokens: usageMetadata.input_tokens,
+              output_tokens: usageMetadata.output_tokens,
+              total_tokens: usageMetadata.total_tokens,
+              has_cache_details: !!usageMetadata.input_token_details
+            })
+            const tokenUsageEvent = createTokenUsageEvent(usageMetadata)
+            if (tokenUsageEvent) events.push(tokenUsageEvent)
           }
         }
 

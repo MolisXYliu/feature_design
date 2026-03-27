@@ -11,7 +11,7 @@
 
 import { spawn, execSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { constants as fsConstants, existsSync, realpathSync } from "node:fs"
+import { constants as fsConstants, existsSync, mkdirSync, realpathSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
@@ -195,8 +195,6 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["HOMEPATH", homePath],
       ["APPDATA", roamingAppData],
       ["LOCALAPPDATA", localAppData],
-      // TEMP/TMP intentionally NOT redirected: the sandbox user profile's Temp directory
-      // is not ACL-writable, but the host user's TEMP (used for maven.repo.local) is.
       ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
     ]
@@ -208,8 +206,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // for config reading. All other JVMs (Spring Boot, Nacos, etc.) get the writable TEMP dir
     // so they can create log files without permission errors.
     const javaHome = path.win32.join(realTempDir, "sandbox-java-home")
-    const javaToolFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
-    const mavenFlags = `-Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
+    // Force UTF-8 encoding for all JVM output to match our chcp 65001 / [Console]::OutputEncoding=UTF8 preamble.
+    // Without this, Java defaults to system encoding (GBK on Chinese Windows) → garbled output in PowerShell.
+    const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
+    const javaToolFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
+    const mavenFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
+
+    // Ensure sandbox temp directories exist before setting env vars
+    // Sandbox subdirectories are pre-created and ACL-granted by executeInWindowsSandbox()
+    // before codex.exe starts — no need for mkdir in the preamble.
 
     if (shellBase === "cmd") {
       const base = envOverrides
@@ -232,6 +237,33 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return ""
   }
 
+  /**
+   * Build JVM + Python environment preamble for unelevated sandbox mode.
+   * Unelevated mode runs as the same user but with a restricted token that only allows
+   * writing to the workspace dir and TEMP. ~/.m2/repository and site-packages are NOT
+   * writable, so we redirect maven.repo.local and pip target to TEMP-based directories.
+   * No user.home redirect needed — same user, can read ~/.m2/settings.xml etc.
+   */
+  private static buildUnelevatedEnvPreamble(shellBase: string, tempDir: string): string {
+    const mavenRepoLocal = path.win32.join(tempDir, "m2-sandbox-repo")
+    const javaHome = path.win32.join(tempDir, "sandbox-java-home")
+    const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
+    const javaToolFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
+    const mavenFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal}`
+
+    if (shellBase === "cmd") {
+      return `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}"`
+    }
+
+    if (shellBase === "pwsh" || shellBase === "powershell") {
+      const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
+      const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
+      return `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"`
+    }
+
+    return ""
+  }
+
   private static shouldFallbackToUnelevatedForNetworkAuth(output: string): boolean {
     const lower = output.toLowerCase()
     return lower.includes("sec_e_no_credentials")
@@ -244,6 +276,27 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || lower.includes("certificate_verify_failed")
       || lower.includes("unable to get local issuer certificate")
       || (lower.includes("ssl") && lower.includes("certificate") && lower.includes("verify"))
+      // Permission errors: elevated sandbox user may lack write access to TEMP,
+      // site-packages, or other directories that pip/npm/cargo need
+      || (lower.includes("permission denied") && lower.includes("errno 13"))
+      || (lower.includes("oserror") && lower.includes("permission denied"))
+      || (lower.includes("accessdeniedexception") || lower.includes("access is denied"))
+  }
+
+  /**
+   * Detect commands that are known to fail in elevated mode due to permission/cert issues.
+   * These are routed directly to unelevated mode to avoid wasted elevated attempt.
+   */
+  private static shouldPreferUnelevated(command: string): boolean {
+    const cmd = command.trim().toLowerCase()
+    return /\bpip\s+install\b/.test(cmd)
+      || /\bnpm\s+install\b/.test(cmd)
+      || /\bnpm\s+i\b/.test(cmd)
+      || /\byarn\s+add\b/.test(cmd)
+      || /\bpnpm\s+(add|install)\b/.test(cmd)
+      || /\bcargo\s+install\b/.test(cmd)
+      || /\bgem\s+install\b/.test(cmd)
+      || /\bconda\s+install\b/.test(cmd)
   }
 
   constructor(options: LocalSandboxOptions = {}) {
@@ -1168,7 +1221,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     for (const ps of ["pwsh", "powershell"]) {
       const fullPath = LocalSandbox.whichSync(ps)
       if (fullPath) {
-        LocalSandbox._cachedSandboxShell = { shell: fullPath, flags: ["-NoProfile", "-Command"] }
+        LocalSandbox._cachedSandboxShell = { shell: fullPath, flags: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"] }
         return LocalSandbox._cachedSandboxShell
       }
     }
@@ -1187,6 +1240,41 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * executables (whoami, find, sort, etc.) are found before MSYS2/Git
    * equivalents that crash under restricted tokens (STATUS_DLL_NOT_FOUND).
    */
+  /**
+   * Cached Python installation directory discovered via `py -0p` or `where python`.
+   * The py launcher uses registry, which sandbox users can't access — so we resolve
+   * the real Python path from the main process and inject it into the sandbox PATH.
+   */
+  private static _pythonDir: string | null | undefined = undefined // undefined = not yet checked
+
+  private static resolvePythonDir(): string | null {
+    if (LocalSandbox._pythonDir !== undefined) return LocalSandbox._pythonDir
+    try {
+      // Try py launcher first (reads registry, works even when python not in PATH)
+      const pyOutput = execSync("py -c \"import sys; print(sys.executable)\"", {
+        timeout: 5000, stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8"
+      }).trim()
+      if (pyOutput && existsSync(pyOutput)) {
+        LocalSandbox._pythonDir = path.dirname(pyOutput)
+        console.log(`[LocalSandbox] resolved Python dir via py launcher: ${LocalSandbox._pythonDir}`)
+        return LocalSandbox._pythonDir
+      }
+    } catch { /* py launcher not available */ }
+    try {
+      // Fallback: where python
+      const whereOutput = execSync("where python", {
+        timeout: 5000, stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8"
+      }).trim().split(/\r?\n/)[0]
+      if (whereOutput && existsSync(whereOutput)) {
+        LocalSandbox._pythonDir = path.dirname(whereOutput)
+        console.log(`[LocalSandbox] resolved Python dir via where: ${LocalSandbox._pythonDir}`)
+        return LocalSandbox._pythonDir
+      }
+    } catch { /* python not found */ }
+    LocalSandbox._pythonDir = null
+    return null
+  }
+
   private static buildSandboxEnv(env: Record<string, string>): Record<string, string> {
     const result = { ...env }
     const sep = path.delimiter
@@ -1209,6 +1297,22 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Ensure System32 is present even if not in original PATH
     if (!system.some(s => s.toLowerCase() === sys32Lower)) {
       system.unshift(sys32)
+    }
+    // Inject Python installation directory if not already in PATH.
+    // The py launcher uses registry (inaccessible in sandbox), so we resolve
+    // the real path from the main process and add it to the sandbox PATH.
+    const pythonDir = LocalSandbox.resolvePythonDir()
+    if (pythonDir) {
+      const pythonLower = pythonDir.toLowerCase()
+      if (!system.some(s => s.toLowerCase() === pythonLower)
+        && !rest.some(s => s.toLowerCase() === pythonLower)) {
+        rest.push(pythonDir)
+        // Also add Scripts subdir (where pip.exe lives)
+        const scriptsDir = path.join(pythonDir, "Scripts")
+        if (existsSync(scriptsDir)) {
+          rest.push(scriptsDir)
+        }
+      }
     }
     const pathKey = result.PATH !== undefined ? "PATH" : "Path"
     result[pathKey] = [...system, ...rest].join(sep)
@@ -1803,6 +1907,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private async executeInWindowsSandbox(command: string, attempt = 1, sandboxModeOverride?: "none" | "unelevated" | "readonly" | "elevated", timeoutMs?: number, overrideAbortSignal?: AbortSignal): Promise<ExecuteResponse> {
     const methodStartMs = Date.now()
     const effectiveMode = sandboxModeOverride ?? this.windowsSandbox
+
+    // Package install commands (pip, npm, cargo, etc.) often fail in elevated mode due to
+    // permission issues with TEMP, site-packages, or certificate stores. Route them directly
+    // to unelevated mode to avoid the wasted elevated attempt + fallback retry overhead.
+    if (effectiveMode === "elevated" && sandboxModeOverride !== "unelevated"
+      && LocalSandbox.shouldPreferUnelevated(command)) {
+      console.log("[LocalSandbox] package-install command detected; routing directly to unelevated")
+      return this.executeInWindowsSandbox(command, attempt, "unelevated", timeoutMs, overrideAbortSignal)
+    }
+
     const isElevatedSandbox = effectiveMode === "elevated"
 
     // Elevated mode: proactively ensure the workspace has ACL setup before spawning codex.exe.
@@ -1851,7 +1965,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const psUtf8Preamble = [
       "chcp 65001 >$null",
       "[Console]::OutputEncoding=[Console]::InputEncoding=[System.Text.Encoding]::UTF8",
-      "$OutputEncoding=[System.Text.Encoding]::UTF8"
+      "$OutputEncoding=[System.Text.Encoding]::UTF8",
+      // Prevent PowerShell from treating native command stderr output as terminating errors.
+      // Java/Python/etc. commonly write logs to stderr, which PowerShell wraps as NativeCommandError
+      // and may override the real exit code with 1.
+      "$ErrorActionPreference='Continue'"
     ].join("; ")
     const effectiveCommand = shellBase === "cmd"
       ? `chcp 65001 >nul & ${command}`
@@ -1866,9 +1984,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE="'
           : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null')
       : ""
+    // Unelevated sandbox: also set JVM env vars to redirect maven.repo.local to TEMP
+    // (restricted token cannot write to ~/.m2/repository)
+    const unelevatedJvmPreamble = !isElevatedSandbox && effectiveMode !== "none"
+      ? LocalSandbox.buildUnelevatedEnvPreamble(shellBase, this._elevatedMavenTempDir)
+      : ""
+    const unelevatedPreamble = [clearProxyPreamble, unelevatedJvmPreamble].filter(Boolean).join(shellBase === "cmd" ? " & " : "; ")
     const sandboxUserEnvPreamble = isElevatedSandbox
       ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir, this._realUserHome)
-      : clearProxyPreamble
+      : unelevatedPreamble
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"
         ? `${sandboxUserEnvPreamble} & ${effectiveCommand}`
@@ -1929,12 +2053,31 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
       // TEMP is granted once and marked permanent — never revoked because it's a public
       // temp directory. This avoids 2 icacls spawns (grant + revoke) per command.
+      // Also pre-create sandbox subdirectories and ACL them explicitly — the restricted
+      // token's default DACL for newly created objects may not include write permission,
+      // causing pip/Maven/etc. to fail with PermissionError even though the parent TEMP
+      // has inheritable (OI)(CI)(M). By creating and ACL-ing these dirs from the main
+      // process (full token), we guarantee the restricted token can write inside them.
       const tmpDir = process.env.TEMP || process.env.TMP
       if (tmpDir) {
         const tmpKey = normalizeDirKey(tmpDir)
         if (!LocalSandbox._permanentAclDirs.has(tmpKey)) {
           aclDirs.push(tmpDir)
           LocalSandbox._permanentAclDirs.add(tmpKey)
+        }
+        // Pre-create JVM sandbox subdirectories from the main process (full permissions)
+        // so the sandbox user can write Maven repos, Java logs, etc.
+        const sandboxSubDirs = [
+          path.join(tmpDir, "sandbox-java-home"),
+          path.join(tmpDir, "m2-sandbox-repo")
+        ]
+        for (const subDir of sandboxSubDirs) {
+          try { mkdirSync(subDir, { recursive: true }) } catch { /* may already exist */ }
+          const subKey = normalizeDirKey(subDir)
+          if (!LocalSandbox._permanentAclDirs.has(subKey)) {
+            aclDirs.push(subDir)
+            LocalSandbox._permanentAclDirs.add(subKey)
+          }
         }
       }
       const aclGrantStart = Date.now()
