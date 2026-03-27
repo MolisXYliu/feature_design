@@ -157,7 +157,7 @@ export function FileViewer({
   if (error) {
     const friendlyError = formatFileLoadError(error)
     return (
-      <div className="flex flex-1 items-center justify-center p-6">
+      <div className="flex flex-1 h-full min-h-0 items-center justify-center p-6">
         <div className="w-full max-w-[560px] rounded-2xl border border-border/60 bg-muted/20 px-5 py-4 shadow-sm">
           <div className="flex flex-col items-center gap-3 text-center">
             <div className="mt-0.5 rounded-lg bg-status-critical/10 p-2 text-status-critical">
