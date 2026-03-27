@@ -221,6 +221,7 @@ export function MessageBubble({
               const isExpanded = isHtmlTool ? collapsedHtmlTools.has(toolId) : collapsedTools.has(toolId);
               const summary = getToolCallSummary(toolCall);
               const previewPath = getToolPreviewPath(toolCall);
+              const isOk = result !== undefined && !result.is_error
 
               // 如果工具需要审批，使用原来的ToolCallRenderer（批量时隐藏按钮）
               if (needsApproval) {
@@ -265,7 +266,7 @@ export function MessageBubble({
                       {summary}
                     </span>
                     <div className="ml-auto flex items-center gap-2 shrink-0">
-                      {previewPath && (
+                      {previewPath && isOk && (
                         <button
                           type="button"
                           onClick={(e) => {

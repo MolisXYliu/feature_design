@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
+import { Briefcase, Eye, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
@@ -31,7 +31,7 @@ const LEFT_DEFAULT = 280
 const RIGHT_MIN = 250
 const RIGHT_MAX = 1600
 const RIGHT_DEFAULT = 300
-const RIGHT_PREVIEW_EXPAND_VW = 0.3
+const RIGHT_PREVIEW_EXPAND_VW = 0.4
 
 function App(): React.JSX.Element {
   const {
@@ -48,6 +48,7 @@ function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
+  const [rightModule, setRightModule] = useState<"work" | "preview">("work")
   const [zoomLevel, setZoomLevel] = useState(1)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
@@ -153,6 +154,21 @@ function App(): React.JSX.Element {
       previewCollapsedWidthRef.current = null
     }
   }, [])
+
+  const selectPreviewModule = useCallback(() => {
+    setRightModule("preview")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
+
+  const selectWorkModule = useCallback(() => {
+    setRightModule("work")
+    handlePreviewCollapse()
+  }, [handlePreviewCollapse])
+
+  useEffect(() => {
+    setRightModule("work")
+    handlePreviewCollapse()
+  }, [currentThreadId, handlePreviewCollapse])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -301,6 +317,40 @@ function App(): React.JSX.Element {
           <div
             className="flex flex-1 h-full items-center justify-end pl-1 gap-1"
           >
+            {mainView === "thread" && (
+              <>
+                <button
+                  type="button"
+                  className={`${panelToggleBaseClass} ${
+                    rightModule === "preview"
+                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
+                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                  }`}
+                  onClick={selectPreviewModule}
+                  title="文件预览"
+                  aria-label="文件预览"
+                  aria-pressed={rightModule === "preview"}
+                >
+                  <Eye size={16} className="shrink-0" strokeWidth={1.8} />
+                  <span>文件预览</span>
+                </button>
+                <button
+                  type="button"
+                  className={`${panelToggleBaseClass} ${
+                    rightModule === "work"
+                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
+                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                  }`}
+                  onClick={selectWorkModule}
+                  title="工作目录"
+                  aria-label="工作目录"
+                  aria-pressed={rightModule === "work"}
+                >
+                  <Briefcase size={16} className="shrink-0" strokeWidth={1.8} />
+                  <span>工作目录</span>
+                </button>
+              </>
+            )}
             {mainView !== "customize" && (
               <button
                 type="button"
@@ -377,8 +427,8 @@ function App(): React.JSX.Element {
                 {/* Right Panel - floating style */}
                 <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
                   <RightPanel
-                    onPreviewExpand={handlePreviewExpand}
-                    onPreviewCollapse={handlePreviewCollapse}
+                    moduleMode={rightModule}
+                    onRequestPreviewMode={selectPreviewModule}
                   />
                 </div>
               </>

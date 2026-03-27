@@ -26,7 +26,6 @@ import {
   Loader2,
   RotateCcw,
   Webhook,
-  Eye,
   Maximize2,
   Minimize2
 } from "lucide-react"
@@ -51,8 +50,7 @@ const HANDLE_HEIGHT = 6 // px
 const SECTION_GAP = 8 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
-const PREVIEW_MAX_HEIGHT = "70vh"
-const PREVIEW_LAYOUT_RESERVE = 320 // px
+const PREVIEW_MAX_HEIGHT = "100vh"
 
 type PanelHeights = { tasks: number; files: number; agents: number; skills: number; plugins: number; hooks: number }
 
@@ -137,11 +135,11 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 interface RightPanelProps {
-  onPreviewExpand?: () => void
-  onPreviewCollapse?: () => void
+  moduleMode: "work" | "preview"
+  onRequestPreviewMode?: () => void
 }
 
-export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelProps): React.JSX.Element {
+export function RightPanel({ moduleMode, onRequestPreviewMode }: RightPanelProps): React.JSX.Element {
   const { currentThreadId, pluginVersion, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
@@ -163,11 +161,9 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
   const subagents = threadState?.subagents ?? []
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const [previewOpen, setPreviewOpen] = useState(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
   const [previewReloadToken, setPreviewReloadToken] = useState(0)
-  const lastAutoOpenKeyRef = useRef<string | null>(null)
   const lastAppliedPreviewKeyRef = useRef<string | null>(null)
   const lastThreadIdRef = useRef<string | null>(null)
   const prevStreamLoadingRef = useRef(false)
@@ -275,7 +271,7 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
     const isLoading = streamData.isLoading
     prevStreamLoadingRef.current = isLoading
 
-    // Only render preview after this round finishes: true -> false
+    // Render preview when this round finishes: true -> false
     if (!(wasLoading && !isLoading)) return
     if (!latestResourceEvent) return
     if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
@@ -284,13 +280,8 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
     setPreviewPath(latestResourceEvent.path)
     setPreviewDiff(latestResourceEvent.codeDiff ?? null)
     setPreviewReloadToken((v) => v + 1)
-
-    if (lastAutoOpenKeyRef.current !== latestResourceEvent.key) {
-      lastAutoOpenKeyRef.current = latestResourceEvent.key
-      setPreviewOpen(true)
-      onPreviewExpand?.()
-    }
-  }, [streamData.isLoading, latestResourceEvent, onPreviewExpand])
+    onRequestPreviewMode?.()
+  }, [streamData.isLoading, latestResourceEvent, onRequestPreviewMode])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -298,13 +289,10 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
       lastThreadIdRef.current = currentThreadId
       setPreviewPath(null)
       setPreviewDiff(null)
-      setPreviewOpen(false)
-      lastAutoOpenKeyRef.current = null
       lastAppliedPreviewKeyRef.current = null
       prevStreamLoadingRef.current = false
-      onPreviewCollapse?.()
     }
-  }, [currentThreadId, onPreviewCollapse])
+  }, [currentThreadId])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -322,34 +310,10 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
       setPreviewPath(filePath)
       setPreviewDiff(null)
       setPreviewReloadToken((v) => v + 1)
-      setPreviewOpen(true)
-      onPreviewExpand?.()
+      onRequestPreviewMode?.()
     })
     return cleanup
-  }, [currentThreadId, onPreviewExpand])
-
-  const togglePreviewPanel = useCallback(() => {
-    if (!previewPath) {
-      setPreviewOpen(false)
-      return
-    }
-    setPreviewOpen((prev) => {
-      const next = !prev
-      if (next) {
-        onPreviewExpand?.()
-      } else {
-        onPreviewCollapse?.()
-      }
-      return next
-    })
-  }, [onPreviewCollapse, onPreviewExpand, previewPath])
-
-  useEffect(() => {
-    if (!previewPath && previewOpen) {
-      setPreviewOpen(false)
-      onPreviewCollapse?.()
-    }
-  }, [previewPath, previewOpen, onPreviewCollapse])
+  }, [currentThreadId, onRequestPreviewMode])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -371,16 +335,14 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
 
   // Calculate available content height
   const getAvailableContentHeight = useCallback(() => {
+    if (moduleMode !== "work") return 0
     if (!containerRef.current) return 0
     const totalHeight = containerRef.current.clientHeight
 
     const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen]
-    let used = HEADER_HEIGHT * 7
+    let used = HEADER_HEIGHT * 6
     // Fixed visual gaps between section blocks
-    used += SECTION_GAP * 6
-    if (previewOpen) {
-      used += PREVIEW_LAYOUT_RESERVE
-    }
+    used += SECTION_GAP * 5
 
     // Count handles between consecutive open panels
     let handles = 0
@@ -392,7 +354,7 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
     used += HANDLE_HEIGHT * handles
 
     return Math.max(0, totalHeight - used)
-  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
+  }, [moduleMode, tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
 
   // Get current heights for each panel's content area
   const getContentHeights = useCallback(() => {
@@ -712,7 +674,7 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
     setHeights(getContentHeights())
   }, [getContentHeights])
 
-  const allPanelsClosed = !previewOpen && !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
+  const allPanelsClosed = moduleMode === "work" && !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
 
   return (
     <aside
@@ -722,24 +684,11 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
         allPanelsClosed ? "h-auto self-start" : "h-full"
       )}
     >
-      {/* PREVIEW */}
-      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95">
-        <SectionHeader
-          title="资源预览"
-          icon={Eye}
-          badge={previewPath ? 1 : 0}
-          isOpen={previewOpen}
-          onToggle={togglePreviewPanel}
-        />
-        {!previewPath && (
-          <div className="px-4 py-3 text-sm text-muted-foreground border-t border-border/50">
-            无文件可预览
-          </div>
-        )}
-        {previewOpen && (
+      {moduleMode === "preview" && (
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
           <div
-            className="overflow-auto right-panel-scroll"
-            style={{ maxHeight: PREVIEW_MAX_HEIGHT }}
+            className="bg-white p-2 h-full min-h-0"
+            style={{ height: PREVIEW_MAX_HEIGHT }}
           >
             {previewPath ? (
               <ResourcePreview
@@ -750,14 +699,14 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
                 threadId={currentThreadId ?? ""}
               />
             ) : (
-              <div className="h-full flex items-center justify-center text-sm text-muted-foreground px-4">
-                暂无可预览资源
-              </div>
+              <div className="px-4 py-3 text-sm text-muted-foreground">无文件可预览</div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
+      {moduleMode === "work" && (
+        <>
       {/* TASKS */}
       <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
@@ -868,6 +817,8 @@ export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelPro
           </div>
         )}
       </div>
+        </>
+      )}
     </aside>
   )
 }
@@ -1393,15 +1344,14 @@ const ResourcePreview = memo(function ResourcePreview({
   return (
     <div
       className={cn(
-        "m-2 rounded-xl border border-border/70 overflow-hidden bg-background",
+        "rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full",
         isFullscreen &&
           "fixed inset-4 z-50 m-0 rounded-2xl border-border shadow-2xl"
       )}
     >
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
         <div className="min-w-0">
-          <div className="text-xs font-semibold">资源预览</div>
-          <div className="text-[11px] text-muted-foreground truncate" title={filePath}>
+          <div className="text-[12px] font-semibold truncate" title={filePath}>
             {fileName}
           </div>
         </div>
@@ -1425,10 +1375,7 @@ const ResourcePreview = memo(function ResourcePreview({
         </div>
       </div>
 
-      <div
-        className="overflow-auto bg-background"
-        style={isFullscreen ? { height: "calc(100vh - 80px)" } : undefined}
-      >
+      <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0">
         {state.loading && (
           <div className="h-full flex items-center justify-center text-xs text-muted-foreground gap-2">
             <Loader2 className="size-4 animate-spin" />
