@@ -713,7 +713,27 @@ export function RightPanel({
                 onHidePreview={onRequestWorkMode}
               />
             ) : (
-              <div className="px-4 py-3 text-sm text-muted-foreground">无文件可预览</div>
+              <div className="h-full min-h-0 flex items-center justify-center p-4">
+                <div className="w-full max-w-sm rounded-2xl border border-border/70 bg-background-elevated/80 px-5 py-6 text-center shadow-sm">
+                  <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-xl border border-border bg-muted/30">
+                    <FileText className="size-5 text-muted-foreground" />
+                  </div>
+                  <div className="text-sm font-semibold text-foreground">暂无可预览文件</div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    生成或编辑文件后会自动在这里展示预览。
+                    也可以在工具调用里点击预览图标快速打开。
+                  </p>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onRequestWorkMode}
+                      className="inline-flex items-center justify-center rounded-md border border-border/80 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+                    >
+                      返回工作目录
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>
