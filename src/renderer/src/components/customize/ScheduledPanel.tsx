@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react"
-import { Clock, Info, Play, Square, Loader2, Pencil, Plus, Trash2 } from "lucide-react"
+import { Clock, Info, Play, Square, Loader2, Pencil, Plus, Trash2, Sun } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
@@ -50,12 +50,30 @@ export function ScheduledPanel(): React.JSX.Element {
   const [editTask, setEditTask] = useState<ScheduledTask | null>(null)
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
   const [modelMap, setModelMap] = useState<Map<string, string>>(new Map())
+  const [keepAwake, setKeepAwake] = useState(false)
   const mountedRef = useRef(true)
 
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+
+  useEffect(() => {
+    window.api.keepAwake.get().then((v) => {
+      if (mountedRef.current) setKeepAwake(v)
+    }).catch(console.error)
+  }, [])
+
+  const handleKeepAwakeToggle = useCallback(async () => {
+    const next = !keepAwake
+    setKeepAwake(next)
+    try {
+      await window.api.keepAwake.set(next)
+    } catch (e) {
+      console.error(e)
+      setKeepAwake(!next)
+    }
+  }, [keepAwake])
 
   useEffect(() => {
     window.api.models.getCustomConfigs().then((configs) => {
@@ -167,7 +185,28 @@ export function ScheduledPanel(): React.JSX.Element {
           </div>
           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-muted/50 text-xs text-muted-foreground">
             <Info className="size-3.5 shrink-0" />
-            <span>定时任务仅在电脑唤醒状态下运行</span>
+            <span className="flex-1">定时任务仅在电脑唤醒状态下运行</span>
+            <div className="relative group shrink-0">
+              <button
+                className="flex items-center gap-1.5 cursor-pointer"
+                onClick={handleKeepAwakeToggle}
+              >
+                <Sun className={cn("size-3.5", keepAwake ? "text-amber-500" : "text-muted-foreground/60")} />
+                <span className={cn("text-[11px] whitespace-nowrap", keepAwake ? "text-amber-600" : "text-muted-foreground/60")}>保持唤醒</span>
+                <div className={cn(
+                  "relative w-7 h-4 rounded-full transition-colors",
+                  keepAwake ? "bg-amber-500" : "bg-muted-foreground/25"
+                )}>
+                  <div className={cn(
+                    "absolute top-0.5 size-3 rounded-full bg-white shadow-sm transition-transform",
+                    keepAwake ? "translate-x-3.5" : "translate-x-0.5"
+                  )} />
+                </div>
+              </button>
+              <div className="absolute right-0 top-full mt-2 px-3 py-2 rounded-lg bg-popover text-popover-foreground text-[11px] leading-relaxed shadow-lg border border-border whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                {keepAwake ? "当前已阻止电脑自动休眠，点击关闭" : "开启后，应用将阻止电脑自动休眠"}
+              </div>
+            </div>
           </div>
         </div>
         <ScrollArea className="flex-1">

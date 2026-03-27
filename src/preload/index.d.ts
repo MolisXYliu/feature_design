@@ -232,6 +232,10 @@ interface CustomAPI {
     getStats: () => Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }>
     onChanged: (callback: () => void) => () => void
   }
+  keepAwake: {
+    get: () => Promise<boolean>
+    set: (enabled: boolean) => Promise<void>
+  }
   scheduledTasks: {
     list: () => Promise<ScheduledTask[]>
     create: (config: ScheduledTaskUpsert) => Promise<{ id: string }>

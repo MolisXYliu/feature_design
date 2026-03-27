@@ -439,6 +439,10 @@ const api = {
     }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>
       ipcRenderer.invoke("mcp:testConnection", params)
   },
+  keepAwake: {
+    get: (): Promise<boolean> => ipcRenderer.invoke("keepAwake:get"),
+    set: (enabled: boolean): Promise<void> => ipcRenderer.invoke("keepAwake:set", enabled)
+  },
   scheduledTasks: {
     list: (): Promise<ScheduledTask[]> => ipcRenderer.invoke("scheduledTasks:list"),
     create: (config: ScheduledTaskUpsert): Promise<{ id: string }> =>

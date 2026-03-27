@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, nativeImage } from "electron"
+import { app, shell, BrowserWindow, ipcMain, nativeImage, powerSaveBlocker } from "electron"
 import { existsSync } from "fs"
 import { join } from "path"
 import { writeMainLog, writeRendererLog } from "./logging"
@@ -82,10 +82,31 @@ import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
+import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
 import  os from "os";
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
+
+// ── Keep Awake ──
+let keepAwakeBlockerId: number | null = null
+
+function applyKeepAwake(enabled: boolean): void {
+  if (enabled) {
+    if (keepAwakeBlockerId === null || !powerSaveBlocker.isStarted(keepAwakeBlockerId)) {
+      keepAwakeBlockerId = powerSaveBlocker.start("prevent-app-suspension")
+      console.log("[KeepAwake] Sleep prevention enabled")
+    }
+  } else {
+    if (keepAwakeBlockerId !== null) {
+      if (powerSaveBlocker.isStarted(keepAwakeBlockerId)) {
+        powerSaveBlocker.stop(keepAwakeBlockerId)
+      }
+      keepAwakeBlockerId = null
+      console.log("[KeepAwake] Sleep prevention disabled")
+    }
+  }
+}
 
 // Simple dev check - replaces @electron-toolkit/utils is.dev
 const isDev = !app.isPackaged
@@ -377,6 +398,15 @@ if (!gotTheLock) {
     startHeartbeat()
     startChatX()
 
+    // ── Keep Awake ──
+    applyKeepAwake(isKeepAwakeEnabled())
+
+    ipcMain.handle("keepAwake:get", () => isKeepAwakeEnabled())
+    ipcMain.handle("keepAwake:set", (_event, enabled: boolean) => {
+      applyKeepAwake(enabled)
+      setKeepAwakeEnabled(enabled)
+    })
+
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow()
@@ -391,6 +421,7 @@ if (!gotTheLock) {
   })
 
   app.on("will-quit", () => {
+    applyKeepAwake(false)
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()
