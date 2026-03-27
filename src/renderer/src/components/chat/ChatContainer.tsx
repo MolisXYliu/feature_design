@@ -112,6 +112,11 @@ const THINKING_MESSAGES = [
   "就快好了..."
 ]
 
+const SUPPORTED_EXTS = new Set([".txt", ".md", ".csv", ".docx", ".xlsx", ".xls"])
+const MAX_ATTACHMENTS = 3
+const MAX_TOTAL_CHARS = 24_000
+const escXml = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
 export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -342,40 +347,44 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
   // ── File attachments state ──
-  const MAX_ATTACHMENTS = 3
-  const MAX_TOTAL_CHARS = 24_000
-
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [attachmentLoading, setAttachmentLoading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const attachmentsRef = useRef<FileAttachment[]>([])
+
+  // Keep ref in sync with state
+  useEffect(() => { attachmentsRef.current = attachments }, [attachments])
+
 
   const totalAttachmentChars = useMemo(
     () => attachments.reduce((sum, a) => sum + a.content.length, 0),
     [attachments]
   )
 
-  const SUPPORTED_EXTS = new Set([".txt", ".md", ".csv", ".docx", ".xlsx", ".xls"])
-
   const handleFileSelectByPath = useCallback(async (filePaths: string[]) => {
     if (filePaths.length === 0 || attachmentLoading) return
     setAttachmentLoading(true)
+    clearError()
     try {
-      // Use functional state access to avoid stale closure
-      let snapshot: FileAttachment[] = []
-      setAttachments((prev) => { snapshot = prev; return prev })
-
+      const snapshot = attachmentsRef.current
       let currentCount = snapshot.length
       let currentChars = snapshot.reduce((sum, a) => sum + a.content.length, 0)
       const existingPaths = new Set(snapshot.map((a) => a.filePath))
 
       for (const filePath of filePaths) {
         // #7: skip duplicates
-        if (existingPaths.has(filePath)) continue
+        if (existingPaths.has(filePath)) {
+          const dupName = filePath.replace(/^.*[/\\]/, "") || filePath
+          setError(`文件"${dupName}"已添加，跳过重复`)
+          continue
+        }
 
         // #6: check extension before calling backend
-        const ext = filePath.substring(filePath.lastIndexOf(".")).toLowerCase()
-        if (!SUPPORTED_EXTS.has(ext)) {
-          setError(`不支持的文件类型: ${ext}，仅支持 txt、md、csv、docx、xlsx、xls`)
+        const lastDot = filePath.lastIndexOf(".")
+        const ext = lastDot >= 0 ? filePath.substring(lastDot).toLowerCase() : ""
+        if (!ext || !SUPPORTED_EXTS.has(ext)) {
+          const fileName = filePath.replace(/^.*[/\\]/, "") || filePath
+          setError(`不支持的文件类型"${fileName}"，仅支持 txt、md、csv、docx、xlsx、xls`)
           continue
         }
 
@@ -397,28 +406,30 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             continue
           }
           setAttachments((prev) => [...prev, result.attachment!])
-          existingPaths.add(filePath)
+          existingPaths.add(result.attachment.filePath)
           currentCount++
           currentChars += result.attachment.content.length
         } else {
           setError(result.error || "文件解析失败")
         }
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "文件处理异常")
     } finally {
       setAttachmentLoading(false)
     }
-  }, [setError, attachmentLoading])
+  }, [setError, clearError, attachmentLoading])
 
   const handleAttachClick = useCallback(async () => {
-    if (attachments.length >= MAX_ATTACHMENTS) {
+    if (attachmentsRef.current.length >= MAX_ATTACHMENTS) {
       setError(`最多只能添加 ${MAX_ATTACHMENTS} 个附件`)
       return
     }
     const result = await window.api.file.select()
     if (!result.canceled && result.filePaths.length > 0) {
-      await handleFileSelectByPath(result.filePaths)  // #5: add await
+      await handleFileSelectByPath(result.filePaths)
     }
-  }, [handleFileSelectByPath, attachments.length, setError])
+  }, [handleFileSelectByPath, setError])
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index))
@@ -426,7 +437,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const dropZoneRef = useRef<HTMLDivElement>(null)
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
@@ -437,7 +448,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         .map((f) => window.api.file.getFilePath(f))
         .filter((p) => !!p)
       if (paths.length > 0) {
-        handleFileSelectByPath(paths)
+        await handleFileSelectByPath(paths)
       }
     }
   }, [handleFileSelectByPath, attachmentLoading])
@@ -730,7 +741,24 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         }
       })
 
-    return [...threadMessages, ...streamingMsgs]
+    // Clean up attachment XML tags in user messages for display
+    const allMessages = [...threadMessages, ...streamingMsgs]
+    return allMessages.map((msg) => {
+      if (msg.role !== "user" || typeof msg.content !== "string" || !msg.content.includes("<attachment ")) return msg
+      // Extract filenames and user text separately, then reorder: filenames first
+      const fileNames: string[] = []
+      const textOnly = msg.content
+        .replace(/<attachment\s+filename="([^"]*)"[^>]*>[\s\S]*?<\/attachment>/g, (_match, name) => {
+          const decoded = name.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+          fileNames.push(`📎 ${decoded}`)
+          return ""
+        })
+        .trim()
+      const cleaned = fileNames.length > 0
+        ? `${fileNames.join("\n")}\n\n${textOnly}`.trim()
+        : textOnly
+      return { ...msg, content: cleaned }
+    })
   }, [threadMessages, streamData.messages])
 
   // Build tool results map from tool messages
@@ -866,11 +894,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     // Build the full message with attachments as XML tags (sent to model)
     let fullMessage = userText
     if (currentAttachments && currentAttachments.length > 0) {
-      const escXml = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       const attachmentTexts = currentAttachments.map((att) => {
         const truncAttr = att.truncated ? ' truncated="true"' : ""
         const pathAttr = att.filePath ? ` path="${escXml(att.filePath)}"` : ""
-        return `\n\n<attachment filename="${escXml(att.filename)}"${pathAttr} type="${att.mimeType}" size="${att.size}"${truncAttr}>\n${att.content}\n</attachment>`
+        const safeContent = att.content.replace(/<\/attachment>/gi, "< /attachment>")
+        return `\n\n<attachment filename="${escXml(att.filename)}"${pathAttr} type="${att.mimeType}" size="${att.size}"${truncAttr}>\n${safeContent}\n</attachment>`
       })
       fullMessage = userText + attachmentTexts.join("")
     }

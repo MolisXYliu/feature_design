@@ -698,6 +698,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         if (!isSupportedFile(filePath)) {
           return { success: false, error: "不支持的文件类型，仅支持 txt、md、csv、docx、xlsx、xls" }
         }
+        if (typeof maxLength === "number" && maxLength <= 0) {
+          return { success: false, error: "附件字符预算已用尽" }
+        }
         const attachment = await parseFile(filePath, maxLength)
         return { success: true, attachment }
       } catch (e) {
@@ -712,7 +715,8 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
   // Open native file picker for chat attachments
   ipcMain.handle("file:select", async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win!, {
+    if (!win) return { canceled: true, filePaths: [] }
+    const result = await dialog.showOpenDialog(win, {
       properties: ["openFile", "multiSelections"],
       title: "选择附件",
       filters: [

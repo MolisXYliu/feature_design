@@ -51,11 +51,11 @@ function truncateContent(content: string, isLineBased: boolean, maxLen: number =
   }
 
   const totalChars = content.length
-  const totalLines = content.split("\n").length
+  const lines = content.split("\n")
+  const totalLines = lines.length
 
   if (isLineBased) {
     // Truncate at line boundary to avoid cutting a row in half
-    const lines = content.split("\n")
     let charCount = 0
     let keepLines = 0
     for (const line of lines) {
@@ -94,10 +94,11 @@ function truncateContent(content: string, isLineBased: boolean, maxLen: number =
  * Throws on unsupported format or read failure.
  */
 export async function parseFile(filePath: string, maxLength?: number): Promise<ParsedAttachment> {
-  const ext = path.extname(filePath).toLowerCase()
-  const filename = path.basename(filePath)
+  const resolved = path.resolve(filePath)
+  const ext = path.extname(resolved).toLowerCase()
+  const filename = path.basename(resolved)
   // Security: reject symlinks to prevent reading sensitive files via symlink
-  const lstat = await fs.lstat(filePath)
+  const lstat = await fs.lstat(resolved)
   if (lstat.isSymbolicLink()) {
     throw new Error("不支持符号链接文件")
   }
@@ -120,24 +121,24 @@ export async function parseFile(filePath: string, maxLength?: number): Promise<P
   switch (ext) {
     case ".txt":
     case ".md": {
-      content = await readTextFileAutoEncoding(filePath)
+      content = await readTextFileAutoEncoding(resolved)
       mimeType = ext === ".md" ? "text/markdown" : "text/plain"
       break
     }
     case ".csv": {
-      content = await readTextFileAutoEncoding(filePath)
+      content = await readTextFileAutoEncoding(resolved)
       mimeType = "text/csv"
       isLineBased = true
       break
     }
     case ".docx": {
-      content = await parseDocx(filePath)
+      content = await parseDocx(resolved)
       mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       break
     }
     case ".xlsx":
     case ".xls": {
-      content = await parseExcel(filePath)
+      content = await parseExcel(resolved)
       mimeType = ext === ".xlsx"
         ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         : "application/vnd.ms-excel"
@@ -151,7 +152,7 @@ export async function parseFile(filePath: string, maxLength?: number): Promise<P
   const limit = maxLength !== undefined ? Math.min(maxLength, MAX_TEXT_LENGTH) : MAX_TEXT_LENGTH
   const { content: finalContent, truncated } = truncateContent(content, isLineBased, limit)
 
-  return { filename, filePath, content: finalContent, mimeType, size: lstat.size, truncated }
+  return { filename, filePath: resolved, content: finalContent, mimeType, size: lstat.size, truncated }
 }
 
 // ---------------------------------------------------------------------------
