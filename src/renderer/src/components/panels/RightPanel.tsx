@@ -23,11 +23,11 @@ import {
   Plug,
   Power,
   AlertCircle,
-  Loader2,
   RotateCcw,
   Webhook,
   Maximize2,
-  Minimize2
+  Minimize2,
+  EyeOff
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
@@ -35,10 +35,8 @@ import { useShallow } from "zustand/react/shallow"
 import { useThreadState, useThreadStream } from "@/lib/thread-context"
 import { getFileType } from "@/lib/file-types"
 import { Badge } from "@/components/ui/badge"
-import MarkdownPreview from "@/components/ui/MarkdownPreview/MarkdownPreview"
-import { HtmlPreview } from "@/components/chat/previews/HtmlPreview"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
-import { CodeViewer } from "@/components/tabs/CodeViewer"
+import { FileViewer } from "@/components/tabs/FileViewer"
 import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
@@ -137,9 +135,16 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 interface RightPanelProps {
   moduleMode: "work" | "preview"
   onRequestPreviewMode?: () => void
+  onRequestWorkMode?: () => void
+  onPreviewFullscreenChange?: (isFullscreen: boolean) => void
 }
 
-export function RightPanel({ moduleMode, onRequestPreviewMode }: RightPanelProps): React.JSX.Element {
+export function RightPanel({
+  moduleMode,
+  onRequestPreviewMode,
+  onRequestWorkMode,
+  onPreviewFullscreenChange
+}: RightPanelProps): React.JSX.Element {
   const { currentThreadId, pluginVersion, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
@@ -314,6 +319,12 @@ export function RightPanel({ moduleMode, onRequestPreviewMode }: RightPanelProps
     })
     return cleanup
   }, [currentThreadId, onRequestPreviewMode])
+
+  useEffect(() => {
+    if (moduleMode !== "preview" || !previewPath) {
+      onPreviewFullscreenChange?.(false)
+    }
+  }, [moduleMode, previewPath, onPreviewFullscreenChange])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -697,6 +708,9 @@ export function RightPanel({ moduleMode, onRequestPreviewMode }: RightPanelProps
                 codeDiff={previewDiff}
                 workspacePath={threadState?.workspacePath ?? null}
                 threadId={currentThreadId ?? ""}
+                reloadToken={previewReloadToken}
+                onFullscreenChange={onPreviewFullscreenChange}
+                onHidePreview={onRequestWorkMode}
               />
             ) : (
               <div className="px-4 py-3 text-sm text-muted-foreground">无文件可预览</div>
@@ -969,6 +983,8 @@ const RESOURCE_PREVIEW_EXTENSIONS = new Set([
   "bmp",
   "ico",
   "pdf",
+  "doc",
+  "docx",
   "md",
   "markdown",
   "mdx",
@@ -1024,15 +1040,6 @@ function resolvePreviewPaths(filePath: string, workspacePath: string | null): {
     workspaceFilePath: `/${rel}`,
     inWorkspace: true
   }
-}
-
-interface PreviewState {
-  loading: boolean
-  error: string | null
-  kind: "image" | "pdf" | "markdown" | "html" | "code" | "text" | "unknown"
-  mimeType: string
-  textContent: string
-  binaryContent: string
 }
 
 interface CodeDiffPayload {
@@ -1175,28 +1182,25 @@ function FilesContent(): React.JSX.Element {
   )
 }
 
-const ResourcePreview = memo(function ResourcePreview({
+function ResourcePreview({
   filePath,
   codeDiff,
   workspacePath,
-  threadId
+  threadId,
+  reloadToken,
+  onFullscreenChange,
+  onHidePreview
 }: {
   filePath: string
   codeDiff?: CodeDiffPayload | null
   workspacePath: string | null
   threadId: string
+  reloadToken: number
+  onFullscreenChange?: (isFullscreen: boolean) => void
+  onHidePreview?: () => void
 }): React.JSX.Element {
   const fileName = filePath.split(/[\\/]/).pop() || filePath
-  const ext = getPathExtension(filePath)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [state, setState] = useState<PreviewState>({
-    loading: true,
-    error: null,
-    kind: "unknown",
-    mimeType: "",
-    textContent: "",
-    binaryContent: ""
-  })
 
   const resolved = useMemo(
     () => resolvePreviewPaths(filePath, workspacePath),
@@ -1214,9 +1218,15 @@ const ResourcePreview = memo(function ResourcePreview({
     }
   }, [fullPath])
 
-  const toggleFullscreen = useCallback(() => {
+  const toggleFullscreen = (): void => {
     setIsFullscreen((prev) => !prev)
-  }, [])
+  }
+
+  const handleHidePreview = (): void => {
+    setIsFullscreen(false)
+    onFullscreenChange?.(false)
+    onHidePreview?.()
+  }
 
   useEffect(() => {
     if (!isFullscreen) return
@@ -1232,123 +1242,17 @@ const ResourcePreview = memo(function ResourcePreview({
   }, [isFullscreen])
 
   useEffect(() => {
-    let cancelled = false
+    onFullscreenChange?.(isFullscreen)
+  }, [isFullscreen, onFullscreenChange])
 
-    async function load(): Promise<void> {
-      if (codeDiff) {
-        setState({
-          loading: false,
-          error: null,
-          kind: "unknown",
-          mimeType: "",
-          textContent: "",
-          binaryContent: ""
-        })
-        return
-      }
-
-      if (!threadId || !filePath) {
-        setState({
-          loading: false,
-          error: "暂无可预览资源",
-          kind: "unknown",
-          mimeType: "",
-          textContent: "",
-          binaryContent: ""
-        })
-        return
-      }
-
-      setState({
-        loading: true,
-        error: null,
-        kind: "unknown",
-        mimeType: "",
-        textContent: "",
-        binaryContent: ""
-      })
-
-      const typeInfo = getFileType(fileName)
-      const lowerExt = ext.toLowerCase()
-      const markdownLike = lowerExt === "md" || lowerExt === "markdown" || lowerExt === "mdx"
-      const htmlLike = lowerExt === "html" || lowerExt === "htm"
-
-      try {
-        if (typeInfo.type === "image" || typeInfo.type === "pdf") {
-          const result = resolved.inWorkspace
-            ? await window.api.workspace.readBinaryFile(threadId, resolved.workspaceFilePath)
-            : await window.api.workspace.readExternalBinaryFile(resolved.fullPath)
-          if (cancelled) return
-          if (!result.success || !result.content) {
-            setState((prev) => ({
-              ...prev,
-              loading: false,
-              error: result.error || "读取资源失败"
-            }))
-            return
-          }
-          setState({
-            loading: false,
-            error: null,
-            kind: typeInfo.type === "image" ? "image" : "pdf",
-            mimeType: typeInfo.mimeType || (typeInfo.type === "pdf" ? "application/pdf" : "image/png"),
-            textContent: "",
-            binaryContent: result.content
-          })
-          return
-        }
-
-        const result = resolved.inWorkspace
-          ? await window.api.workspace.readFile(threadId, resolved.workspaceFilePath)
-          : await window.api.workspace.readExternalFile(resolved.fullPath)
-        if (cancelled) return
-        if (!result.success || result.content === undefined) {
-          setState((prev) => ({
-            ...prev,
-            loading: false,
-            error: result.error || "读取资源失败"
-          }))
-          return
-        }
-
-        setState({
-          loading: false,
-          error: null,
-          kind: htmlLike
-            ? "html"
-            : markdownLike
-              ? "markdown"
-              : typeInfo.type === "code"
-                ? "code"
-                : "text",
-          mimeType: "",
-          textContent: result.content,
-          binaryContent: ""
-        })
-      } catch (error) {
-        if (cancelled) return
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error: error instanceof Error ? error.message : "预览加载失败"
-        }))
-      }
-    }
-
-    load()
+  useEffect(() => {
     return () => {
-      cancelled = true
+      onFullscreenChange?.(false)
     }
-  }, [threadId, filePath, fileName, ext, resolved, codeDiff])
+  }, [onFullscreenChange])
 
   return (
-    <div
-      className={cn(
-        "rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full",
-        isFullscreen &&
-          "fixed inset-4 z-50 m-0 rounded-2xl border-border shadow-2xl"
-      )}
-    >
+    <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
         <div className="min-w-0">
           <div className="text-[12px] font-semibold truncate" title={filePath}>
@@ -1365,6 +1269,14 @@ const ResourcePreview = memo(function ResourcePreview({
             {isFullscreen ? "缩小" : "全屏"}
           </button>
           <button
+            onClick={handleHidePreview}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="隐藏预览并切换到工作目录"
+          >
+            <EyeOff className="size-3.5" />
+            隐藏
+          </button>
+          <button
             onClick={openInFolder}
             className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="打开文件所在文件夹"
@@ -1376,67 +1288,25 @@ const ResourcePreview = memo(function ResourcePreview({
       </div>
 
       <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0">
-        {state.loading && (
-          <div className="h-full flex items-center justify-center text-xs text-muted-foreground gap-2">
-            <Loader2 className="size-4 animate-spin" />
-            正在渲染预览...
-          </div>
-        )}
-
-        {!state.loading && state.error && (
-          <div className="h-full flex items-center justify-center text-xs text-status-critical px-3 text-center">
-            {state.error}
-          </div>
-        )}
-
-        {!state.loading && !state.error && state.kind === "image" && (
-          <div className="h-full w-full flex items-center justify-center p-2">
-            <img
-              src={`data:${state.mimeType};base64,${state.binaryContent}`}
-              alt={fileName}
-              className="max-h-full max-w-full object-contain rounded"
-            />
-          </div>
-        )}
-
-        {!state.loading && !state.error && state.kind === "pdf" && (
-          <object
-            data={`data:application/pdf;base64,${state.binaryContent}`}
-            type="application/pdf"
-            className="w-full h-full"
-          />
-        )}
-
-        {!state.loading && !state.error && state.kind === "markdown" && (
-          <MarkdownPreview
-            content={state.textContent}
-            path={filePath}
-            showHeader={false}
-            whiteBackground
-          />
-        )}
-
-        {!state.loading && !state.error && state.kind === "html" && (
-          <HtmlPreview content={state.textContent} path={filePath} fillHeight={isFullscreen} />
-        )}
-
-        {!state.loading && !state.error && state.kind === "code" && (
-          <CodeViewer filePath={filePath} content={state.textContent} />
-        )}
-
-        {!state.loading && !state.error && codeDiff && (
+        {codeDiff && (
           <div className="p-2">
             <DiffDisplay oldValue={codeDiff.oldValue} newValue={codeDiff.newValue} />
           </div>
         )}
 
-        {!state.loading && !state.error && state.kind === "text" && (
-          <pre className="text-xs p-3 whitespace-pre-wrap break-words">{state.textContent.slice(0, 8000)}</pre>
+        {!codeDiff && (
+          <FileViewer
+            threadId={threadId}
+            filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
+            externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
+            htmlFillHeight={isFullscreen}
+            reloadToken={reloadToken}
+          />
         )}
       </div>
     </div>
   )
-})
+}
 
 // ============ File Tree Components ============
 

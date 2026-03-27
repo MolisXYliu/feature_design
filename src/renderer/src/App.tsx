@@ -49,6 +49,7 @@ function App(): React.JSX.Element {
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
   const [rightModule, setRightModule] = useState<"work" | "preview">("work")
+  const [previewFullscreen, setPreviewFullscreen] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
@@ -409,26 +410,33 @@ function App(): React.JSX.Element {
             ) : (
               <>
                 {/* Center - Content Panel */}
-                <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
-                  {currentThreadId ? (
-                    <TabbedPanel threadId={currentThreadId} showTabBar={false} />
-                  ) : (
-                    <div className="flex flex-1 items-center justify-center text-muted-foreground">
-                      选择或创建一个任务开始
-                    </div>
-                  )}
-                </main>
+                {!previewFullscreen && (
+                  <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+                    {currentThreadId ? (
+                      <TabbedPanel threadId={currentThreadId} showTabBar={false} />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                        选择或创建一个任务开始
+                      </div>
+                    )}
+                  </main>
+                )}
               </>
             )}
 
             {mainView === "thread" && !rightPanelCollapsed && (
               <>
-                <ResizeHandle onDrag={handleRightResize} />
+                {!previewFullscreen && <ResizeHandle onDrag={handleRightResize} />}
                 {/* Right Panel - floating style */}
-                <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
+                <div
+                  style={previewFullscreen ? undefined : { width: rightWidth }}
+                  className={previewFullscreen ? "flex-1 min-w-0 p-2 pl-0" : "shrink-0 p-2 pl-0"}
+                >
                   <RightPanel
                     moduleMode={rightModule}
                     onRequestPreviewMode={selectPreviewModule}
+                    onRequestWorkMode={selectWorkModule}
+                    onPreviewFullscreenChange={setPreviewFullscreen}
                   />
                 </div>
               </>

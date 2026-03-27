@@ -30,7 +30,6 @@ import { getToolLabel } from "@/lib/tool-labels"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
 import { GitPush } from "@/components/chat/GitPush/GitPush"
-import { HtmlPreview } from "./previews/HtmlPreview"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -878,31 +877,10 @@ export function ToolCallRenderer({
 
       case "write_file":
       case "edit_file": {
-        // Check if this is a markdown file being written or edited
         const path = (args.path || args.file_path) as string
         const content = args.content as string | undefined
-        const newStr = args.new_str as string | undefined
         const oldString = (args.old_string as string) || (args.old_str as string) || ""
         const newString = (args.new_string as string) || (args.new_str as string) || ""
-        const isHtmlFile = path && (path.endsWith(".html") || path.endsWith(".htm"))
-
-        // For edit_file, we want to show the new content (new_str)
-        // For write_file, we want to show the content
-        const htmlContent = toolCall.name === "edit_file" ? newStr : content
-
-        if (isHtmlFile && htmlContent && !isExpanded) {
-          return (
-            <div className="space-y-2">
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>
-                  {toolCall.name === "edit_file" ? "HTML file edited" : "HTML file created"}
-                </span>
-              </div>
-              <HtmlPreview content={htmlContent} path={path} />
-            </div>
-          )
-        }
 
         // Check if this operation might need Git commit (any file operation)
         // 编辑文件导致的git提交
