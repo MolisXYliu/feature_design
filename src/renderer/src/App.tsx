@@ -29,8 +29,9 @@ const LEFT_MAX = 400
 const LEFT_DEFAULT = 280
 
 const RIGHT_MIN = 250
-const RIGHT_MAX = 450
+const RIGHT_MAX = 1600
 const RIGHT_DEFAULT = 300
+const RIGHT_PREVIEW_EXPAND_VW = 0.3
 
 function App(): React.JSX.Element {
   const {
@@ -67,6 +68,7 @@ function App(): React.JSX.Element {
 
   // Track drag start widths
   const dragStartWidths = useRef<{ left: number; right: number } | null>(null)
+  const previewCollapsedWidthRef = useRef<number | null>(null)
 
   // Set platform-specific titlebar insets and track zoom
   useLayoutEffect(() => {
@@ -134,6 +136,23 @@ function App(): React.JSX.Element {
     },
     [leftWidth, rightWidth]
   )
+
+  const handlePreviewExpand = useCallback(() => {
+    setRightWidth((prev) => {
+      if (previewCollapsedWidthRef.current === null) {
+        previewCollapsedWidthRef.current = prev
+      }
+      const target = Math.round(window.innerWidth * RIGHT_PREVIEW_EXPAND_VW)
+      return Math.min(RIGHT_MAX, Math.max(prev, target))
+    })
+  }, [])
+
+  const handlePreviewCollapse = useCallback(() => {
+    if (previewCollapsedWidthRef.current !== null) {
+      setRightWidth(previewCollapsedWidthRef.current)
+      previewCollapsedWidthRef.current = null
+    }
+  }, [])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -357,7 +376,10 @@ function App(): React.JSX.Element {
                 <ResizeHandle onDrag={handleRightResize} />
                 {/* Right Panel - floating style */}
                 <div style={{ width: rightWidth }} className="shrink-0 p-2 pl-0">
-                  <RightPanel />
+                  <RightPanel
+                    onPreviewExpand={handlePreviewExpand}
+                    onPreviewCollapse={handlePreviewCollapse}
+                  />
                 </div>
               </>
             )}

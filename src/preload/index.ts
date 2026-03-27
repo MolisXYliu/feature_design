@@ -307,6 +307,28 @@ const api = {
     }> => {
       return ipcRenderer.invoke("workspace:readBinaryFile", { threadId, filePath })
     },
+    readExternalFile: (
+      filePath: string
+    ): Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("workspace:readExternalFile", filePath)
+    },
+    readExternalBinaryFile: (
+      filePath: string
+    ): Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("workspace:readExternalBinaryFile", filePath)
+    },
     clearWorktreeContext: (threadId: string): Promise<void> => {
       return ipcRenderer.invoke("workspace:clearWorktreeContext", threadId) as Promise<void>
     },

@@ -25,13 +25,22 @@ import {
   AlertCircle,
   Loader2,
   RotateCcw,
-  Webhook
+  Webhook,
+  Eye,
+  Maximize2,
+  Minimize2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
 import { useShallow } from "zustand/react/shallow"
-import { useThreadState } from "@/lib/thread-context"
+import { useThreadState, useThreadStream } from "@/lib/thread-context"
+import { getFileType } from "@/lib/file-types"
 import { Badge } from "@/components/ui/badge"
+import MarkdownPreview from "@/components/ui/MarkdownPreview/MarkdownPreview"
+import { HtmlPreview } from "@/components/chat/previews/HtmlPreview"
+import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
+import { CodeViewer } from "@/components/tabs/CodeViewer"
+import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 
@@ -42,6 +51,8 @@ const HANDLE_HEIGHT = 6 // px
 const SECTION_GAP = 8 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
+const PREVIEW_MAX_HEIGHT = "70vh"
+const PREVIEW_LAYOUT_RESERVE = 320 // px
 
 type PanelHeights = { tasks: number; files: number; agents: number; skills: number; plugins: number; hooks: number }
 
@@ -125,7 +136,12 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
   )
 }
 
-export function RightPanel(): React.JSX.Element {
+interface RightPanelProps {
+  onPreviewExpand?: () => void
+  onPreviewCollapse?: () => void
+}
+
+export function RightPanel({ onPreviewExpand, onPreviewCollapse }: RightPanelProps): React.JSX.Element {
   const { currentThreadId, pluginVersion, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
@@ -141,11 +157,20 @@ export function RightPanel(): React.JSX.Element {
     currentThreadId
   )
   const threadState = useThreadState(currentThreadId)
+  const streamData = useThreadStream(currentThreadId ?? "")
   const todos = threadState?.todos ?? []
   const workspaceFiles = threadState?.workspaceFiles ?? []
   const subagents = threadState?.subagents ?? []
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
+  const [previewReloadToken, setPreviewReloadToken] = useState(0)
+  const lastAutoOpenKeyRef = useRef<string | null>(null)
+  const lastAppliedPreviewKeyRef = useRef<string | null>(null)
+  const lastThreadIdRef = useRef<string | null>(null)
+  const prevStreamLoadingRef = useRef(false)
   const [tasksOpen, setTasksOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(false)
@@ -208,6 +233,124 @@ export function RightPanel(): React.JSX.Element {
     }
   }, [hooksOpen])
 
+  const latestResourceEvent = useMemo(() => {
+    const persisted = threadState?.messages ?? []
+    const streaming = (streamData.messages as Array<{ id?: string; tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }> | undefined) ?? []
+    const all = [
+      ...persisted.map((m) => ({ source: "persisted" as const, message: m })),
+      ...streaming.map((m) => ({ source: "streaming" as const, message: m }))
+    ]
+
+    const completedToolCallIds = new Set<string>()
+    for (const item of all) {
+      const message = item.message as {
+        role?: string
+        type?: string
+        tool_call_id?: string
+      }
+      if ((message.role === "tool" || message.type === "tool") && message.tool_call_id) {
+        completedToolCallIds.add(message.tool_call_id)
+      }
+    }
+
+    for (let i = all.length - 1; i >= 0; i--) {
+      const current = all[i]
+      const toolCalls = current.message?.tool_calls || []
+      for (let j = toolCalls.length - 1; j >= 0; j--) {
+        const tool = toolCalls[j] as { id?: string; name: string; args?: Record<string, unknown> }
+        if (!tool.id || !completedToolCallIds.has(tool.id)) {
+          continue
+        }
+        const event = buildPreviewEvent(tool, current.message?.id ?? `m-${i}`, j)
+        if (event) {
+          return { ...event, source: current.source }
+        }
+      }
+    }
+    return null
+  }, [threadState?.messages, streamData.messages])
+
+  useEffect(() => {
+    const wasLoading = prevStreamLoadingRef.current
+    const isLoading = streamData.isLoading
+    prevStreamLoadingRef.current = isLoading
+
+    // Only render preview after this round finishes: true -> false
+    if (!(wasLoading && !isLoading)) return
+    if (!latestResourceEvent) return
+    if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
+
+    lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+    setPreviewPath(latestResourceEvent.path)
+    setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+    setPreviewReloadToken((v) => v + 1)
+
+    if (lastAutoOpenKeyRef.current !== latestResourceEvent.key) {
+      lastAutoOpenKeyRef.current = latestResourceEvent.key
+      setPreviewOpen(true)
+      onPreviewExpand?.()
+    }
+  }, [streamData.isLoading, latestResourceEvent, onPreviewExpand])
+
+  useEffect(() => {
+    if (!currentThreadId) return
+    if (lastThreadIdRef.current !== currentThreadId) {
+      lastThreadIdRef.current = currentThreadId
+      setPreviewPath(null)
+      setPreviewDiff(null)
+      setPreviewOpen(false)
+      lastAutoOpenKeyRef.current = null
+      lastAppliedPreviewKeyRef.current = null
+      prevStreamLoadingRef.current = false
+      onPreviewCollapse?.()
+    }
+  }, [currentThreadId, onPreviewCollapse])
+
+  useEffect(() => {
+    if (!currentThreadId) return
+    const cleanup = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId === currentThreadId && previewPath) {
+        setPreviewReloadToken((v) => v + 1)
+      }
+    })
+    return cleanup
+  }, [currentThreadId, previewPath])
+
+  useEffect(() => {
+    const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
+      if (!currentThreadId || threadId !== currentThreadId) return
+      setPreviewPath(filePath)
+      setPreviewDiff(null)
+      setPreviewReloadToken((v) => v + 1)
+      setPreviewOpen(true)
+      onPreviewExpand?.()
+    })
+    return cleanup
+  }, [currentThreadId, onPreviewExpand])
+
+  const togglePreviewPanel = useCallback(() => {
+    if (!previewPath) {
+      setPreviewOpen(false)
+      return
+    }
+    setPreviewOpen((prev) => {
+      const next = !prev
+      if (next) {
+        onPreviewExpand?.()
+      } else {
+        onPreviewCollapse?.()
+      }
+      return next
+    })
+  }, [onPreviewCollapse, onPreviewExpand, previewPath])
+
+  useEffect(() => {
+    if (!previewPath && previewOpen) {
+      setPreviewOpen(false)
+      onPreviewCollapse?.()
+    }
+  }, [previewPath, previewOpen, onPreviewCollapse])
+
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
   const [filesHeight, setFilesHeight] = useState<number | null>(null)
@@ -232,9 +375,12 @@ export function RightPanel(): React.JSX.Element {
     const totalHeight = containerRef.current.clientHeight
 
     const openPanels = [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen]
-    let used = HEADER_HEIGHT * 6
+    let used = HEADER_HEIGHT * 7
     // Fixed visual gaps between section blocks
-    used += SECTION_GAP * 5
+    used += SECTION_GAP * 6
+    if (previewOpen) {
+      used += PREVIEW_LAYOUT_RESERVE
+    }
 
     // Count handles between consecutive open panels
     let handles = 0
@@ -566,7 +712,7 @@ export function RightPanel(): React.JSX.Element {
     setHeights(getContentHeights())
   }, [getContentHeights])
 
-  const allPanelsClosed = !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
+  const allPanelsClosed = !previewOpen && !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
 
   return (
     <aside
@@ -576,8 +722,44 @@ export function RightPanel(): React.JSX.Element {
         allPanelsClosed ? "h-auto self-start" : "h-full"
       )}
     >
-      {/* TASKS */}
+      {/* PREVIEW */}
       <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95">
+        <SectionHeader
+          title="资源预览"
+          icon={Eye}
+          badge={previewPath ? 1 : 0}
+          isOpen={previewOpen}
+          onToggle={togglePreviewPanel}
+        />
+        {!previewPath && (
+          <div className="px-4 py-3 text-sm text-muted-foreground border-t border-border/50">
+            无文件可预览
+          </div>
+        )}
+        {previewOpen && (
+          <div
+            className="overflow-auto right-panel-scroll"
+            style={{ maxHeight: PREVIEW_MAX_HEIGHT }}
+          >
+            {previewPath ? (
+              <ResourcePreview
+                key={`${previewPath}:${previewReloadToken}`}
+                filePath={previewPath}
+                codeDiff={previewDiff}
+                workspacePath={threadState?.workspacePath ?? null}
+                threadId={currentThreadId ?? ""}
+              />
+            ) : (
+              <div className="h-full flex items-center justify-center text-sm text-muted-foreground px-4">
+                暂无可预览资源
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* TASKS */}
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
           title="任务"
           icon={ListTodo}
@@ -826,6 +1008,136 @@ function TaskItem({ todo }: { todo: Todo }): React.JSX.Element {
   )
 }
 
+const RESOURCE_PREVIEW_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "bmp",
+  "ico",
+  "pdf",
+  "md",
+  "markdown",
+  "mdx",
+  "html",
+  "htm"
+])
+
+function getPathExtension(filePath: string): string {
+  const fileName = filePath.split(/[\\/]/).pop() || filePath
+  const ext = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
+  return ext || ""
+}
+
+function isResourcePreviewPath(filePath: string): boolean {
+  const ext = getPathExtension(filePath)
+  return RESOURCE_PREVIEW_EXTENSIONS.has(ext)
+}
+
+function getToolCallFilePath(toolCall: { name: string; args?: Record<string, unknown> }): string | null {
+  if (toolCall.name !== "write_file" && toolCall.name !== "edit_file") return null
+  const raw = toolCall.args?.path ?? toolCall.args?.file_path
+  if (typeof raw !== "string" || !raw.trim()) return null
+  return raw
+}
+
+function isAbsolutePath(filePath: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\/)/.test(filePath)
+}
+
+function resolvePreviewPaths(filePath: string, workspacePath: string | null): {
+  fullPath: string
+  workspaceFilePath: string
+  inWorkspace: boolean
+} {
+  const input = filePath.trim().replace(/\\/g, "/")
+  if (!workspacePath) {
+    return { fullPath: input, workspaceFilePath: input, inWorkspace: false }
+  }
+
+  const ws = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "")
+  const fullPath = isAbsolutePath(input)
+    ? input
+    : `${ws}/${input.replace(/^\/+/, "")}`
+
+  const inWorkspace = fullPath === ws || fullPath.startsWith(`${ws}/`)
+  if (!inWorkspace) {
+    return { fullPath, workspaceFilePath: input, inWorkspace: false }
+  }
+
+  const rel = fullPath.slice(ws.length).replace(/^\/+/, "")
+  return {
+    fullPath,
+    workspaceFilePath: `/${rel}`,
+    inWorkspace: true
+  }
+}
+
+interface PreviewState {
+  loading: boolean
+  error: string | null
+  kind: "image" | "pdf" | "markdown" | "html" | "code" | "text" | "unknown"
+  mimeType: string
+  textContent: string
+  binaryContent: string
+}
+
+interface CodeDiffPayload {
+  oldValue: string
+  newValue: string
+}
+
+interface PreviewEvent {
+  path: string
+  key: string
+  codeDiff?: CodeDiffPayload
+}
+
+function buildPreviewEvent(
+  toolCall: { id?: string; name: string; args?: Record<string, unknown> },
+  messageId: string,
+  toolIndex: number
+): PreviewEvent | null {
+  const filePath = getToolCallFilePath(toolCall)
+  if (!filePath) return null
+
+  const ext = getPathExtension(filePath).toLowerCase()
+  const markdownLike = ext === "md" || ext === "markdown" || ext === "mdx"
+  const htmlLike = ext === "html" || ext === "htm"
+  const typeInfo = getFileType(filePath.split(/[\\/]/).pop() || filePath)
+  const codeLike = typeInfo.type === "code" && !markdownLike && !htmlLike
+
+  const isResource = isResourcePreviewPath(filePath)
+  if (!isResource && !codeLike) return null
+
+  const key = `${messageId}:${toolCall.id ?? `t-${toolIndex}`}:${filePath}`
+
+  if (!codeLike) {
+    return { path: filePath, key }
+  }
+
+  const args = toolCall.args || {}
+  const oldValue = ((args.old_string ?? args.old_str) as string | undefined) || ""
+  const newValue =
+    ((args.new_string ?? args.new_str ?? args.content) as string | undefined) || ""
+
+  if (toolCall.name === "write_file") {
+    return {
+      path: filePath,
+      key,
+      codeDiff: { oldValue: "", newValue }
+    }
+  }
+
+  return {
+    path: filePath,
+    key,
+    codeDiff: { oldValue, newValue }
+  }
+}
+
 function FilesContent(): React.JSX.Element {
   const { currentThreadId } = useAppStore()
   const threadState = useThreadState(currentThreadId)
@@ -911,6 +1223,273 @@ function FilesContent(): React.JSX.Element {
     </div>
   )
 }
+
+const ResourcePreview = memo(function ResourcePreview({
+  filePath,
+  codeDiff,
+  workspacePath,
+  threadId
+}: {
+  filePath: string
+  codeDiff?: CodeDiffPayload | null
+  workspacePath: string | null
+  threadId: string
+}): React.JSX.Element {
+  const fileName = filePath.split(/[\\/]/).pop() || filePath
+  const ext = getPathExtension(filePath)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [state, setState] = useState<PreviewState>({
+    loading: true,
+    error: null,
+    kind: "unknown",
+    mimeType: "",
+    textContent: "",
+    binaryContent: ""
+  })
+
+  const resolved = useMemo(
+    () => resolvePreviewPaths(filePath, workspacePath),
+    [filePath, workspacePath]
+  )
+  const fullPath = resolved.fullPath
+
+  const openInFolder = useCallback(async () => {
+    try {
+      const platform = await window.electron.ipcRenderer.invoke("get-platform")
+      const normalizedPath = platform === "win32" ? fullPath.replace(/\//g, "\\") : fullPath
+      await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+    } catch (error) {
+      console.error("[ResourcePreview] Failed to show item in folder:", error)
+    }
+  }, [fullPath])
+
+  const toggleFullscreen = useCallback(() => {
+    setIsFullscreen((prev) => !prev)
+  }, [])
+
+  useEffect(() => {
+    if (!isFullscreen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setIsFullscreen(false)
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [isFullscreen])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function load(): Promise<void> {
+      if (codeDiff) {
+        setState({
+          loading: false,
+          error: null,
+          kind: "unknown",
+          mimeType: "",
+          textContent: "",
+          binaryContent: ""
+        })
+        return
+      }
+
+      if (!threadId || !filePath) {
+        setState({
+          loading: false,
+          error: "暂无可预览资源",
+          kind: "unknown",
+          mimeType: "",
+          textContent: "",
+          binaryContent: ""
+        })
+        return
+      }
+
+      setState({
+        loading: true,
+        error: null,
+        kind: "unknown",
+        mimeType: "",
+        textContent: "",
+        binaryContent: ""
+      })
+
+      const typeInfo = getFileType(fileName)
+      const lowerExt = ext.toLowerCase()
+      const markdownLike = lowerExt === "md" || lowerExt === "markdown" || lowerExt === "mdx"
+      const htmlLike = lowerExt === "html" || lowerExt === "htm"
+
+      try {
+        if (typeInfo.type === "image" || typeInfo.type === "pdf") {
+          const result = resolved.inWorkspace
+            ? await window.api.workspace.readBinaryFile(threadId, resolved.workspaceFilePath)
+            : await window.api.workspace.readExternalBinaryFile(resolved.fullPath)
+          if (cancelled) return
+          if (!result.success || !result.content) {
+            setState((prev) => ({
+              ...prev,
+              loading: false,
+              error: result.error || "读取资源失败"
+            }))
+            return
+          }
+          setState({
+            loading: false,
+            error: null,
+            kind: typeInfo.type === "image" ? "image" : "pdf",
+            mimeType: typeInfo.mimeType || (typeInfo.type === "pdf" ? "application/pdf" : "image/png"),
+            textContent: "",
+            binaryContent: result.content
+          })
+          return
+        }
+
+        const result = resolved.inWorkspace
+          ? await window.api.workspace.readFile(threadId, resolved.workspaceFilePath)
+          : await window.api.workspace.readExternalFile(resolved.fullPath)
+        if (cancelled) return
+        if (!result.success || result.content === undefined) {
+          setState((prev) => ({
+            ...prev,
+            loading: false,
+            error: result.error || "读取资源失败"
+          }))
+          return
+        }
+
+        setState({
+          loading: false,
+          error: null,
+          kind: htmlLike
+            ? "html"
+            : markdownLike
+              ? "markdown"
+              : typeInfo.type === "code"
+                ? "code"
+                : "text",
+          mimeType: "",
+          textContent: result.content,
+          binaryContent: ""
+        })
+      } catch (error) {
+        if (cancelled) return
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: error instanceof Error ? error.message : "预览加载失败"
+        }))
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [threadId, filePath, fileName, ext, resolved, codeDiff])
+
+  return (
+    <div
+      className={cn(
+        "m-2 rounded-xl border border-border/70 overflow-hidden bg-background",
+        isFullscreen &&
+          "fixed inset-4 z-50 m-0 rounded-2xl border-border shadow-2xl"
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold">资源预览</div>
+          <div className="text-[11px] text-muted-foreground truncate" title={filePath}>
+            {fileName}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleFullscreen}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title={isFullscreen ? "缩小全屏" : "全屏预览"}
+          >
+            {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            {isFullscreen ? "缩小" : "全屏"}
+          </button>
+          <button
+            onClick={openInFolder}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="打开文件所在文件夹"
+          >
+            <FolderOpen className="size-3.5" />
+            文件夹
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="overflow-auto bg-background"
+        style={isFullscreen ? { height: "calc(100vh - 80px)" } : undefined}
+      >
+        {state.loading && (
+          <div className="h-full flex items-center justify-center text-xs text-muted-foreground gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            正在渲染预览...
+          </div>
+        )}
+
+        {!state.loading && state.error && (
+          <div className="h-full flex items-center justify-center text-xs text-status-critical px-3 text-center">
+            {state.error}
+          </div>
+        )}
+
+        {!state.loading && !state.error && state.kind === "image" && (
+          <div className="h-full w-full flex items-center justify-center p-2">
+            <img
+              src={`data:${state.mimeType};base64,${state.binaryContent}`}
+              alt={fileName}
+              className="max-h-full max-w-full object-contain rounded"
+            />
+          </div>
+        )}
+
+        {!state.loading && !state.error && state.kind === "pdf" && (
+          <object
+            data={`data:application/pdf;base64,${state.binaryContent}`}
+            type="application/pdf"
+            className="w-full h-full"
+          />
+        )}
+
+        {!state.loading && !state.error && state.kind === "markdown" && (
+          <MarkdownPreview
+            content={state.textContent}
+            path={filePath}
+            showHeader={false}
+            whiteBackground
+          />
+        )}
+
+        {!state.loading && !state.error && state.kind === "html" && (
+          <HtmlPreview content={state.textContent} path={filePath} fillHeight={isFullscreen} />
+        )}
+
+        {!state.loading && !state.error && state.kind === "code" && (
+          <CodeViewer filePath={filePath} content={state.textContent} />
+        )}
+
+        {!state.loading && !state.error && codeDiff && (
+          <div className="p-2">
+            <DiffDisplay oldValue={codeDiff.oldValue} newValue={codeDiff.newValue} />
+          </div>
+        )}
+
+        {!state.loading && !state.error && state.kind === "text" && (
+          <pre className="text-xs p-3 whitespace-pre-wrap break-words">{state.textContent.slice(0, 8000)}</pre>
+        )}
+      </div>
+    </div>
+  )
+})
 
 // ============ File Tree Components ============
 

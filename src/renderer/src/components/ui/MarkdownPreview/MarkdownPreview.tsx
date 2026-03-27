@@ -15,6 +15,7 @@ interface MarkdownPreviewProps {
   className?: string
   showHeader?: boolean
   defaultExpanded?: boolean
+  whiteBackground?: boolean
 }
 
 export function MarkdownPreview({
@@ -22,7 +23,8 @@ export function MarkdownPreview({
   path,
   className,
   showHeader = true,
-  defaultExpanded = true
+  defaultExpanded = true,
+  whiteBackground = false
 }: MarkdownPreviewProps) {
   const [copySuccess, setCopySuccess] = useState(false)
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
@@ -106,7 +108,7 @@ export function MarkdownPreview({
 
       {/* 简化的内容区域 */}
       {isExpanded ? (
-        <div className="p-6 prose prose-gray dark:prose-invert max-w-none">
+        <div className={`p-6 max-w-none ${whiteBackground ? "bg-white prose prose-gray" : "prose prose-gray dark:prose-invert"}`}>
           <div className="streaming-markdown text-sm leading-relaxed">
             <ReactMarkdown   rehypePlugins={[rehypeHighlight]} remarkPlugins={[remarkGfm, remarkBreaks]}>{content ?? ""}</ReactMarkdown>
           </div>

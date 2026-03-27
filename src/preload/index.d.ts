@@ -156,6 +156,20 @@ interface CustomAPI {
       modified_at?: string
       error?: string
     }>
+    readExternalFile: (filePath: string) => Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }>
+    readExternalBinaryFile: (filePath: string) => Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }>
     clearWorktreeContext: (threadId: string) => Promise<void>
     saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string) => Promise<void>
     isGit: (folderPath: string) => Promise<{

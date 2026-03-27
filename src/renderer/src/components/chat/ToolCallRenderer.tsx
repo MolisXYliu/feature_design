@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils"
 import { getToolLabel } from "@/lib/tool-labels"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import MarkdownPreview from "../ui/MarkdownPreview/MarkdownPreview"
 import { GitPush } from "@/components/chat/GitPush/GitPush"
 import { HtmlPreview } from "./previews/HtmlPreview"
 
@@ -885,12 +884,10 @@ export function ToolCallRenderer({
         const newStr = args.new_str as string | undefined
         const oldString = (args.old_string as string) || (args.old_str as string) || ""
         const newString = (args.new_string as string) || (args.new_str as string) || ""
-        const isMarkdownFile = path && (path.endsWith(".md") || path.endsWith(".markdown"))
         const isHtmlFile = path && (path.endsWith(".html") || path.endsWith(".htm"))
 
         // For edit_file, we want to show the new content (new_str)
         // For write_file, we want to show the content
-        const markdownContent = toolCall.name === "edit_file" ? newStr : content
         const htmlContent = toolCall.name === "edit_file" ? newStr : content
 
         if (isHtmlFile && htmlContent && !isExpanded) {
@@ -903,21 +900,6 @@ export function ToolCallRenderer({
                 </span>
               </div>
               <HtmlPreview content={htmlContent} path={path} />
-            </div>
-          )
-        }
-
-        if (isMarkdownFile && markdownContent && !isExpanded) {
-          // Show markdown preview for collapsed view
-          return (
-            <div className="space-y-2">
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>
-                  {toolCall.name === "edit_file" ? "Markdown file edited" : "Markdown file created"}
-                </span>
-              </div>
-              <MarkdownPreview content={markdownContent} path={path} />
             </div>
           )
         }

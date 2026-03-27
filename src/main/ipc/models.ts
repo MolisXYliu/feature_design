@@ -684,6 +684,53 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
     }
   )
+
+  // Read a text file from any absolute path (outside workspace allowed)
+  ipcMain.handle("workspace:readExternalFile", async (_event, filePath: string) => {
+    try {
+      const fullPath = path.resolve(filePath)
+      const stat = await fs.stat(fullPath)
+      if (stat.isDirectory()) {
+        return { success: false, error: "Cannot read directory as file" }
+      }
+      const content = await fs.readFile(fullPath, "utf-8")
+      return {
+        success: true,
+        content,
+        size: stat.size,
+        modified_at: stat.mtime.toISOString()
+      }
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : "Unknown error"
+      }
+    }
+  })
+
+  // Read a binary file from any absolute path (outside workspace allowed)
+  ipcMain.handle("workspace:readExternalBinaryFile", async (_event, filePath: string) => {
+    try {
+      const fullPath = path.resolve(filePath)
+      const stat = await fs.stat(fullPath)
+      if (stat.isDirectory()) {
+        return { success: false, error: "Cannot read directory as file" }
+      }
+      const buffer = await fs.readFile(fullPath)
+      const base64 = buffer.toString("base64")
+      return {
+        success: true,
+        content: base64,
+        size: stat.size,
+        modified_at: stat.mtime.toISOString()
+      }
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : "Unknown error"
+      }
+    }
+  })
 }
 
 export function getDefaultModel(): string {
