@@ -196,6 +196,23 @@ interface CustomAPI {
       callback: (data: { threadId: string; workspacePath: string }) => void
     ) => () => void
   }
+  file: {
+    parse: (filePath: string, maxLength?: number) => Promise<{
+      success: boolean
+      attachment?: {
+        filename: string
+        filePath: string
+        content: string
+        mimeType: string
+        size: number
+        truncated: boolean
+      }
+      error?: string
+    }>
+    getFilePath: (file: File) => string
+    select: () => Promise<{ canceled: boolean; filePaths: string[] }>
+    supportedExtensions: () => Promise<string[]>
+  }
   skills: {
     list: () => Promise<SkillMetadata[]>
     read: (skillPath: string) => Promise<{ success: boolean; content?: string; error?: string }>

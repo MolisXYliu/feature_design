@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer,shell } from "electron"
+import { contextBridge, ipcRenderer, shell, webUtils } from "electron"
 import type {
   Thread,
   ModelConfig,
@@ -387,6 +387,34 @@ const api = {
       return () => {
         ipcRenderer.removeListener("workspace:files-changed", handler)
       }
+    }
+  },
+  file: {
+    parse: (
+      filePath: string,
+      maxLength?: number
+    ): Promise<{
+      success: boolean
+      attachment?: {
+        filename: string
+        filePath: string
+        content: string
+        mimeType: string
+        size: number
+        truncated: boolean
+      }
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("file:parse", filePath, maxLength)
+    },
+    getFilePath: (file: File): string => {
+      return webUtils.getPathForFile(file)
+    },
+    select: (): Promise<{ canceled: boolean; filePaths: string[] }> => {
+      return ipcRenderer.invoke("file:select")
+    },
+    supportedExtensions: (): Promise<string[]> => {
+      return ipcRenderer.invoke("file:supportedExtensions")
     }
   },
   skills: {
