@@ -1,0 +1,219 @@
+/**
+ * Pty Host — 独立子进程，管理所有 node-pty 实例。
+ * 避免 PTY I/O 阻塞主进程事件循环。
+ * 通过 process.send / process.on("message") 与主进程通信。
+ */
+import { spawn as ptySpawn, IPty } from "node-pty"
+import { platform } from "os"
+
+const activePtys = new Map<string, IPty>()
+
+// 流控：高低水位线，防止缓冲区溢出
+const HIGH_WATER_MARK = 5 * 1024 * 1024  // 5MB 暂停
+const LOW_WATER_MARK = 1 * 1024 * 1024   // 1MB 恢复
+const pendingBytes = new Map<string, number>()
+const paused = new Map<string, boolean>()
+
+let cachedShell: string | null = null
+function getShell(): string {
+  if (cachedShell) return cachedShell
+  if (platform() === "win32") {
+    try {
+      require("child_process").execSync("pwsh --version", { stdio: "ignore" })
+      cachedShell = "pwsh.exe"
+    } catch {
+      cachedShell = "powershell.exe"
+    }
+  } else {
+    cachedShell = process.env.SHELL || "/bin/zsh"
+  }
+  return cachedShell
+}
+
+interface CreateMsg {
+  type: "create"
+  id: string
+  workDir: string
+  cols: number
+  rows: number
+  claudePath: string
+  args: string[]
+  electronPath: string // Electron 二进制路径，配合 ELECTRON_RUN_AS_NODE=1 当 node 用
+}
+
+interface WriteMsg {
+  type: "write"
+  id: string
+  data: string
+}
+
+interface ResizeMsg {
+  type: "resize"
+  id: string
+  cols: number
+  rows: number
+}
+
+interface DisposeMsg {
+  type: "dispose"
+  id: string
+}
+
+interface AckMsg {
+  type: "ack"
+  id: string
+  bytes: number
+}
+
+interface DisposeAllMsg {
+  type: "disposeAll"
+}
+
+type HostMessage = CreateMsg | WriteMsg | ResizeMsg | DisposeMsg | AckMsg | DisposeAllMsg
+
+function send(msg: Record<string, unknown>): void {
+  process.send?.(msg)
+}
+
+function handleCreate(msg: CreateMsg): void {
+  try {
+  const shell = getShell()
+
+  const isWin = platform() === "win32"
+  const escapeArg = (arg: string): string => {
+    if (isWin) {
+      return `'${arg.replace(/'/g, "''")}'`
+    }
+    return `'${arg.replace(/'/g, "'\\''")}'`
+  }
+
+  // 构建 claude 启动命令和环境变量
+  const isJsFile = msg.claudePath.endsWith(".js")
+  const env = { ...process.env } as Record<string, string>
+  let claudeCmd: string
+
+  if (isJsFile) {
+    if (isWin) {
+      claudeCmd = `& ${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
+    } else {
+      claudeCmd = `${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
+    }
+    // 环境变量放到 env 里，不拼在命令前面
+    env.ELECTRON_RUN_AS_NODE = "1"
+  } else {
+    claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+  }
+
+  // 用 shell -c 直接执行命令（不回显），Claude Code 退出后回到交互式 shell
+  const shellArgs = isWin
+    ? ["-NoExit", "-Command", claudeCmd]
+    : ["-c", claudeCmd + ` ; exec ${shell}`]
+
+  const pty = ptySpawn(shell, shellArgs, {
+    name: "xterm-256color",
+    cols: msg.cols,
+    rows: msg.rows,
+    cwd: msg.workDir || process.env.HOME || process.cwd(),
+    env
+  })
+
+  activePtys.set(msg.id, pty)
+
+  pendingBytes.set(msg.id, 0)
+  paused.set(msg.id, false)
+
+  pty.onData((data) => {
+
+    const current = (pendingBytes.get(msg.id) || 0) + Buffer.byteLength(data)
+    pendingBytes.set(msg.id, current)
+
+    if (current > HIGH_WATER_MARK && !paused.get(msg.id)) {
+      pty.pause()
+      paused.set(msg.id, true)
+    }
+
+    send({ type: "data", id: msg.id, data })
+  })
+
+  pty.onExit(({ exitCode }) => {
+    send({ type: "exit", id: msg.id, exitCode })
+    activePtys.delete(msg.id)
+    pendingBytes.delete(msg.id)
+    paused.delete(msg.id)
+  })
+
+  send({ type: "created", id: msg.id })
+  } catch (err) {
+    send({ type: "error", id: msg.id, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
+function handleWrite(msg: WriteMsg): void {
+  const pty = activePtys.get(msg.id)
+  if (pty) pty.write(msg.data)
+}
+
+function handleResize(msg: ResizeMsg): void {
+  const pty = activePtys.get(msg.id)
+  if (pty) pty.resize(msg.cols, msg.rows)
+}
+
+function handleAck(msg: AckMsg): void {
+  const clamped = Math.max(0, (pendingBytes.get(msg.id) || 0) - msg.bytes)
+  pendingBytes.set(msg.id, clamped)
+
+  if (clamped < LOW_WATER_MARK && paused.get(msg.id)) {
+    const pty = activePtys.get(msg.id)
+    if (pty) pty.resume()
+    paused.set(msg.id, false)
+  }
+}
+
+function handleDispose(msg: DisposeMsg): void {
+  const pty = activePtys.get(msg.id)
+  if (pty) {
+    pty.kill()
+    activePtys.delete(msg.id)
+  }
+  pendingBytes.delete(msg.id)
+  paused.delete(msg.id)
+}
+
+function handleDisposeAll(): void {
+  for (const [, pty] of activePtys) {
+    pty.kill()
+  }
+  activePtys.clear()
+  pendingBytes.clear()
+  paused.clear()
+  // #2 fix: 清理完毕后自行退出，避免被强制 kill 导致孤儿进程
+  process.exit(0)
+}
+
+process.on("message", (msg: HostMessage) => {
+  switch (msg.type) {
+    case "create": handleCreate(msg); break
+    case "write": handleWrite(msg); break
+    case "resize": handleResize(msg); break
+    case "ack": handleAck(msg); break
+    case "dispose": handleDispose(msg); break
+    case "disposeAll": handleDisposeAll(); break
+  }
+})
+
+// 父进程退出时清理（handleDisposeAll 内部会调 process.exit(0)）
+process.on("disconnect", () => {
+  handleDisposeAll()
+})
+
+// 全局异常捕获，防止子进程静默崩溃
+process.on("uncaughtException", (err) => {
+  console.error("[PtyHost] Uncaught exception:", err)
+  send({ type: "error", error: err.message })
+})
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[PtyHost] Unhandled rejection:", reason)
+})
+
+send({ type: "ready" })

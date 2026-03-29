@@ -74,6 +74,7 @@ import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
+import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { setTraceReporter } from "./agent/trace/collector"
 import { S3TraceReporter } from "./agent/trace/s3-reporter"
 import { initializeDatabase, flush } from "./db"
@@ -318,6 +319,7 @@ if (!gotTheLock) {
     registerOptimizerHandlers(ipcMain)
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
+    registerTerminalHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
@@ -422,6 +424,7 @@ if (!gotTheLock) {
 
   app.on("will-quit", () => {
     applyKeepAwake(false)
+    disposeAllTerminals()
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()

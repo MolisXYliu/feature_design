@@ -4,6 +4,7 @@ import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
+import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
@@ -391,7 +392,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : (
+        ) : mainView !== "claudecode" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -442,7 +443,23 @@ function App(): React.JSX.Element {
               </>
             )}
           </div>
-        )}
+        ) : null}
+
+        {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
+        <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>
+          {/* claudecode 模式下也显示侧边栏 */}
+          {mainView === "claudecode" && !sidebarCollapsed && (
+            <>
+              <div style={{ width: leftWidth }} className="shrink-0">
+                <ThreadSidebar />
+              </div>
+              <ResizeHandle onDrag={handleLeftResize} />
+            </>
+          )}
+          <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+            <ClaudeCodePanel />
+          </main>
+        </div>
       </div>
     </ThreadProvider>
   )

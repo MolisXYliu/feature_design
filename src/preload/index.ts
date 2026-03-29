@@ -461,6 +461,32 @@ const api = {
     }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>
       ipcRenderer.invoke("mcp:testConnection", params)
   },
+  terminal: {
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number }): Promise<string> =>
+      ipcRenderer.invoke("terminal:create", opts),
+    write: (id: string, data: string): void =>
+      ipcRenderer.send("terminal:write", { id, data }),
+    resize: (id: string, cols: number, rows: number): void =>
+      ipcRenderer.send("terminal:resize", { id, cols, rows }),
+    dispose: (id: string): Promise<void> =>
+      ipcRenderer.invoke("terminal:dispose", id),
+    selectDir: (): Promise<string | null> =>
+      ipcRenderer.invoke("terminal:selectDir"),
+    ack: (id: string, bytes: number): void =>
+      ipcRenderer.send("terminal:ack", { id, bytes }),
+    onData: (id: string, callback: (data: string, bytes: number) => void): (() => void) => {
+      const channel = `terminal:data:${id}`
+      const handler = (_: unknown, data: string, bytes: number): void => { callback(data, bytes) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
+    onExit: (id: string, callback: (code: number) => void): (() => void) => {
+      const channel = `terminal:exit:${id}`
+      const handler = (_: unknown, code: number): void => { callback(code) }
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    }
+  },
   keepAwake: {
     get: (): Promise<boolean> => ipcRenderer.invoke("keepAwake:get"),
     set: (enabled: boolean): Promise<void> => ipcRenderer.invoke("keepAwake:set", enabled)
