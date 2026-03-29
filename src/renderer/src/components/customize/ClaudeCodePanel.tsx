@@ -274,8 +274,30 @@ export function ClaudeCodePanel(): React.JSX.Element {
     let cancelled = false
     session.domCleanups.push(() => { cancelled = true })
 
-    setTimeout(() => {
+    // 等 React 渲染完毕且 hostRef 可用后再挂载
+    let hostAttempts = 0
+    const waitForHost = (): void => {
       if (cancelled) return
+      hostAttempts++
+      if (!hostRef.current) {
+        if (hostAttempts > MAX_TRY_OPEN_ATTEMPTS) {
+          console.warn("[ClaudeCode] hostRef never became available, cleaning up")
+          session.domCleanups.forEach((fn) => fn())
+          session.xterm.dispose()
+          session.container.remove()
+          sessionsRef.current.delete(id)
+          setSessionIds((prev) => prev.filter((s) => s !== id))
+          const remaining = [...sessionsRef.current.keys()]
+          if (remaining.length > 0) {
+            switchSession(remaining[remaining.length - 1])
+          } else {
+            setActiveSessionId(null)
+          }
+          return
+        }
+        requestAnimationFrame(waitForHost)
+        return
+      }
       mountXterm(session).then((mounted) => {
         if (cancelled || !mounted) {
           // 挂载失败：清理空会话
@@ -305,7 +327,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
       }).catch((err) => {
         console.error("[ClaudeCode] Terminal mount failed:", err)
       })
-    }, 0)
+    }
+    requestAnimationFrame(waitForHost)
   }, [mountXterm, startPty, switchSession])
 
   // #16 fix: switchSession 从 setState 回调中移出
