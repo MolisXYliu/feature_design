@@ -262,7 +262,7 @@ function MarketItemCard({
         <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 mb-3">
           <div className="flex items-start gap-1.5">
             <Lightbulb className="size-3 mt-0.5 shrink-0" />
-            <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
+            <span className="whitespace-pre-wrap leading-relaxed break-all">{item.guidance}</span>
           </div>
         </div>
       )}
@@ -1175,161 +1175,157 @@ export function MarketPanel(): React.JSX.Element {
 
       {detailMode === "detail" && selectedItem ? (
         <ScrollArea className="flex-1">
-          <div className="p-4 space-y-4">
-            <div className="rounded-lg border border-border p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-lg font-semibold">{selectedItem.name}</h3>
+          <div className="p-5">
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+              <div className="space-y-2 xl:order-1 order-2">
+                <h3 className="font-medium text-sm text-foreground/90">
+                  文件详情
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {activeTab === "skill"
+                      ? "(skill: .zip / .md)"
+                      : activeTab === "plugin"
+                        ? "(plugin: .zip)"
+                        : "(mcp: .json)"}
+                  </span>
+                </h3>
+                {renderDetailFilePanel()}
+              </div>
+
+              <div className="xl:order-2 order-1 space-y-3 xl:sticky xl:top-4 shadow">
+                <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 space-y-3">
+                  <div className="space-y-1">
+                    <h3 className="text-base font-semibold leading-tight">{selectedItem.name}</h3>
                     {selectedItem.chinese_name && (
-                      <span className="text-sm text-muted-foreground">
+                      <p className="text-xs text-muted-foreground">
                         （{selectedItem.chinese_name}）
+                      </p>
+                    )}
+                    <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">
+                      {selectedItem.description}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    {selectedItem.category && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                        <Tag className="size-3" />
+                        {selectedItem.category}
                       </span>
                     )}
+                    {selectedItem.version && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                        <GitBranch className="size-3" />v{selectedItem.version}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                      <Calendar className="size-3" />
+                      {new Date(selectedItem.created_at).toLocaleDateString("zh-CN")}
+                    </span>
                     {selectedItem.installed && (
-                      <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 px-2.5 py-1">
                         <CheckCircle className="size-3" />
                         已安装
                       </span>
                     )}
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-2">{selectedItem.description}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {selectedItem.installed ? (
-                    selectedItem.featured === "精品" ? (
-                      <span className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-2 py-1 rounded-full flex items-center gap-1">
-                        <Zap className="size-3" />
-                        自动保持最新
+                    {selectedItem.featured === "精品" && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 text-yellow-800 px-2.5 py-1">
+                        <Star className="size-3" />
+                        精品
                       </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {selectedItem.installed ? (
+                      selectedItem.featured === "精品" ? (
+                        <span className="col-span-2 text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-3 py-2 rounded-lg inline-flex items-center gap-1">
+                          <Zap className="size-3" />
+                          自动保持最新
+                        </span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                          onClick={() => handleUpdateInstall(selectedItem)}
+                          disabled={updatingItems.has(getItemKey(selectedItem))}
+                        >
+                          <Zap className="size-3" />
+                          更新安装
+                        </Button>
+                      )
                     ) : (
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                        onClick={() => handleUpdateInstall(selectedItem)}
-                        disabled={updatingItems.has(getItemKey(selectedItem))}
+                        className="h-8 gap-1.5"
+                        onClick={() => handleDownload(selectedItem, false)}
+                        disabled={downloadingItems.has(getItemKey(selectedItem))}
                       >
                         <Zap className="size-3" />
-                        更新安装
+                        安装
                       </Button>
-                    )
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      onClick={() => handleDownload(selectedItem, false)}
-                      disabled={downloadingItems.has(getItemKey(selectedItem))}
-                    >
-                      <Zap className="size-3" />
-                      安装
-                    </Button>
-                  )}
-                  {selectedItem.installed && selectedItem.featured !== "精品" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
-                      onClick={() => handleUninstall(selectedItem)}
-                    >
-                      <Trash2 className="size-3" />
-                      卸载
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    onClick={() => handleDownload(selectedItem, true)}
-                    disabled={downloadingItems.has(getItemKey(selectedItem))}
-                  >
-                    <HardDrive className="size-3" />
-                    下载
-                  </Button>
-                  {(selectedItem.canDelete ||
-                    (selectedItem.ip &&
-                      localStorage.getItem("localIp") &&
-                      selectedItem.ip === localStorage.getItem("localIp"))) && (
-                    <>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 gap-1.5"
-                        onClick={() => handleUpdate(selectedItem)}
-                      >
-                        <Edit className="size-3" />
-                        编辑
-                      </Button>
+                    )}
+                    {selectedItem.installed && selectedItem.featured !== "精品" && (
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-8 gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
-                        onClick={() => handleDelete(selectedItem)}
+                        onClick={() => handleUninstall(selectedItem)}
                       >
                         <Trash2 className="size-3" />
-                        删除
+                        卸载
                       </Button>
-                    </>
-                  )}
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => handleDownload(selectedItem, true)}
+                      disabled={downloadingItems.has(getItemKey(selectedItem))}
+                    >
+                      <HardDrive className="size-3" />
+                      下载
+                    </Button>
+                    {(selectedItem.canDelete ||
+                      (selectedItem.ip &&
+                        localStorage.getItem("localIp") &&
+                        selectedItem.ip === localStorage.getItem("localIp"))) && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => handleUpdate(selectedItem)}
+                        >
+                          <Edit className="size-3" />
+                          编辑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDelete(selectedItem)}
+                        >
+                          <Trash2 className="size-3" />
+                          删除
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
+
+                {selectedItem.guidance && (
+                  <div className="rounded-xl bg-background border border-border/70 p-3 text-sm text-muted-foreground">
+                    <div className="flex items-start gap-2">
+                      <Lightbulb className="size-4 mt-0.5 shrink-0" />
+                      <span className="whitespace-pre-wrap leading-relaxed break-all">
+                        {selectedItem.guidance}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
-
-              {selectedItem.guidance && (
-                <div className="text-sm text-muted-foreground border-l-2 border-border pl-3">
-                  <div className="flex items-start gap-2">
-                    <Lightbulb className="size-4 mt-0.5 shrink-0" />
-                    <span className="whitespace-pre-wrap leading-relaxed">
-                      {selectedItem.guidance}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground border-t border-border pt-3">
-                {selectedItem.category && (
-                  <div className="flex items-center gap-1">
-                    <Tag className="size-3" />
-                    <span>{selectedItem.category}</span>
-                  </div>
-                )}
-                {selectedItem.filename && (
-                  <div className="flex items-center gap-1">
-                    <FileText className="size-3" />
-                    <span>{selectedItem.filename}</span>
-                  </div>
-                )}
-                <div className="flex items-center gap-1">
-                  <Calendar className="size-3" />
-                  <span>{new Date(selectedItem.created_at).toLocaleDateString("zh-CN")}</span>
-                </div>
-                {selectedItem.version && (
-                  <div className="flex items-center gap-1">
-                    <GitBranch className="size-3" />
-                    <span>v{selectedItem.version}</span>
-                  </div>
-                )}
-                {selectedItem.user_id && (
-                  <div className="flex items-center gap-1">
-                    <User className="size-3" />
-                    <span>用户 {selectedItem.user_id}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <h3 className="font-medium text-sm">
-                文件详情
-                <span className="text-xs text-muted-foreground ml-2">
-                  {activeTab === "skill"
-                    ? "(skill: .zip / .md)"
-                    : activeTab === "plugin"
-                      ? "(plugin: .zip)"
-                      : "(mcp: .json)"}
-                </span>
-              </h3>
-              {renderDetailFilePanel()}
             </div>
           </div>
         </ScrollArea>
