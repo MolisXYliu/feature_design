@@ -995,6 +995,45 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("hooks:delete", id),
     setEnabled: (id: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("hooks:setEnabled", { id, enabled })
+  },
+  update: {
+    check: (): Promise<
+      | { hasUpdate: false }
+      | { hasUpdate: true; version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean }
+    > => ipcRenderer.invoke("update:check"),
+    download: (): Promise<{ success: boolean }> => ipcRenderer.invoke("update:download"),
+    install: (): Promise<void> => ipcRenderer.invoke("update:install"),
+    dismiss: (): Promise<{ success: boolean }> => ipcRenderer.invoke("update:dismiss"),
+    rollback: (): Promise<void> => ipcRenderer.invoke("update:rollback"),
+    getStatus: (): Promise<{
+      status: string
+      update: { version: string; updateType: string; releaseNotes: string; size: number } | null
+      canRollback: boolean
+    }> => ipcRenderer.invoke("update:get-status"),
+    onAvailable: (callback: (info: {
+      version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean
+    }) => void) => {
+      const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void => callback(info)
+      ipcRenderer.on("update:available", wrapper)
+      return () => ipcRenderer.removeListener("update:available", wrapper)
+    },
+    onProgress: (callback: (progress: {
+      percent: number; transferred: number; total: number; speed: string
+    }) => void) => {
+      const wrapper = (_event: unknown, progress: Parameters<typeof callback>[0]): void => callback(progress)
+      ipcRenderer.on("update:progress", wrapper)
+      return () => ipcRenderer.removeListener("update:progress", wrapper)
+    },
+    onDownloaded: (callback: (info: { version: string; updateType: string }) => void) => {
+      const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void => callback(info)
+      ipcRenderer.on("update:downloaded", wrapper)
+      return () => ipcRenderer.removeListener("update:downloaded", wrapper)
+    },
+    onError: (callback: (err: { message: string }) => void) => {
+      const wrapper = (_event: unknown, err: Parameters<typeof callback>[0]): void => callback(err)
+      ipcRenderer.on("update:error", wrapper)
+      return () => ipcRenderer.removeListener("update:error", wrapper)
+    }
   }
 }
 
