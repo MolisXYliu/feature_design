@@ -308,7 +308,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         return selectedModelId
       }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
     ])
-    if (!dir) { setCreating(false); return }
+    if (!dir) { setCreating(false); return } // session 未创建，无 ownsCreatingState，直接重置
 
     const id = `session-${++sessionCounter}`
     const { xterm, fitAddon } = createXterm()
@@ -467,6 +467,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const handleRestart = useCallback(async () => {
     if (!activeSession || restartingRef.current) return
     restartingRef.current = true
+    setMountError(null)
     activeSession.hasContent = false
     setSessionIds((prev) => [...prev]) // 显示 loading
     try {
@@ -486,14 +487,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
   // #3 fix: handleStop 清理 PTY 监听器
   const handleStop = useCallback(async () => {
     if (activeSession?.termId) {
-      await window.api.terminal.dispose(activeSession.termId)
+      const termId = activeSession.termId
       activeSession.termId = null
       activeSession.running = false
       if (!activeSession.hasContent) {
         activeSession.hasContent = true
         releaseCreatingState(activeSession)
       }
-      cleanupPty(activeSession)
+      cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
+      await window.api.terminal.dispose(termId)
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
     }
