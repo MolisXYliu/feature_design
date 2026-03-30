@@ -269,7 +269,7 @@ export function GitPanelView({
             ) : (
               <>
                 {state.files.map((file) => (
-                  <div key={file.path} className="rounded-md border border-border/70 p-2 bg-background">
+                  <div key={file.path} className="rounded-md border border-border/70 p-2 bg-white">
                     <button
                       type="button"
                       onClick={() => toggleFileExpanded(file.path)}
@@ -281,7 +281,7 @@ export function GitPanelView({
                         ) : (
                           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="font-mono truncate text-left" title={file.path}>{file.path}</span>
+                        <span className="font-mono font-semibold truncate text-left" title={file.path}>{file.path}</span>
                         <span className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold">
                           <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
                           <span className="text-muted-foreground">/</span>
