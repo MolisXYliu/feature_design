@@ -17,6 +17,7 @@ interface Session {
   workDir: string
   claudeModelId?: string
   hasContent: boolean
+  isNewlyCreated: boolean // 只有 createSessionWithDir 创建的才为 true，restart 不设
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
@@ -231,10 +232,13 @@ export function ClaudeCodePanel(): React.JSX.Element {
       session.xterm.write(data, () => {
         window.api.terminal.ack(termId, bytes)
       })
-      // 首次收到数据时标记 hasContent，同步关闭 creating 和 loading 遮罩
+      // 首次收到数据时标记 hasContent，关闭 loading 遮罩
       if (!session.hasContent) {
         session.hasContent = true
-        setCreating(false)
+        if (session.isNewlyCreated) {
+          session.isNewlyCreated = false
+          setCreating(false)
+        }
         setSessionIds((prev) => [...prev])
       }
     })
@@ -245,7 +249,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
       session.running = false
       if (!session.hasContent) {
         session.hasContent = true
-        setCreating(false)
+        if (session.isNewlyCreated) {
+          session.isNewlyCreated = false
+          setCreating(false)
+        }
       }
       setSessionIds((prev) => [...prev])
     })
@@ -310,7 +317,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     const session: Session = {
       id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, domCleanups: [], ptyCleanups: []
+      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, isNewlyCreated: true, domCleanups: [], ptyCleanups: []
     }
 
     sessionsRef.current.set(id, session)
@@ -474,7 +481,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
       activeSession.running = false
       if (!activeSession.hasContent) {
         activeSession.hasContent = true
-        setCreating(false)
+        if (activeSession.isNewlyCreated) {
+          activeSession.isNewlyCreated = false
+          setCreating(false)
+        }
       }
       cleanupPty(activeSession)
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
