@@ -294,20 +294,28 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const createSessionWithDir = useCallback(async () => {
     setCreating(true)
     // 刷新模型列表和选择目录并行发起
-    const [dir, resolvedModelId] = await Promise.all([
-      window.api.terminal.selectDir(),
-      isPackaged ? window.api.models.getCustomConfigs().then((configs) => {
-        const list = configs.map((c) => ({ id: c.id, name: c.name, model: c.model }))
-        setModels(list)
-        const valid = list.some((m) => m.id === selectedModelId)
-        if (!valid) {
-          const fallback = list.length > 0 ? list[0].id : ""
-          setSelectedModelId(fallback)
-          return fallback
-        }
-        return selectedModelId
-      }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
-    ])
+    let dir: string | null
+    let resolvedModelId: string
+    try {
+      [dir, resolvedModelId] = await Promise.all([
+        window.api.terminal.selectDir(),
+        isPackaged ? window.api.models.getCustomConfigs().then((configs) => {
+          const list = configs.map((c) => ({ id: c.id, name: c.name, model: c.model }))
+          setModels(list)
+          const valid = list.some((m) => m.id === selectedModelId)
+          if (!valid) {
+            const fallback = list.length > 0 ? list[0].id : ""
+            setSelectedModelId(fallback)
+            return fallback
+          }
+          return selectedModelId
+        }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
+      ])
+    } catch (err) {
+      console.error("[ClaudeCode] Failed to initialize session:", err)
+      setCreating(false)
+      return
+    }
     if (!dir) { setCreating(false); return } // session 未创建，无 ownsCreatingState，直接重置
 
     const id = `session-${++sessionCounter}`
