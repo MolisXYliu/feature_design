@@ -25,6 +25,7 @@ interface Session {
 
 let sessionCounter = 0
 const MAX_TRY_OPEN_ATTEMPTS = 100
+const PTY_STARTUP_TIMEOUT_MS = 15_000
 
 // 判断是否为打包环境
 const isPackaged = !window.location.hostname.includes("localhost")
@@ -277,16 +278,17 @@ export function ClaudeCodePanel(): React.JSX.Element {
     fitTerminal(session)
     setSessionIds((prev) => [...prev])
 
-    // 超时兜底：若 15s 内仍无输出，释放 creating 锁并关闭 loading 遮罩
+    // 超时兜底：若 PTY_STARTUP_TIMEOUT_MS 内仍无输出，释放 creating 锁并关闭 loading 遮罩
     const creatingTimeout = setTimeout(() => {
       if (!sessionsRef.current.has(session.id)) return // session 已被关闭
       if (!session.hasContent) {
         session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
         session.hasContent = true
+        setMountError("启动超时，请检查环境或重启")
         setSessionIds((prev) => [...prev])
       }
       releaseCreatingState(session)
-    }, 15_000)
+    }, PTY_STARTUP_TIMEOUT_MS)
     session.ptyCleanups.push(() => clearTimeout(creatingTimeout))
   }, [fitTerminal, cleanupPty, releaseCreatingState])
 
@@ -307,8 +309,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const createSessionWithDir = useCallback(async () => {
     setCreating(true)
     // 刷新模型列表和选择目录并行发起
-    let dir: string | null
-    let resolvedModelId: string
+    let dir: string | null = null
+    let resolvedModelId: string = selectedModelId
     try {
       [dir, resolvedModelId] = await Promise.all([
         window.api.terminal.selectDir(),
@@ -416,6 +418,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         })
       }).catch((err) => {
         console.error("[ClaudeCode] Terminal mount failed:", err)
+        session.domCleanups.forEach((fn) => fn()) // 确保 ResizeObserver 等被清理
         session.xterm.dispose()
         session.container.remove()
         sessionsRef.current.delete(id)
@@ -437,21 +440,21 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const closeSession = useCallback(async (id: string) => {
     const session = sessionsRef.current.get(id)
     if (!session) return
+    sessionsRef.current.delete(id) // 立即删除作为互斥锁，防止并发二次进入 + 让其他回调的 guard 生效
     releaseCreatingState(session)
     setMountError(null)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
     const termId = session.termId
-    session.termId = null // 先清零，防止 handleStop 并发 double dispose
+    session.termId = null
     if (termId) {
       try { await window.api.terminal.dispose(termId) }
       catch (e) { console.warn("[ClaudeCode] dispose failed in closeSession, continuing cleanup", e) }
     }
     session.xterm.dispose()
     session.container.remove()
-    sessionsRef.current.delete(id)
 
-    // sessionsRef 已同步删除，作为 source of truth
+    // sessionsRef 已在函数顶部删除，作为 source of truth
     setSessionIds((prev) => prev.filter((s) => s !== id))
 
     const remaining = [...sessionsRef.current.keys()]
