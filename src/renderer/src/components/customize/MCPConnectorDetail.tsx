@@ -12,6 +12,7 @@ export function MCPConnectorDetail(props: {
   onDelete: (connector: McpConnectorConfig) => void
   onEdit: (connector: McpConnectorConfig) => void
   hideActions?: boolean
+  testByUrlOnly?: boolean
 }): React.JSX.Element {
   const {
     connector,
@@ -19,7 +20,8 @@ export function MCPConnectorDetail(props: {
     onToggleLazyLoad,
     onDelete,
     onEdit,
-    hideActions = false
+    hideActions = false,
+    testByUrlOnly = false
   } = props
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{
@@ -42,14 +44,19 @@ export function MCPConnectorDetail(props: {
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await window.api.mcp.testConnection({ id: connector.id })
+      const res = testByUrlOnly
+        ? await window.api.mcp.testConnection({
+            url: connector.url,
+            advanced: connector.advanced
+          })
+        : await window.api.mcp.testConnection({ id: connector.id })
       setTestResult(res)
     } catch (e) {
       setTestResult({ success: false, error: e instanceof Error ? e.message : "测试失败" })
     } finally {
       setTesting(false)
     }
-  }, [connector])
+  }, [connector, testByUrlOnly])
 
   if (!connector) {
     return (

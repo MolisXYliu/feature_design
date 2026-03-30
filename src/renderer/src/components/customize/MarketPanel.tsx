@@ -1113,6 +1113,7 @@ export function MarketPanel(): React.JSX.Element {
             onDelete={() => undefined}
             onEdit={() => undefined}
             hideActions
+            testByUrlOnly
           />
         </div>
       )
