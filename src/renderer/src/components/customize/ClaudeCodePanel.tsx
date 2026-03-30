@@ -18,6 +18,7 @@ interface Session {
   claudeModelId?: string
   hasContent: boolean
   ownsCreatingState: boolean // 只有 createSessionWithDir 创建的才为 true，表示该 session 持有 creating 锁
+  restarting: boolean
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
@@ -242,6 +243,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.running = true
 
     const removeData = window.api.terminal.onData(termId, (data, bytes) => {
+      if (!sessionsRef.current.has(session.id)) return
       session.xterm.write(data, () => {
         window.api.terminal.ack(termId, bytes)
       })
@@ -255,6 +257,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.ptyCleanups.push(removeData)
 
     const removeExit = window.api.terminal.onExit(termId, (code) => {
+      if (!sessionsRef.current.has(session.id)) return
       session.xterm.write(`\r\n\x1b[90m[进程已退出，代码: ${code}]\x1b[0m\r\n`)
       session.running = false
       if (!session.hasContent) {
@@ -346,7 +349,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     const session: Session = {
       id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, domCleanups: [], ptyCleanups: []
+      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, restarting: false, domCleanups: [], ptyCleanups: []
     }
 
     sessionsRef.current.set(id, session)
@@ -498,10 +501,9 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
   const activeSession = activeSessionId ? getSession(activeSessionId) : null
 
-  const restartingRef = useRef(false)
   const handleRestart = useCallback(async () => {
-    if (!activeSession || restartingRef.current) return
-    restartingRef.current = true
+    if (!activeSession || activeSession.restarting) return
+    activeSession.restarting = true
     setMountError(null)
     activeSession.hasContent = false
     setSessionIds((prev) => [...prev]) // 显示 loading
@@ -512,13 +514,12 @@ export function ClaudeCodePanel(): React.JSX.Element {
       // await 期间 session 可能已被 closeSession 销毁
       if (sessionsRef.current.has(activeSession.id)) {
         activeSession.running = false
-        activeSession.termId = null
         activeSession.hasContent = true
         activeSession.xterm.write(`\r\n\x1b[31m[重启失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
         setSessionIds((prev) => [...prev])
       }
     } finally {
-      restartingRef.current = false
+      activeSession.restarting = false
     }
   }, [activeSession, startPty])
 
