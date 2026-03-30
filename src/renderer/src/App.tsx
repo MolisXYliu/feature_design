@@ -52,6 +52,7 @@ function App(): React.JSX.Element {
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
   const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
+  const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
@@ -173,9 +174,41 @@ function App(): React.JSX.Element {
   }, [handlePreviewExpand])
 
   useEffect(() => {
-    setRightModule("work")
-    handlePreviewCollapse()
-  }, [currentThreadId, handlePreviewCollapse])
+    let cancelled = false
+
+    const syncRightModuleByWorkspace = async (): Promise<void> => {
+      if (!currentThreadId || mainView !== "thread") {
+        setRightModule("work")
+        handlePreviewCollapse()
+        return
+      }
+
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (cancelled) return
+
+        if (summary.isWorktree) {
+          autoOpenedGitForThreadRef.current = currentThreadId
+          setRightModule("git")
+          handlePreviewExpand()
+          return
+        }
+
+        setRightModule("work")
+        handlePreviewCollapse()
+      } catch {
+        if (cancelled) return
+        setRightModule("work")
+        handlePreviewCollapse()
+      }
+    }
+
+    void syncRightModuleByWorkspace()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentThreadId, mainView, handlePreviewCollapse, handlePreviewExpand])
 
   useEffect(() => {
     if (!currentThreadId || mainView !== "thread") {
@@ -189,6 +222,11 @@ function App(): React.JSX.Element {
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
         if (!cancelled) {
           setHasPendingGitDiff(Boolean(summary.isWorktree && summary.hasPendingDiff))
+          if (summary.isWorktree && autoOpenedGitForThreadRef.current !== currentThreadId) {
+            autoOpenedGitForThreadRef.current = currentThreadId
+            setRightModule("git")
+            handlePreviewExpand()
+          }
         }
       } catch {
         if (!cancelled) setHasPendingGitDiff(false)
@@ -208,7 +246,7 @@ function App(): React.JSX.Element {
       window.clearInterval(timer)
       cleanupFs()
     }
-  }, [currentThreadId, mainView])
+  }, [currentThreadId, mainView, handlePreviewExpand])
 
   // Reset drag start on mouse up
   useEffect(() => {

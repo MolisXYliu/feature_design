@@ -169,6 +169,20 @@ async function runGit(worktreePath: string, args: string[]): Promise<string> {
   }
 }
 
+function isGitDirWorktree(gitDir: string): boolean {
+  const normalized = gitDir.trim().replace(/\\/g, "/")
+  return /\/\.git\/worktrees\//.test(normalized)
+}
+
+async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--git-dir"])
+    return isGitDirWorktree(stdout)
+  } catch {
+    return false
+  }
+}
+
 function logGitStep(threadId: string, action: string, detail: string): void {
   console.log(`[GitPanel][${threadId}][${action}] ${detail}`)
 }
@@ -255,7 +269,9 @@ async function resolveThreadWorkspaceContext(threadId: string): Promise<{
     metadata = {}
   }
   const workspacePath = typeof metadata.workspacePath === "string" ? metadata.workspacePath : null
-  const isWorktree = Boolean(metadata.isWorktree)
+  const metadataMarkedWorktree = Boolean(metadata.isWorktree)
+  const detectedWorktree = workspacePath ? await detectIsWorktreePath(workspacePath) : false
+  const isWorktree = metadataMarkedWorktree || detectedWorktree
   const worktreeBaseCommit =
     typeof metadata.worktreeBaseCommit === "string" ? metadata.worktreeBaseCommit : null
   const worktreeBranch =
@@ -887,14 +903,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     const gitRoot = await getGitRoot(folderPath)
     if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
 
-    // Detect if folderPath is itself a worktree (not the main repo).
-    // In a worktree, "git rev-parse --git-dir" returns a path like /repo/.git/worktrees/<name>
-    let isWorktreePath = false
-    try {
-      const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--git-dir"])
-      isWorktreePath = stdout.trim().includes(`${path.sep}worktrees${path.sep}`) ||
-                       stdout.trim().includes("/.git/worktrees/")
-    } catch { /* ignore */ }
+    const isWorktreePath = await detectIsWorktreePath(folderPath)
 
     const worktrees = await listWorktrees(gitRoot)
     return { isGit: true, gitRoot, worktrees, isWorktreePath }

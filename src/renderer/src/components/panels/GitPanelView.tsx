@@ -183,14 +183,16 @@ export function GitPanelView({
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
           <div className="text-[10px] text-muted-foreground truncate">task_id: {threadId || "-"}</div>
         </div>
-        <button
-          onClick={() => runAction("reject")}
-          disabled={!hasPending || running !== null}
-          className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
-        >
-          <RotateCcw className="size-3.5" />
-          {running === "reject" ? "全部回退中..." : "全部回退"}
-        </button>
+        {hasPending && (
+          <button
+            onClick={() => runAction("reject")}
+            disabled={running !== null}
+            className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
+          >
+            <RotateCcw className="size-3.5" />
+            {running === "reject" ? "全部回退中..." : "全部回退"}
+          </button>
+        )}
       </div>
 
       <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0 p-3 space-y-3">
@@ -275,56 +277,58 @@ export function GitPanelView({
         )}
       </div>
 
-      <div className="border-t border-border/70 p-3 bg-background-elevated/50 space-y-2 shrink-0">
-        <input
-          value={cardNumber}
-          onChange={(e) => setCardNumber(e.target.value)}
-          placeholder="输入卡片编号 cardNumber（必填）"
-          className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
-        />
-        <input
-          value={commitMessage}
-          onChange={(e) => setCommitMessage(e.target.value)}
-          placeholder="输入 commit message（必填）"
-          className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
-        />
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => runAction("commit")}
-            disabled={!hasPending || running !== null || !cardNumber.trim() || !commitMessage.trim()}
-            className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
-          >
-            {running === "commit" ? (
-              <>
-                <Loader2 className="size-3.5 mr-1 animate-spin" />
-                提交中...
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="size-3.5 mr-1" />
-                Commit
-              </>
-            )}
-          </button>
-          <button
-            onClick={() => runAction("push")}
-            disabled={running !== null || !cardNumber.trim() || !commitMessage.trim()}
-            className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
-          >
-            {running === "push" ? (
-              <>
-                <Loader2 className="size-3.5 mr-1 animate-spin" />
-                推送中...
-              </>
-            ) : (
-              <>
-                <Upload className="size-3.5 mr-1" />
-                push推送
-              </>
-            )}
-          </button>
+      {hasPending && (
+        <div className="border-t border-border/70 p-3 bg-background-elevated/50 space-y-2 shrink-0">
+          <input
+            value={cardNumber}
+            onChange={(e) => setCardNumber(e.target.value)}
+            placeholder="输入卡片编号 cardNumber（必填）"
+            className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
+          />
+          <input
+            value={commitMessage}
+            onChange={(e) => setCommitMessage(e.target.value)}
+            placeholder="输入 commit message（必填）"
+            className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => runAction("commit")}
+              disabled={running !== null || !cardNumber.trim() || !commitMessage.trim()}
+              className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
+            >
+              {running === "commit" ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1 animate-spin" />
+                  提交中...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="size-3.5 mr-1" />
+                  Commit
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => runAction("push")}
+              disabled={running !== null || !cardNumber.trim() || !commitMessage.trim()}
+              className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
+            >
+              {running === "push" ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1 animate-spin" />
+                  推送中...
+                </>
+              ) : (
+                <>
+                  <Upload className="size-3.5 mr-1" />
+                  push推送
+                </>
+              )}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {toastText && (
         <div className="pointer-events-none fixed left-1/2 top-[10vh] z-[120] -translate-x-1/2">
