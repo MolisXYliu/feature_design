@@ -410,6 +410,18 @@ export function MarketPanel(): React.JSX.Element {
       setSkillDetailContent(text)
       return
     }
+    if (ext === "zip") {
+      setSkillDetailPreviewKind("text")
+      const arrayBuffer = await blob.arrayBuffer()
+      const extracted = await window.api.skills.extractMarkdownFromZip(arrayBuffer, filename)
+      if (extracted.success && extracted.content) {
+        setSkillDetailSelectedFile(extracted.filePath || "SKILL.md")
+        setSkillDetailContent(extracted.content)
+      } else {
+        setSkillDetailContent(extracted.error || "Zip 中未找到可预览的 markdown 文件。")
+      }
+      return
+    }
     setSkillDetailPreviewKind("text")
     setSkillDetailContent(`文件类型 .${ext || "未知"} 已通过安装接口获取，当前不支持直接内容预览。`)
   }
@@ -1066,7 +1078,7 @@ export function MarketPanel(): React.JSX.Element {
         )
       }
       return (
-        <div className="h-[560px] border border-border rounded-lg overflow-hidden">
+        <div className="border border-border rounded-lg ">
           <SkillDetail
             skill={skillDetailSkill}
             selectedFilePath={skillDetailSelectedFile}
@@ -1093,7 +1105,7 @@ export function MarketPanel(): React.JSX.Element {
         )
       }
       return (
-        <div className="h-[560px] border border-border rounded-lg overflow-hidden">
+        <div className=" border border-border rounded-lg ">
           <MCPConnectorDetail
             connector={mcpDetailConnector}
             onToggleEnabled={() => undefined}
@@ -1114,7 +1126,7 @@ export function MarketPanel(): React.JSX.Element {
       )
     }
     return (
-      <div className="h-[560px] border border-border rounded-lg overflow-hidden">
+      <div className="border border-border rounded-lg">
         <PluginDetailPanel
           plugin={pluginDetailPlugin}
           detail={pluginDetailData}

@@ -7,11 +7,15 @@ import { getCustomSkillsDir, getDisabledSkills, getSkillsDir, setDisabledSkills 
 import type { SkillMetadata } from "../types"
 
 function sanitizeSkillName(name: string): string {
-  return name
-    .replace(/[^a-zA-Z0-9-_]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 64) || name || "skill"
+  return (
+    name
+      .replace(/[^a-zA-Z0-9-_]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 64) ||
+    name ||
+    "skill"
+  )
 }
 
 function isPathUnderAllowedDirs(filePath: string): boolean {
@@ -61,7 +65,10 @@ function parseYamlFrontmatter(content: string): Record<string, string> {
   return result
 }
 
-async function loadSkills(dirPath: string, source: "project" | "user" = "project"): Promise<SkillMetadata[]> {
+async function loadSkills(
+  dirPath: string,
+  source: "project" | "user" = "project"
+): Promise<SkillMetadata[]> {
   const skills: SkillMetadata[] = []
 
   if (!existsSync(dirPath)) return skills
@@ -220,6 +227,46 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle(
+    "skills:extractMarkdownFromZip",
+    async (
+      _event,
+      payload: { buffer: ArrayBuffer; fileName?: string }
+    ): Promise<{ success: boolean; filePath?: string; content?: string; error?: string }> => {
+      const { buffer, fileName } = payload || {}
+      if (!buffer) {
+        return { success: false, error: "Invalid zip buffer" }
+      }
+
+      try {
+        const zip = new AdmZip(Buffer.from(buffer))
+        const entries = zip
+          .getEntries()
+          .filter((entry) => !entry.isDirectory && /\.md$/i.test(entry.entryName))
+          .sort((a, b) => a.entryName.localeCompare(b.entryName))
+
+        if (entries.length === 0) {
+          return { success: false, error: "Zip 中未找到 .md 文件" }
+        }
+
+        const preferred =
+          entries.find((entry) => /(^|\/)SKILL\.md$/i.test(entry.entryName)) || entries[0]
+        const content = preferred.getData().toString("utf-8")
+
+        return {
+          success: true,
+          filePath: preferred.entryName || fileName || "SKILL.md",
+          content
+        }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "Failed to parse zip markdown"
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
     "skills:upload",
     async (
       _event,
@@ -239,13 +286,17 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
           loadSkills(getSkillsDir(), "project"),
           loadSkills(getCustomSkillsDir(), "user")
         ])
-        const existingNames = new Set([...builtin, ...custom].map((s) => s.name.trim().toLowerCase()))
+        const existingNames = new Set(
+          [...builtin, ...custom].map((s) => s.name.trim().toLowerCase())
+        )
         return existingNames.has(nameToCheck.trim().toLowerCase())
       }
 
       const checkDirCollision = (sanitizedName: string): boolean => {
-        return existsSync(path.join(customDir, sanitizedName))
-          || existsSync(path.join(getSkillsDir(), sanitizedName))
+        return (
+          existsSync(path.join(customDir, sanitizedName)) ||
+          existsSync(path.join(getSkillsDir(), sanitizedName))
+        )
       }
 
       try {
@@ -311,7 +362,10 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
             const relativePath = entry.entryName.slice(basePrefix.length)
             if (!relativePath) continue
             const destPath = path.resolve(skillDir, relativePath)
-            if (!destPath.startsWith(path.resolve(skillDir) + path.sep) && destPath !== path.resolve(skillDir)) {
+            if (
+              !destPath.startsWith(path.resolve(skillDir) + path.sep) &&
+              destPath !== path.resolve(skillDir)
+            ) {
               console.warn(`[Skills] Skipping ZIP entry with path traversal: ${entry.entryName}`)
               continue
             }
@@ -357,7 +411,9 @@ export function registerSkillsHandlers(ipcMain: IpcMain): void {
           }
           if (!mdEntry) {
             // 取任意 .md 文件
-            mdEntry = entries.find((e) => !e.isDirectory && e.entryName.toLowerCase().endsWith(".md"))
+            mdEntry = entries.find(
+              (e) => !e.isDirectory && e.entryName.toLowerCase().endsWith(".md")
+            )
           }
           if (!mdEntry) return { success: false, error: "ZIP 中未找到 MD 文件" }
           const content = mdEntry.getData().toString("utf-8")
