@@ -219,7 +219,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const startPty = useCallback(async (session: Session) => {
     if (session.termId) {
       try { await window.api.terminal.dispose(session.termId) }
-      catch { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY") }
+      catch (e) { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY", e) }
       session.termId = null
     }
     // #1 #2 fix: 只清理 PTY 相关的 cleanup，保留 DOM 级别的
@@ -233,7 +233,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     })
     // #2 fix: 如果 await 期间 session 被关闭，dispose 新创建的 PTY
     if (!sessionsRef.current.has(session.id)) {
-      window.api.terminal.dispose(termId)
+      window.api.terminal.dispose(termId).catch((e) => console.warn("[ClaudeCode] dispose orphan PTY failed:", e))
       releaseCreatingState(session) // P0 fix: 防止 creating 永久卡死
       return
     }
@@ -427,7 +427,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.domCleanups.forEach((fn) => fn())
     if (session.termId) {
       try { await window.api.terminal.dispose(session.termId) }
-      catch { console.warn("[ClaudeCode] dispose failed in closeSession, continuing cleanup") }
+      catch (e) { console.warn("[ClaudeCode] dispose failed in closeSession, continuing cleanup", e) }
     }
     session.xterm.dispose()
     session.container.remove()
@@ -509,7 +509,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       }
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
       try { await window.api.terminal.dispose(termId) }
-      catch { console.warn("[ClaudeCode] dispose failed in handleStop, PTY may still be running") }
+      catch (e) { console.warn("[ClaudeCode] dispose failed in handleStop, PTY may still be running", e) }
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
     }
