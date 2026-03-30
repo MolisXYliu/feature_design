@@ -5,9 +5,34 @@
  */
 import { IpcMain, BrowserWindow, dialog } from "electron"
 import { fork, type ChildProcess } from "node:child_process"
-import { accessSync } from "fs" // #15 fix: 用 import 代替 require
+import { accessSync } from "fs"
 import path from "path"
 import { app } from "electron"
+import { getCustomModelConfigById } from "../storage"
+
+// 从 .env 读取代理地址，和项目其他地方一致用 import.meta.env
+function getClaudeCodeProxyBase(): string {
+  return (import.meta.env.VITE_CLAUDE_CODE_PROXY_BASE as string) || ""
+}
+
+function buildClaudeEnv(modelId: string): Record<string, string> {
+  const config = getCustomModelConfigById(modelId)
+  if (!config) throw new Error(`模型配置不存在: ${modelId}`)
+  const proxyBase = getClaudeCodeProxyBase()
+  if (!proxyBase) throw new Error("VITE_CLAUDE_CODE_PROXY_BASE 未配置")
+  if (!config.apiKey) throw new Error(`模型 "${config.name}" 的 API Key 未设置`)
+  const baseUrl = `${proxyBase.replace(/\/+$/, '')}/${config.model}`
+  return {
+    ANTHROPIC_AUTH_TOKEN: config.apiKey,
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_MODEL: config.model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: config.model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: config.model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: config.model,
+    CLAUDE_CODE_SUBAGENT_MODEL: config.model,
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(config.maxTokens || 128000)
+  }
+}
 
 let ptyHost: ChildProcess | null = null
 let idCounter = 0
@@ -189,7 +214,7 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(
     "terminal:create",
-    async (event, { workDir, args, cols: initCols, rows: initRows }: { workDir?: string; args?: string[]; cols?: number; rows?: number }) => {
+    async (event, { workDir, args, cols: initCols, rows: initRows, claudeModelId }: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }) => {
       const id = `term-${++idCounter}`
       try {
         const window = BrowserWindow.fromWebContents(event.sender)
@@ -223,7 +248,8 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
           rows: initRows || 30,
           claudePath,
           args: args || [],
-          electronPath: process.execPath // Electron 二进制路径，可当 node 用
+          electronPath: process.execPath,
+          extraEnv: claudeModelId ? buildClaudeEnv(claudeModelId) : undefined
         })
 
         await createPromise
@@ -232,6 +258,7 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
       } catch (err) {
         // 创建失败：清理主进程状态，通知子进程销毁可能已创建的 PTY
         console.error("[Terminal] Failed to create terminal:", err)
+        pendingCreates.delete(id)
         ptyWindows.delete(id)
         try { sendToHost({ type: "dispose", id }) } catch { /* Pty Host 可能已退出 */ }
         throw err

@@ -38,7 +38,8 @@ interface CreateMsg {
   rows: number
   claudePath: string
   args: string[]
-  electronPath: string // Electron 二进制路径，配合 ELECTRON_RUN_AS_NODE=1 当 node 用
+  electronPath: string
+  extraEnv?: Record<string, string> // Claude Code 模型相关环境变量
 }
 
 interface WriteMsg {
@@ -89,7 +90,7 @@ function handleCreate(msg: CreateMsg): void {
 
   // 构建 claude 启动命令和环境变量
   const isJsFile = msg.claudePath.endsWith(".js")
-  const env = { ...process.env } as Record<string, string>
+  const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
   let claudeCmd: string
 
   if (isJsFile) {
@@ -104,10 +105,22 @@ function handleCreate(msg: CreateMsg): void {
     claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
   }
 
-  // 用 shell -c 直接执行命令（不回显），Claude Code 退出后回到交互式 shell
+  // 用 shell -c 直接执行命令（不回显），Claude Code 退出后清除敏感变量再回到交互式 shell
+  const varsToUnset: string[] = []
+  if (msg.extraEnv) {
+    varsToUnset.push(...Object.keys(msg.extraEnv))
+  }
+  if (isJsFile) {
+    varsToUnset.push("ELECTRON_RUN_AS_NODE")
+  }
+
   const shellArgs = isWin
-    ? ["-NoExit", "-Command", claudeCmd]
-    : ["-c", claudeCmd + ` ; exec ${shell}`]
+    ? ["-NoExit", "-Command", varsToUnset.length > 0
+        ? `${claudeCmd}; ${varsToUnset.map((v) => `Remove-Item Env:\\${v} -ErrorAction SilentlyContinue`).join("; ")}`
+        : claudeCmd]
+    : ["-c", varsToUnset.length > 0
+        ? claudeCmd + ` ; env ${varsToUnset.map((v) => `-u ${v}`).join(" ")} exec ${shell}`
+        : claudeCmd + ` ; exec ${shell}`]
 
   const pty = ptySpawn(shell, shellArgs, {
     name: "xterm-256color",

@@ -247,7 +247,7 @@ interface CustomAPI {
     onChanged: (callback: () => void) => () => void
   }
   terminal: {
-    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number }) => Promise<string>
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }) => Promise<string>
     write: (id: string, data: string) => void
     resize: (id: string, cols: number, rows: number) => void
     dispose: (id: string) => Promise<void>

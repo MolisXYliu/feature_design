@@ -15,13 +15,17 @@ interface Session {
   container: HTMLDivElement
   running: boolean
   workDir: string
+  claudeModelId?: string
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
 }
 
 let sessionCounter = 0
-const MAX_TRY_OPEN_ATTEMPTS = 100 // #5 fix: RAF 重试上限
+const MAX_TRY_OPEN_ATTEMPTS = 100
+
+// 判断是否为打包环境
+const isPackaged = !window.location.hostname.includes("localhost")
 
 function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
   const xterm = new Terminal({
@@ -56,6 +60,22 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const sessionsRef = useRef<Map<string, Session>>(new Map())
   const [sessionIds, setSessionIds] = useState<string[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [models, setModels] = useState<Array<{ id: string; name: string; model: string }>>([])
+  const [selectedModelId, setSelectedModelId] = useState<string>("")
+
+  // 加载模型列表（仅打包环境）
+  useEffect(() => {
+    if (!isPackaged) return
+    window.api.models.getCustomConfigs().then((configs) => {
+      const list = configs.map((c) => ({
+        id: c.id,
+        name: c.name,
+        model: c.model
+      }))
+      setModels(list)
+      if (list.length > 0) setSelectedModelId(list[0].id)
+    }).catch(console.error)
+  }, [])
 
   const getSession = useCallback((id: string) => sessionsRef.current.get(id), [])
   const pendingResizeRef = useRef(false)
@@ -194,7 +214,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
     const termId = await window.api.terminal.create({
       workDir: session.workDir || undefined,
       cols: session.xterm.cols,
-      rows: session.xterm.rows
+      rows: session.xterm.rows,
+      claudeModelId: session.claudeModelId
     })
     // #2 fix: 如果 await 期间 session 被关闭，dispose 新创建的 PTY
     if (!sessionsRef.current.has(session.id)) {
@@ -248,7 +269,20 @@ export function ClaudeCodePanel(): React.JSX.Element {
   }, [fitTerminal])
 
   const createSessionWithDir = useCallback(async () => {
-    const dir = await window.api.terminal.selectDir()
+    // 刷新模型列表和选择目录并行发起
+    const [dir, resolvedModelId] = await Promise.all([
+      window.api.terminal.selectDir(),
+      isPackaged ? window.api.models.getCustomConfigs().then((configs) => {
+        const list = configs.map((c) => ({ id: c.id, name: c.name, model: c.model }))
+        setModels(list)
+        const valid = list.some((m) => m.id === selectedModelId)
+        if (list.length > 0 && !valid) {
+          setSelectedModelId(list[0].id)
+          return list[0].id
+        }
+        return selectedModelId
+      }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
+    ])
     if (!dir) return
 
     const id = `session-${++sessionCounter}`
@@ -263,7 +297,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     const session: Session = {
       id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, domCleanups: [], ptyCleanups: []
+      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, domCleanups: [], ptyCleanups: []
     }
 
     sessionsRef.current.set(id, session)
@@ -329,7 +363,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       })
     }
     requestAnimationFrame(waitForHost)
-  }, [mountXterm, startPty, switchSession])
+  }, [mountXterm, startPty, switchSession, selectedModelId])
 
   // #16 fix: switchSession 从 setState 回调中移出
   const closeSession = useCallback(async (id: string) => {
@@ -428,6 +462,20 @@ export function ClaudeCodePanel(): React.JSX.Element {
             你可以通过顶部 Tab 栏新建多个会话，每个会话对应不同的项目目录。
           </p>
         </div>
+        {isPackaged && models.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">模型：</span>
+            <select
+              value={selectedModelId}
+              onChange={(e) => setSelectedModelId(e.target.value)}
+              className="h-8 px-2 rounded-md border border-border bg-background text-sm"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <Button onClick={createSessionWithDir} className="gap-2">
           <FolderOpen className="size-4" />
           选择工作目录并启动
