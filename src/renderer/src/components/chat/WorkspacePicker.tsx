@@ -78,12 +78,6 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
   const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null)
   const [worktreeBaseBranch, setWorktreeBaseBranch] = useState<string | null>(null)
 
-  // Commit state
-  const [commitMessage, setCommitMessage] = useState("")
-  const [committing, setCommitting] = useState(false)
-  const [commitError, setCommitError] = useState<string | null>(null)
-  const [commitSuccess, setCommitSuccess] = useState(false)
-
   // Worktree creation state
   const [creatingWorktree, setCreatingWorktree] = useState(false)
   const [branchName, setBranchName] = useState("")
@@ -167,7 +161,13 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
         return
       }
       await window.api.workspace.set(threadId, result.path)
-      await window.api.workspace.saveWorktreeContext(threadId, gitRoot, result.branch, result.baseBranch)
+      await window.api.workspace.saveWorktreeContext(
+        threadId,
+        gitRoot,
+        result.branch,
+        result.baseBranch,
+        result.baseCommit
+      )
       setWorkspacePath(result.path)
       setIsWorktree(true)
       setWorktreeBranch(result.branch)
@@ -182,27 +182,6 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       setWorktreeError(e instanceof Error ? e.message : "创建失败")
     } finally {
       setLoading(false)
-    }
-  }
-
-  async function handleCommit(): Promise<void> {
-    if (!workspacePath || !commitMessage.trim()) return
-    setCommitting(true)
-    setCommitError(null)
-    setCommitSuccess(false)
-    try {
-      const result = await window.api.workspace.commitWorktree(workspacePath, commitMessage.trim())
-      if (!result.success) {
-        setCommitError(result.error ?? "提交失败")
-      } else {
-        setCommitSuccess(true)
-        setCommitMessage("")
-        setTimeout(() => setCommitSuccess(false), 3000)
-      }
-    } catch (e) {
-      setCommitError(e instanceof Error ? e.message : "提交失败")
-    } finally {
-      setCommitting(false)
     }
   }
 
@@ -349,7 +328,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                 </div>
               )}
 
-              {/* Worktree info + commit + switch back */}
+              {/* Worktree info */}
               {isWorktree && gitRoot && (
                 <div className="space-y-2">
                   {/* Branch lineage */}
@@ -362,43 +341,9 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                     </div>
                   )}
 
-                  {/* Commit changes */}
-                  <div className="space-y-1.5">
-                    <div className="text-xs text-muted-foreground">提交改动</div>
-                    <Input
-                      value={commitMessage}
-                      onChange={(e) => {
-                        setCommitMessage(e.target.value)
-                        setCommitError(null)
-                        setCommitSuccess(false)
-                      }}
-                      placeholder="提交信息..."
-                      className="h-7 text-xs"
-                      onKeyDown={(e) => e.key === "Enter" && handleCommit()}
-                    />
-                    {commitError && (
-                      <div className="flex items-start gap-1.5 text-[11px] text-destructive">
-                        <AlertCircle className="size-3 mt-0.5 shrink-0" />
-                        <span>{commitError}</span>
-                      </div>
-                    )}
-                    {commitSuccess && (
-                      <div className="flex items-center gap-1.5 text-[11px] text-status-nominal">
-                        <Check className="size-3 shrink-0" />
-                        <span>提交成功</span>
-                      </div>
-                    )}
-                    <Button
-                      size="sm"
-                      className="w-full h-7 text-xs"
-                      onClick={handleCommit}
-                      disabled={committing || !commitMessage.trim()}
-                    >
-                      {committing && <Loader2 className="size-3 mr-1.5 animate-spin" />}
-                      提交改动
-                    </Button>
-                  </div>
-
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    提交、推送和回滚请在右上角的 Git 操作里进行。
+                  </p>
                 </div>
               )}
 
