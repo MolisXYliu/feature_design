@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
-import { Briefcase, Eye, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
+import { Briefcase, Eye, GitBranch, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
@@ -48,8 +48,9 @@ function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
-  const [rightModule, setRightModule] = useState<"work" | "preview">("work")
+  const [rightModule, setRightModule] = useState<"work" | "preview" | "git">("work")
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
+  const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
@@ -166,10 +167,48 @@ function App(): React.JSX.Element {
     handlePreviewCollapse()
   }, [handlePreviewCollapse])
 
+  const selectGitModule = useCallback(() => {
+    setRightModule("git")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
+
   useEffect(() => {
     setRightModule("work")
     handlePreviewCollapse()
   }, [currentThreadId, handlePreviewCollapse])
+
+  useEffect(() => {
+    if (!currentThreadId || mainView !== "thread") {
+      setHasPendingGitDiff(false)
+      return
+    }
+    let cancelled = false
+
+    const refreshSummary = async (): Promise<void> => {
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (!cancelled) {
+          setHasPendingGitDiff(Boolean(summary.isWorktree && summary.hasPendingDiff))
+        }
+      } catch {
+        if (!cancelled) setHasPendingGitDiff(false)
+      }
+    }
+
+    refreshSummary()
+    const timer = window.setInterval(refreshSummary, 3000)
+    const cleanupFs = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId === currentThreadId) {
+        refreshSummary()
+      }
+    })
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      cleanupFs()
+    }
+  }, [currentThreadId, mainView])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -338,6 +377,23 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
+                    rightModule === "git"
+                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
+                      : hasPendingGitDiff
+                        ? "text-status-warning bg-status-warning/10 border-status-warning/40 hover:bg-status-warning/20"
+                        : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                  }`}
+                  onClick={selectGitModule}
+                  title="Git Panel"
+                  aria-label="Git Panel"
+                  aria-pressed={rightModule === "git"}
+                >
+                  <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
+                  <span>Git Panel</span>
+                </button>
+                <button
+                  type="button"
+                  className={`${panelToggleBaseClass} ${
                     rightModule === "work"
                       ? "text-foreground bg-muted/35 hover:bg-muted/50"
                       : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
@@ -435,6 +491,7 @@ function App(): React.JSX.Element {
                   <RightPanel
                     moduleMode={rightModule}
                     onRequestPreviewMode={selectPreviewModule}
+                    onRequestGitMode={selectGitModule}
                     onRequestWorkMode={selectWorkModule}
                     onPreviewFullscreenChange={setPreviewFullscreen}
                   />

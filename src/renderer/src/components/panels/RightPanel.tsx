@@ -27,7 +27,8 @@ import {
   Webhook,
   Maximize2,
   Minimize2,
-  EyeOff
+  EyeOff,
+  Loader2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
@@ -133,8 +134,9 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 interface RightPanelProps {
-  moduleMode: "work" | "preview"
+  moduleMode: "work" | "preview" | "git"
   onRequestPreviewMode?: () => void
+  onRequestGitMode?: () => void
   onRequestWorkMode?: () => void
   onPreviewFullscreenChange?: (isFullscreen: boolean) => void
 }
@@ -142,6 +144,7 @@ interface RightPanelProps {
 export function RightPanel({
   moduleMode,
   onRequestPreviewMode,
+  onRequestGitMode,
   onRequestWorkMode,
   onPreviewFullscreenChange
 }: RightPanelProps): React.JSX.Element {
@@ -170,6 +173,8 @@ export function RightPanel({
   const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
   const [previewReloadToken, setPreviewReloadToken] = useState(0)
   const lastAppliedPreviewKeyRef = useRef<string | null>(null)
+  const lastRecordedBatchKeyRef = useRef<string | null>(null)
+  const lastAutoSwitchedBatchKeyRef = useRef<string | null>(null)
   const lastThreadIdRef = useRef<string | null>(null)
   const prevStreamLoadingRef = useRef(false)
   const [tasksOpen, setTasksOpen] = useState(false)
@@ -271,6 +276,44 @@ export function RightPanel({
     return null
   }, [threadState?.messages, streamData.messages])
 
+  const latestCompletedLlmBatch = useMemo(() => {
+    const persisted = threadState?.messages ?? []
+    const streaming = (streamData.messages as Array<{ id?: string; tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }> | undefined) ?? []
+    const all = [
+      ...persisted.map((m) => ({ message: m })),
+      ...streaming.map((m) => ({ message: m }))
+    ]
+    const completedToolCallIds = new Set<string>()
+    for (const item of all) {
+      const message = item.message as { role?: string; type?: string; tool_call_id?: string }
+      if ((message.role === "tool" || message.type === "tool") && message.tool_call_id) {
+        completedToolCallIds.add(message.tool_call_id)
+      }
+    }
+    for (let i = all.length - 1; i >= 0; i--) {
+      const msg = all[i].message
+      const toolCalls = msg?.tool_calls || []
+      const files = new Set<string>()
+      const toolIds: string[] = []
+      for (const tool of toolCalls) {
+        if (!tool?.id || !completedToolCallIds.has(tool.id)) continue
+        const filePath = getToolCallFilePath(tool)
+        if (filePath) {
+          files.add(filePath)
+          toolIds.push(tool.id)
+        }
+      }
+      if (files.size > 0) {
+        const messageId = msg?.id || `m-${i}`
+        return {
+          batchKey: `${messageId}:${toolIds.sort().join(",")}`,
+          files: Array.from(files)
+        }
+      }
+    }
+    return null
+  }, [threadState?.messages, streamData.messages])
+
   useEffect(() => {
     const wasLoading = prevStreamLoadingRef.current
     const isLoading = streamData.isLoading
@@ -278,6 +321,14 @@ export function RightPanel({
 
     // Render preview when this round finishes: true -> false
     if (!(wasLoading && !isLoading)) return
+    if (
+      latestCompletedLlmBatch?.files?.length &&
+      lastAutoSwitchedBatchKeyRef.current !== latestCompletedLlmBatch.batchKey
+    ) {
+      lastAutoSwitchedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+      onRequestGitMode?.()
+      return
+    }
     if (!latestResourceEvent) return
     if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
 
@@ -286,7 +337,7 @@ export function RightPanel({
     setPreviewDiff(latestResourceEvent.codeDiff ?? null)
     setPreviewReloadToken((v) => v + 1)
     onRequestPreviewMode?.()
-  }, [streamData.isLoading, latestResourceEvent, onRequestPreviewMode])
+  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -295,6 +346,8 @@ export function RightPanel({
       setPreviewPath(null)
       setPreviewDiff(null)
       lastAppliedPreviewKeyRef.current = null
+      lastRecordedBatchKeyRef.current = null
+      lastAutoSwitchedBatchKeyRef.current = null
       prevStreamLoadingRef.current = false
     }
   }, [currentThreadId])
@@ -305,9 +358,18 @@ export function RightPanel({
       if (data.threadId === currentThreadId && previewPath) {
         setPreviewReloadToken((v) => v + 1)
       }
+      if (data.threadId === currentThreadId) {
+        window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
+          if (summary.isWorktree && summary.hasPendingDiff) {
+            onRequestGitMode?.()
+          }
+        }).catch(() => {
+          // ignore summary refresh errors
+        })
+      }
     })
     return cleanup
-  }, [currentThreadId, previewPath])
+  }, [currentThreadId, previewPath, onRequestGitMode])
 
   useEffect(() => {
     const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
@@ -325,6 +387,15 @@ export function RightPanel({
       onPreviewFullscreenChange?.(false)
     }
   }, [moduleMode, previewPath, onPreviewFullscreenChange])
+
+  useEffect(() => {
+    if (!currentThreadId || !latestCompletedLlmBatch || latestCompletedLlmBatch.files.length === 0) return
+    if (lastRecordedBatchKeyRef.current === latestCompletedLlmBatch.batchKey) return
+    lastRecordedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+    window.api.workspace.recordLlmModifiedFiles(currentThreadId, latestCompletedLlmBatch.files).catch((error) => {
+      console.error("[RightPanel] Failed to record LLM modified files:", error)
+    })
+  }, [currentThreadId, latestCompletedLlmBatch])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -735,6 +806,17 @@ export function RightPanel({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {moduleMode === "git" && (
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+          <div className="bg-white p-2 h-full min-h-0">
+            <GitPanelView
+              threadId={currentThreadId ?? ""}
+              workspacePath={threadState?.workspacePath ?? null}
+            />
           </div>
         </div>
       )}
@@ -1323,6 +1405,305 @@ function ResourcePreview({
             reloadToken={reloadToken}
           />
         )}
+      </div>
+    </div>
+  )
+}
+
+function GitPanelView({
+  threadId,
+  workspacePath
+}: {
+  threadId: string
+  workspacePath: string | null
+}): React.JSX.Element {
+  type PushStep = {
+    step: "pull" | "commit" | "push" | "verify" | "final"
+    status: "ok" | "failed" | "skipped"
+    detail: string
+  }
+
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState<"commit" | "push" | "reject" | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [pushSteps, setPushSteps] = useState<PushStep[]>([])
+  const [commitMessage, setCommitMessage] = useState("")
+  const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null)
+  const [revertingFilePath, setRevertingFilePath] = useState<string | null>(null)
+  const [state, setState] = useState<{
+    success: boolean
+    isWorktree: boolean
+    taskId: string
+    files: Array<{ path: string; diff: string; additions: number; deletions: number }>
+    totals: { additions: number; deletions: number; fileCount: number }
+    hasPendingDiff: boolean
+    suggestedCommitMessage?: string
+    error?: string
+  } | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!threadId) return
+    setLoading(true)
+    try {
+      const next = await window.api.workspace.getGitPanelState(threadId)
+      setState(next)
+      if (next.suggestedCommitMessage) {
+        setCommitMessage((prev) => prev || next.suggestedCommitMessage || "")
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载失败")
+    } finally {
+      setLoading(false)
+    }
+  }, [threadId])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    const files = state?.files ?? []
+    if (files.length === 0) {
+      setExpandedFilePath(null)
+      return
+    }
+    if (!expandedFilePath || !files.some((f) => f.path === expandedFilePath)) {
+      setExpandedFilePath(files[0].path)
+    }
+  }, [state?.files, expandedFilePath])
+
+  useEffect(() => {
+    if (!threadId) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const cleanup = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId !== threadId) return
+      if (refreshTimer) clearTimeout(refreshTimer)
+      // Coalesce rapid file watcher events from a single edit/save.
+      refreshTimer = setTimeout(() => {
+        refresh()
+      }, 120)
+    })
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      cleanup()
+    }
+  }, [threadId, refresh])
+
+  const runAction = useCallback(
+    async (action: "commit" | "push" | "reject") => {
+      if (!threadId) return
+      setRunning(action)
+      setError(null)
+      setMessage(null)
+      setPushSteps([])
+      try {
+        if (action === "commit") {
+          const result = await window.api.workspace.commitWorktree(threadId, commitMessage.trim())
+          if (!result.success) throw new Error(result.error || "提交失败")
+          setMessage("提交成功")
+          setCommitMessage("")
+        } else if (action === "push") {
+          const result = await window.api.workspace.pushWorktree(threadId, commitMessage.trim() || undefined)
+          setPushSteps(result.steps || [])
+          if (!result.success) throw new Error(result.error || "推送失败")
+          setMessage(result.autoCommitted ? "已自动提交并推送成功" : "推送成功")
+          if (result.autoCommitted) {
+            setCommitMessage("")
+          }
+        } else {
+          const result = await window.api.workspace.rejectWorktreeChanges(threadId)
+          if (!result.success) throw new Error(result.error || "回滚失败")
+          setMessage("已回滚当前任务改动")
+        }
+        await refresh()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "操作失败")
+      } finally {
+        setRunning(null)
+      }
+    },
+    [threadId, commitMessage, refresh]
+  )
+
+  const handleRevertFile = useCallback(
+    async (filePath: string) => {
+      if (!threadId) return
+      setRevertingFilePath(filePath)
+      setError(null)
+      setMessage(null)
+      try {
+        const result = await window.api.workspace.rejectWorktreeFile(threadId, filePath)
+        if (!result.success) throw new Error(result.error || "文件回退失败")
+        setMessage(`已回退文件：${filePath}`)
+        await refresh()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "文件回退失败")
+      } finally {
+        setRevertingFilePath(null)
+      }
+    },
+    [threadId, refresh]
+  )
+
+  const hasPending = Boolean(state?.hasPendingDiff)
+
+  return (
+    <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold truncate">Git Panel</div>
+          <div className="text-[10px] text-muted-foreground truncate">
+            task_id: {threadId || "-"}
+          </div>
+        </div>
+        <button
+          onClick={refresh}
+          className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+        >
+          <RotateCcw className="size-3.5" />
+          刷新
+        </button>
+      </div>
+
+      <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0 p-3 space-y-3">
+        {loading && <div className="text-xs text-muted-foreground">正在加载 Git diff...</div>}
+        {!loading && (error || state?.error) && (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+            <AlertCircle className="size-3.5 mt-0.5 shrink-0" />
+            <span>{error || state?.error}</span>
+          </div>
+        )}
+        {!loading && state && !state.isWorktree && (
+          <div className="rounded-md border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
+            当前任务未绑定 worktree。请先在工作区选择器创建并切换到 worktree。
+          </div>
+        )}
+        {!loading && state?.isWorktree && (
+          <>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{workspacePath || "未关联路径"}</span>
+              <span>•</span>
+              <span>
+                {state.totals.fileCount} files, +{state.totals.additions} / -{state.totals.deletions}
+              </span>
+            </div>
+            {state.files.length === 0 ? (
+              <div className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
+                当前没有待审批的 LLM 改动。
+              </div>
+            ) : (
+              <>
+                {state.files.map((file) => (
+                  <div key={file.path} className="rounded-md border border-border/70 p-2 bg-background">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
+                      }
+                      className="w-full flex items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        {expandedFilePath === file.path ? (
+                          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                        )}
+                        <span className="font-mono truncate text-left" title={file.path}>{file.path}</span>
+                      </span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span className="text-muted-foreground">+{file.additions} / -{file.deletions}</span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (!revertingFilePath) void handleRevertFile(file.path)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              if (!revertingFilePath) void handleRevertFile(file.path)
+                            }
+                          }}
+                          className={cn(
+                            "inline-flex items-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive",
+                            revertingFilePath && revertingFilePath !== file.path && "opacity-60",
+                            revertingFilePath === file.path && "opacity-80"
+                          )}
+                        >
+                          {revertingFilePath === file.path ? "回退中..." : "回退"}
+                        </span>
+                      </span>
+                    </button>
+                    {expandedFilePath === file.path && (
+                      <div className="mt-2">
+                        <DiffDisplay diff={file.diff} />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="border-t border-border/70 p-3 bg-background-elevated/50 space-y-2 shrink-0">
+        {message && (
+          <div className="text-xs text-status-nominal">{message}</div>
+        )}
+        {pushSteps.length > 0 && (
+          <div className="rounded-md border border-border/70 bg-background p-2 space-y-1">
+            {pushSteps.map((step, idx) => (
+              <div key={`${step.step}-${idx}`} className="flex items-start gap-2 text-xs">
+                {step.status === "ok" ? (
+                  <CheckCircle2 className="size-3.5 mt-0.5 shrink-0 text-status-nominal" />
+                ) : step.status === "failed" ? (
+                  <XCircle className="size-3.5 mt-0.5 shrink-0 text-destructive" />
+                ) : (
+                  <Clock className="size-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+                )}
+                <div className="min-w-0">
+                  <div className="font-medium text-foreground">
+                    {step.step.toUpperCase()} · {step.status}
+                  </div>
+                  <div className="text-muted-foreground break-words">{step.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <input
+          value={commitMessage}
+          onChange={(e) => setCommitMessage(e.target.value)}
+          placeholder="输入 commit message（可编辑 AI 建议）"
+          className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => runAction("commit")}
+            disabled={!hasPending || running !== null || !commitMessage.trim()}
+            className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
+          >
+            Commit
+          </button>
+          <button
+            onClick={() => runAction("push")}
+            disabled={running !== null}
+            className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
+          >
+            Push
+          </button>
+          <button
+            onClick={() => runAction("reject")}
+            disabled={!hasPending || running !== null}
+            className="inline-flex items-center justify-center rounded-md border border-destructive/50 text-destructive px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10"
+          >
+            Reject
+          </button>
+        </div>
       </div>
     </div>
   )

@@ -175,7 +175,30 @@ interface CustomAPI {
       error?: string
     }>
     clearWorktreeContext: (threadId: string) => Promise<void>
-    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string) => Promise<void>
+    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string, baseCommit?: string) => Promise<void>
+    recordLlmModifiedFiles: (threadId: string, files: string[]) => Promise<{
+      success: boolean
+      files?: string[]
+      error?: string
+    }>
+    getGitPanelState: (threadId: string) => Promise<{
+      success: boolean
+      isWorktree: boolean
+      taskId: string
+      files: Array<{ path: string; diff: string; additions: number; deletions: number }>
+      totals: { additions: number; deletions: number; fileCount: number }
+      hasPendingDiff: boolean
+      trackedFiles?: string[]
+      worktreeBranch?: string | null
+      suggestedCommitMessage?: string
+      error?: string
+    }>
+    getGitPanelSummary: (threadId: string) => Promise<{
+      success: boolean
+      isWorktree: boolean
+      hasPendingDiff: boolean
+      changedFiles: number
+    }>
     isGit: (folderPath: string) => Promise<{
       isGit: boolean
       gitRoot: string | null
@@ -190,9 +213,28 @@ interface CustomAPI {
       path?: string
       branch?: string
       baseBranch?: string
+      baseCommit?: string
       error?: string
     }>
-    commitWorktree: (worktreePath: string, message: string) => Promise<{
+    commitWorktree: (threadId: string, message: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    pushWorktree: (threadId: string, message?: string) => Promise<{
+      success: boolean
+      autoCommitted?: boolean
+      error?: string
+      steps?: Array<{
+        step: "pull" | "commit" | "push" | "verify" | "final"
+        status: "ok" | "failed" | "skipped"
+        detail: string
+      }>
+    }>
+    rejectWorktreeChanges: (threadId: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    rejectWorktreeFile: (threadId: string, filePath: string) => Promise<{
       success: boolean
       error?: string
     }>
