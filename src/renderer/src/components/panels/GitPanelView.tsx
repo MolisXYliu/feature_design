@@ -126,7 +126,14 @@ export function GitPanelView({
   const runSubmit = useCallback(
     async (action: "commit" | "push") => {
       if (!threadId) return
-      if (!cardNumber.trim()) {
+      const hasPendingChanges = Boolean(state?.hasPendingDiff)
+
+      if (action === "commit" && !hasPendingChanges) {
+        showToast("当前没有可提交改动", "error")
+        return
+      }
+
+      if ((action === "commit" || hasPendingChanges) && !cardNumber.trim()) {
         showToast("cardNumber 不能为空", "error")
         return
       }
@@ -145,7 +152,9 @@ export function GitPanelView({
           if (!result.success) throw new Error(result.error || "提交失败")
           showToast("提交成功", "success")
         } else {
-          const result = await window.api.workspace.pushWorktree(threadId, finalMessage)
+          const result = hasPendingChanges
+            ? await window.api.workspace.pushWorktree(threadId, finalMessage)
+            : await window.api.workspace.pushWorktree(threadId)
           if (!result.success) throw new Error(result.error || "推送失败")
           showToast("推送成功", "success")
         }
@@ -161,7 +170,7 @@ export function GitPanelView({
         setRunning(null)
       }
     },
-    [threadId, cardNumber, commitMessage, state?.suggestedCommitMessage, refresh, showToast]
+    [threadId, cardNumber, commitMessage, state?.hasPendingDiff, state?.suggestedCommitMessage, refresh, showToast]
   )
 
   const handleRevertFile = useCallback(
@@ -316,6 +325,7 @@ export function GitPanelView({
         fileCount={state?.totals.fileCount ?? 0}
         additions={state?.totals.additions ?? 0}
         deletions={state?.totals.deletions ?? 0}
+        requiresCommitMetadata={hasPending}
         cardNumber={cardNumber}
         commitMessage={commitMessage}
         onOpenChange={(open) => {

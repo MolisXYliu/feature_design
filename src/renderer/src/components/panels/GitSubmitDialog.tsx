@@ -20,6 +20,7 @@ interface GitSubmitDialogProps {
   fileCount: number
   additions: number
   deletions: number
+  requiresCommitMetadata: boolean
   cardNumber: string
   commitMessage: string
   onOpenChange: (open: boolean) => void
@@ -36,6 +37,7 @@ export function GitSubmitDialog({
   fileCount,
   additions,
   deletions,
+  requiresCommitMetadata,
   cardNumber,
   commitMessage,
   onOpenChange,
@@ -75,28 +77,36 @@ export function GitSubmitDialog({
                   </div>
                 </div>
 
-                <div className="grid gap-2">
-                  <div className="text-sm font-medium">卡片编号</div>
-                  <Input
-                    id="git-card-number"
-                    value={cardNumber}
-                    onChange={(e) => onCardNumberChange(e.target.value)}
-                    placeholder="输入卡片编号 cardNumber（必填）"
-                    required
-                  />
-                </div>
+                {requiresCommitMetadata ? (
+                  <>
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">卡片编号</div>
+                      <Input
+                        id="git-card-number"
+                        value={cardNumber}
+                        onChange={(e) => onCardNumberChange(e.target.value)}
+                        placeholder="输入卡片编号 cardNumber（必填）"
+                        required
+                      />
+                    </div>
 
-                <div className="grid gap-2">
-                  <div className="text-sm font-medium">提交消息</div>
-                  <textarea
-                    id="git-message"
-                    value={commitMessage}
-                    onChange={(e) => onCommitMessageChange(e.target.value)}
-                    placeholder="请输入提交信息"
-                    rows={4}
-                    className="flex min-h-[96px] w-full rounded-sm border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-                  />
-                </div>
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">提交消息</div>
+                      <textarea
+                        id="git-message"
+                        value={commitMessage}
+                        onChange={(e) => onCommitMessageChange(e.target.value)}
+                        placeholder="请输入提交信息"
+                        rows={4}
+                        className="flex min-h-[96px] w-full rounded-sm border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    当前没有文件改动，将直接推送已有提交。
+                  </div>
+                )}
 
                 <div className="text-sm font-medium">后续步骤</div>
               </div>
@@ -104,45 +114,68 @@ export function GitSubmitDialog({
           </CardContent>
 
           <CardFooter className="flex-col gap-2">
-            <Button
-              type="button"
-              className="w-full"
-              variant={action === "push" ? "outline" : "default"}
-              disabled={running !== null}
-              onClick={() => onSubmit("commit")}
-            >
-              {running === "commit" ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  提交中...
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="size-4" />
-                  提交 Commit
-                </>
-              )}
-            </Button>
+            {requiresCommitMetadata ? (
+              <>
+                <Button
+                  type="button"
+                  className="w-full"
+                  variant={action === "push" ? "outline" : "default"}
+                  disabled={running !== null}
+                  onClick={() => onSubmit("commit")}
+                >
+                  {running === "commit" ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      提交中...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="size-4" />
+                      提交 Commit
+                    </>
+                  )}
+                </Button>
 
-            <Button
-              type="button"
-              className="w-full"
-              variant={action === "push" ? "default" : "outline"}
-              disabled={running !== null}
-              onClick={() => onSubmit("push")}
-            >
-              {running === "push" ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  推送中...
-                </>
-              ) : (
-                <>
-                  <Upload className="size-4" />
-                  提交并推送 Commit & Push
-                </>
-              )}
-            </Button>
+                <Button
+                  type="button"
+                  className="w-full"
+                  variant={action === "push" ? "default" : "outline"}
+                  disabled={running !== null}
+                  onClick={() => onSubmit("push")}
+                >
+                  {running === "push" ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      推送中...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="size-4" />
+                      提交并推送 Commit & Push
+                    </>
+                  )}
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                className="w-full"
+                disabled={running !== null}
+                onClick={() => onSubmit("push")}
+              >
+                {running === "push" ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    推送中...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="size-4" />
+                    Push
+                  </>
+                )}
+              </Button>
+            )}
 
             <Button type="button" variant="ghost" className="w-full" onClick={() => onOpenChange(false)}>
               取消
