@@ -162,7 +162,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
           }
 
           // #18 fix: 合并为一次延迟 fit
-          setTimeout(() => { fitTerminal(session); resolve(true) }, 100)
+          setTimeout(() => { if (!cancelled) fitTerminal(session); resolve(!cancelled) }, 100)
 
           // #10 fix: ResizeObserver 绑定在 session.container 上而非 hostRef
           // 每个 session 只观察自己的 container，避免多 session 叠加 observer
@@ -277,8 +277,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
     fitTerminal(session)
     setSessionIds((prev) => [...prev])
 
-    // 超时兜底：若 15s 内仍无输出，释放 creating 锁（不影响 session 本身）
-    const creatingTimeout = setTimeout(() => { releaseCreatingState(session) }, 15_000)
+    // 超时兜底：若 15s 内仍无输出，释放 creating 锁并关闭 loading 遮罩
+    const creatingTimeout = setTimeout(() => {
+      if (!session.hasContent) {
+        session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
+        session.hasContent = true
+        setSessionIds((prev) => [...prev])
+      }
+      releaseCreatingState(session)
+    }, 15_000)
     session.ptyCleanups.push(() => clearTimeout(creatingTimeout))
   }, [fitTerminal, cleanupPty, releaseCreatingState])
 
@@ -433,8 +440,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
     setMountError(null)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
-    if (session.termId) {
-      try { await window.api.terminal.dispose(session.termId) }
+    const termId = session.termId
+    session.termId = null // 先清零，防止 handleStop 并发 double dispose
+    if (termId) {
+      try { await window.api.terminal.dispose(termId) }
       catch (e) { console.warn("[ClaudeCode] dispose failed in closeSession, continuing cleanup", e) }
     }
     session.xterm.dispose()
