@@ -1,5 +1,13 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
-import { Briefcase, Eye, GitBranch, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
+import {
+  Briefcase,
+  Eye,
+  GitBranch,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen
+} from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
@@ -9,6 +17,7 @@ import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 import { initMMJ } from "../js/mmjUtils"
+import { Toaster } from "sonner"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -539,6 +548,7 @@ function App(): React.JSX.Element {
           </div>
         )}
       </div>
+      <Toaster position="top-center" richColors duration={2200} />
     </ThreadProvider>
   )
 }

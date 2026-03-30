@@ -1,15 +1,15 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect } from "react"
 import {
   ChevronRight,
   ChevronDown,
-  CheckCircle2,
-  Loader2,
   AlertCircle,
   RotateCcw,
-  Upload
+  GitBranch
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
+import { toast } from "sonner"
+import { GitSubmitDialog } from "./GitSubmitDialog"
 
 export function GitPanelView({
   threadId,
@@ -21,11 +21,10 @@ export function GitPanelView({
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<"commit" | "push" | "reject" | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [toastText, setToastText] = useState<string | null>(null)
-  const [toastVariant, setToastVariant] = useState<"success" | "error">("success")
+  const [submitAction, setSubmitAction] = useState<"commit" | "push" | null>(null)
   const [cardNumber, setCardNumber] = useState("")
   const [commitMessage, setCommitMessage] = useState("")
-  const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null)
+  const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [revertingFilePath, setRevertingFilePath] = useState<string | null>(null)
   const [state, setState] = useState<{
     success: boolean
@@ -34,25 +33,17 @@ export function GitPanelView({
     files: Array<{ path: string; diff: string; additions: number; deletions: number }>
     totals: { additions: number; deletions: number; fileCount: number }
     hasPendingDiff: boolean
+    worktreeBranch?: string | null
     suggestedCommitMessage?: string
     error?: string
   } | null>(null)
 
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   const showToast = useCallback((text: string, variant: "success" | "error" = "success"): void => {
-    setToastVariant(variant)
-    setToastText(text)
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-    toastTimerRef.current = setTimeout(() => {
-      setToastText(null)
-    }, 2200)
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    if (variant === "success") {
+      toast.success(text)
+      return
     }
+    toast.error(text)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -61,9 +52,6 @@ export function GitPanelView({
     try {
       const next = await window.api.workspace.getGitPanelState(threadId)
       setState(next)
-      if (next.suggestedCommitMessage) {
-        setCommitMessage((prev) => prev || next.suggestedCommitMessage || "")
-      }
     } catch (e) {
       const err = e instanceof Error ? e.message : "加载失败"
       setError(err)
@@ -79,14 +67,27 @@ export function GitPanelView({
 
   useEffect(() => {
     const files = state?.files ?? []
-    if (files.length === 0) {
-      setExpandedFilePath(null)
-      return
-    }
-    if (!expandedFilePath || !files.some((f) => f.path === expandedFilePath)) {
-      setExpandedFilePath(files[0].path)
-    }
-  }, [state?.files, expandedFilePath])
+    setExpandedFilePaths((prev) => {
+      if (files.length === 0) return new Set()
+      const next = new Set([...prev].filter((path) => files.some((f) => f.path === path)))
+      if (next.size === 0) {
+        next.add(files[0].path)
+      }
+      return next
+    })
+  }, [state?.files])
+
+  const toggleFileExpanded = useCallback((filePath: string): void => {
+    setExpandedFilePaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(filePath)) {
+        next.delete(filePath)
+      } else {
+        next.add(filePath)
+      }
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (!threadId) return
@@ -104,43 +105,53 @@ export function GitPanelView({
     }
   }, [threadId, refresh])
 
-  const runAction = useCallback(
-    async (action: "commit" | "push" | "reject") => {
+  const runReject = useCallback(async () => {
+    if (!threadId) return
+    setRunning("reject")
+    setError(null)
+    try {
+      const result = await window.api.workspace.rejectWorktreeChanges(threadId)
+      if (!result.success) throw new Error(result.error || "回滚失败")
+      showToast("已全部回退到上一版编辑内容", "success")
+      await refresh()
+    } catch (e) {
+      const err = e instanceof Error ? e.message : "操作失败"
+      setError(err)
+      showToast(err, "error")
+    } finally {
+      setRunning(null)
+    }
+  }, [threadId, refresh, showToast])
+
+  const runSubmit = useCallback(
+    async (action: "commit" | "push") => {
       if (!threadId) return
-      const formattedCommitMessage = `${cardNumber.trim()} #comment fix:${commitMessage.trim()} #CMBDevClaw`
-      if ((action === "commit" || action === "push") && !cardNumber.trim()) {
-        const err = "cardNumber 不能为空"
-        setError(err)
-        showToast(err, "error")
+      if (!cardNumber.trim()) {
+        showToast("cardNumber 不能为空", "error")
         return
       }
-      if ((action === "commit" || action === "push") && !commitMessage.trim()) {
-        const err = "commitMessage 不能为空"
-        setError(err)
-        showToast(err, "error")
-        return
-      }
+
+      const customMessage = commitMessage.trim()
+      const fallbackMessage =
+        (state?.suggestedCommitMessage || "").trim() || `chore(task:${threadId.slice(0, 8)}): update llm changes`
+      const coreMessage = customMessage || fallbackMessage
+      const finalMessage = `${cardNumber.trim()} #comment fix:${coreMessage} #CMBDevClaw`
 
       setRunning(action)
       setError(null)
       try {
         if (action === "commit") {
-          const result = await window.api.workspace.commitWorktree(threadId, formattedCommitMessage)
+          const result = await window.api.workspace.commitWorktree(threadId, finalMessage)
           if (!result.success) throw new Error(result.error || "提交失败")
           showToast("提交成功", "success")
-          setCardNumber("")
-          setCommitMessage("")
-        } else if (action === "push") {
-          const result = await window.api.workspace.pushWorktree(threadId, formattedCommitMessage)
+        } else {
+          const result = await window.api.workspace.pushWorktree(threadId, finalMessage)
           if (!result.success) throw new Error(result.error || "推送失败")
           showToast("推送成功", "success")
-          setCardNumber("")
-          setCommitMessage("")
-        } else {
-          const result = await window.api.workspace.rejectWorktreeChanges(threadId)
-          if (!result.success) throw new Error(result.error || "回滚失败")
-          showToast("已全部回退到上一版编辑内容", "success")
         }
+        setCardNumber("")
+        setCommitMessage("")
+        setSubmitAction(null)
         await refresh()
       } catch (e) {
         const err = e instanceof Error ? e.message : "操作失败"
@@ -150,7 +161,7 @@ export function GitPanelView({
         setRunning(null)
       }
     },
-    [threadId, cardNumber, commitMessage, refresh, showToast]
+    [threadId, cardNumber, commitMessage, state?.suggestedCommitMessage, refresh, showToast]
   )
 
   const handleRevertFile = useCallback(
@@ -184,14 +195,26 @@ export function GitPanelView({
           <div className="text-[10px] text-muted-foreground truncate">task_id: {threadId || "-"}</div>
         </div>
         {hasPending && (
-          <button
-            onClick={() => runAction("reject")}
-            disabled={running !== null}
-            className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
-          >
-            <RotateCcw className="size-3.5" />
-            {running === "reject" ? "全部回退中..." : "全部回退"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSubmitAction("commit")}
+              disabled={running !== null}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
+            >
+              <GitBranch className="size-3.5" />
+              Git提交
+            </button>
+            <button
+              onClick={() => {
+                void runReject()
+              }}
+              disabled={running !== null}
+              className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
+            >
+              <RotateCcw className="size-3.5" />
+              {running === "reject" ? "全部回退中..." : "全部回退"}
+            </button>
+          </div>
         )}
       </div>
 
@@ -227,19 +250,23 @@ export function GitPanelView({
                   <div key={file.path} className="rounded-md border border-border/70 p-2 bg-background">
                     <button
                       type="button"
-                      onClick={() => setExpandedFilePath((prev) => (prev === file.path ? null : file.path))}
+                      onClick={() => toggleFileExpanded(file.path)}
                       className="w-full flex items-center justify-between gap-2 text-xs"
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        {expandedFilePath === file.path ? (
+                        {expandedFilePaths.has(file.path) ? (
                           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
                         ) : (
                           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                         )}
                         <span className="font-mono truncate text-left" title={file.path}>{file.path}</span>
+                        <span className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold">
+                          <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+                          <span className="text-muted-foreground">/</span>
+                          <span className="text-rose-600 dark:text-rose-400">-{file.deletions}</span>
+                        </span>
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
-                        <span className="text-muted-foreground">+{file.additions} / -{file.deletions}</span>
                         <span
                           role="button"
                           tabIndex={0}
@@ -255,16 +282,17 @@ export function GitPanelView({
                             }
                           }}
                           className={cn(
-                            "inline-flex items-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive",
+                            "inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive",
                             revertingFilePath && revertingFilePath !== file.path && "opacity-60",
                             revertingFilePath === file.path && "opacity-80"
                           )}
                         >
+                          <RotateCcw className={cn("size-3", revertingFilePath === file.path && "animate-spin")} />
                           {revertingFilePath === file.path ? "回退中..." : "回退"}
                         </span>
                       </span>
                     </button>
-                    {expandedFilePath === file.path && (
+                    {expandedFilePaths.has(file.path) && (
                       <div className="mt-2">
                         <DiffDisplay diff={file.diff} />
                       </div>
@@ -277,73 +305,26 @@ export function GitPanelView({
         )}
       </div>
 
-      {hasPending && (
-        <div className="border-t border-border/70 p-3 bg-background-elevated/50 space-y-2 shrink-0">
-          <input
-            value={cardNumber}
-            onChange={(e) => setCardNumber(e.target.value)}
-            placeholder="输入卡片编号 cardNumber（必填）"
-            className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
-          />
-          <input
-            value={commitMessage}
-            onChange={(e) => setCommitMessage(e.target.value)}
-            placeholder="输入 commit message（必填）"
-            className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-border"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => runAction("commit")}
-              disabled={running !== null || !cardNumber.trim() || !commitMessage.trim()}
-              className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
-            >
-              {running === "commit" ? (
-                <>
-                  <Loader2 className="size-3.5 mr-1 animate-spin" />
-                  提交中...
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="size-3.5 mr-1" />
-                  Commit
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => runAction("push")}
-              disabled={running !== null || !cardNumber.trim() || !commitMessage.trim()}
-              className="inline-flex items-center justify-center rounded-md border border-border px-3 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive"
-            >
-              {running === "push" ? (
-                <>
-                  <Loader2 className="size-3.5 mr-1 animate-spin" />
-                  推送中...
-                </>
-              ) : (
-                <>
-                  <Upload className="size-3.5 mr-1" />
-                  push推送
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
+      <GitSubmitDialog
+        open={submitAction !== null}
+        action={submitAction}
+        running={running === "commit" || running === "push" ? running : null}
+        branch={state?.worktreeBranch || "-"}
+        fileCount={state?.totals.fileCount ?? 0}
+        additions={state?.totals.additions ?? 0}
+        deletions={state?.totals.deletions ?? 0}
+        cardNumber={cardNumber}
+        commitMessage={commitMessage}
+        onOpenChange={(open) => {
+          if (!open) setSubmitAction(null)
+        }}
+        onCardNumberChange={setCardNumber}
+        onCommitMessageChange={setCommitMessage}
+        onSubmit={(action) => {
+          void runSubmit(action)
+        }}
+      />
 
-      {toastText && (
-        <div className="pointer-events-none fixed left-1/2 top-[10vh] z-[120] -translate-x-1/2">
-          <div
-            className={cn(
-              "rounded-md border px-4 py-2 text-sm shadow-lg backdrop-blur-sm",
-              toastVariant === "success"
-                ? "border-green-300/80 bg-green-50/95 text-green-700"
-                : "border-red-300/80 bg-red-50/95 text-red-700"
-            )}
-          >
-            {toastText}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
