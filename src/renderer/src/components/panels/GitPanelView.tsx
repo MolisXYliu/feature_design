@@ -186,6 +186,7 @@ export function GitPanelView({
   )
 
   const hasPending = Boolean(state?.hasPendingDiff)
+  const hasWorktree = Boolean(state?.isWorktree)
 
   return (
     <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
@@ -194,26 +195,28 @@ export function GitPanelView({
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
           <div className="text-[10px] text-muted-foreground truncate">task_id: {threadId || "-"}</div>
         </div>
-        {hasPending && (
+        {hasWorktree && (
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setSubmitAction("commit")}
+              onClick={() => setSubmitAction(hasPending ? "commit" : "push")}
               disabled={running !== null}
               className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
             >
               <GitBranch className="size-3.5" />
               Git提交
             </button>
-            <button
-              onClick={() => {
-                void runReject()
-              }}
-              disabled={running !== null}
-              className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
-            >
-              <RotateCcw className="size-3.5" />
-              {running === "reject" ? "全部回退中..." : "全部回退"}
-            </button>
+            {hasPending && (
+              <button
+                onClick={() => {
+                  void runReject()
+                }}
+                disabled={running !== null}
+                className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
+              >
+                <RotateCcw className="size-3.5" />
+                {running === "reject" ? "全部回退中..." : "全部回退"}
+              </button>
+            )}
           </div>
         )}
       </div>
