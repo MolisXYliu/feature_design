@@ -1,7 +1,8 @@
 import { v4 as uuid } from "uuid"
 import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
-import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord } from "../storage"
+import { getScheduledTasks, updateScheduledTaskRunResult, setScheduledTaskEnabled, addTaskRunRecord, getGlobalRoutingMode } from "../storage"
+import { resolveModel } from "../routing"
 import { trySendChatXReply } from "./chatx"
 import { createAgentRuntime, closeCheckpointer } from "../agent/runtime"
 import { createThread as dbCreateThread, deleteThread as dbDeleteThread } from "../db"
@@ -134,10 +135,21 @@ async function executeTask(taskId: string): Promise<void> {
 
     broadcastToChannel(channel, { type: "started" })
 
+    const globalRoutingMode = getGlobalRoutingMode()
+    const schedulerSource = task.taskType === "reminder" ? "scheduler_reminder" : "scheduler_action"
+    const routingResult = await resolveModel({
+      taskSource: schedulerSource,
+      message: task.prompt,
+      threadId,
+      requestedModelId: task.modelId || undefined,
+      routingMode: globalRoutingMode
+    }).catch(() => null)
+    const effectiveModelId = routingResult?.resolvedModelId ?? task.modelId ?? undefined
+
     const agent = await createAgentRuntime({
       threadId,
       workspacePath,
-      modelId: task.modelId || undefined,
+      modelId: effectiveModelId,
       noSchedulerTool: true,
       abortSignal: abortController.signal
     })

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { ChevronDown, Check, Key } from "lucide-react"
+import { ChevronDown, Check, Key, Zap, Info } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
@@ -23,9 +23,15 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
   const [open, setOpen] = useState(false)
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const [dialogModelId, setDialogModelId] = useState<string | undefined>(undefined)
+  const [routingMode, setRoutingMode] = useState<"auto" | "pinned">("pinned")
 
   const { models, loadModels, loadProviders } = useAppStore()
-  const { currentModel, setCurrentModel } = useCurrentThread(threadId)
+  const { currentModel, setCurrentModel, routingResult } = useCurrentThread(threadId)
+
+  // Load global routing mode on mount
+  useEffect(() => {
+    void window.api.routing.getMode().then((mode) => setRoutingMode(mode))
+  }, [])
 
   useEffect(() => {
     loadModels()
@@ -33,6 +39,18 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
   }, [loadModels, loadProviders])
 
   const selectedModel = models.find((m) => m.id === currentModel)
+
+  // Smart routing requires both a premium-tier and an economy-tier model to be configured
+  const hasEconomyModel = models.some((m) => m.tier === "economy")
+  const hasPremiumModel = models.some((m) => !m.tier || m.tier === "premium")
+  // canEnableRouting: both tiers must be present (models without tier default to premium)
+  const canEnableRouting = hasEconomyModel && hasPremiumModel
+
+  // Resolve display name for the auto-routed model
+  const routedModelName = routingResult
+    ? (models.find((m) => m.id === routingResult.resolvedModelId || `custom:${m.id}` === routingResult.resolvedModelId)?.name ?? routingResult.resolvedModelId.replace("custom:", ""))
+    : null
+  const routedTierLabel = routingResult?.resolvedTier === "economy" ? "经济" : routingResult?.resolvedTier === "premium" ? "强力" : null
 
   const [metadataLoaded, setMetadataLoaded] = useState(false)
 
@@ -82,7 +100,17 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
             size="sm"
             className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
           >
-            {selectedModel ? (
+            {routingMode === "auto" ? (
+              <>
+                <Zap className="size-3.5 text-amber-500" />
+                <span className="font-mono text-amber-600 dark:text-amber-400">智能路由</span>
+                {routedModelName && routedTierLabel && (
+                  <span className="font-mono text-muted-foreground">
+                    → {routedModelName}（{routedTierLabel}）
+                  </span>
+                )}
+              </>
+            ) : selectedModel ? (
               <>
                 <CustomIcon className="size-3.5" />
                 <span className="font-mono">{selectedModel.name}</span>
@@ -98,6 +126,48 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
           align="start"
           sideOffset={8}
         >
+          {/* Auto routing toggle */}
+          <div className="flex items-center justify-between px-2 py-1.5 mb-1 border-b border-border">
+            <div className="flex items-center gap-1.5">
+              <Zap className={cn("size-3.5", canEnableRouting ? "text-amber-500" : "text-muted-foreground/40")} />
+              <span className={cn("text-xs font-medium", !canEnableRouting && "text-muted-foreground/60")}>智能路由</span>
+              <div className="group relative shrink-0">
+                <Info className="size-3.5 text-muted-foreground/40 hover:text-muted-foreground/70 cursor-default transition-colors" />
+                <div className="pointer-events-none absolute bottom-full left-0 mb-2 w-64 rounded-md border border-border bg-popover px-3 py-2 text-[11px] leading-5 text-muted-foreground shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                  {canEnableRouting
+                    ? "开启后根据任务复杂度自动选择模型：强力档处理复杂任务（代码、分析），经济档处理简单任务（问答、翻译）"
+                    : "需要同时配置强力和经济两个档位的模型，才能开启智能路由。"
+                  }
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={!canEnableRouting}
+              onClick={() => {
+                if (!canEnableRouting) return
+                const next: "auto" | "pinned" = routingMode === "auto" ? "pinned" : "auto"
+                setRoutingMode(next)
+                void window.api.routing.setMode(next)
+              }}
+              className={cn(
+                "relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border-2 border-transparent transition-colors",
+                !canEnableRouting
+                  ? "cursor-not-allowed bg-muted-foreground/20"
+                  : routingMode === "auto"
+                    ? "cursor-pointer bg-amber-500"
+                    : "cursor-pointer bg-muted-foreground/30"
+              )}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow transition",
+                  routingMode === "auto" ? "translate-x-3" : "translate-x-0"
+                )}
+              />
+            </button>
+          </div>
+
           {models.length > 0 ? (
             <div className="space-y-0.5">
               {models.map((model) => (
