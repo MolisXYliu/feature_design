@@ -1,6 +1,6 @@
 {
   "name": "CMBDevClaw",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "CMBDevClaw description",
   "main": "./out/main/index.js",
   "files": [
@@ -41,7 +41,7 @@
     "predist:win": "npm run clean:win-code-exe && npm run server:cache",
     "predist:mac": "npm run clean:win-code-exe",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
+    "dist:win": "npm run build && electron-builder --win --dir",
     "dist:mac": "npm run build && electron-builder --mac",
     "server:cache": "cd D:\\my-projects\\CmbCowork\\openCode && http-server -p 4000"
   },
