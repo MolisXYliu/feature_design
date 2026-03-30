@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
-import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X } from "lucide-react"
+import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Terminal } from "@xterm/xterm"
@@ -16,6 +16,7 @@ interface Session {
   running: boolean
   workDir: string
   claudeModelId?: string
+  hasContent: boolean
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
@@ -62,6 +63,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [models, setModels] = useState<Array<{ id: string; name: string; model: string }>>([])
   const [selectedModelId, setSelectedModelId] = useState<string>("")
+  const [creating, setCreating] = useState(false)
 
   // 加载模型列表（仅打包环境）
   useEffect(() => {
@@ -226,16 +228,25 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.running = true
 
     const removeData = window.api.terminal.onData(termId, (data, bytes) => {
-      // xterm.write 接受回调，回调触发时数据才真正被消费
       session.xterm.write(data, () => {
         window.api.terminal.ack(termId, bytes)
       })
+      // 首次收到数据时标记 hasContent，同步关闭 creating 和 loading 遮罩
+      if (!session.hasContent) {
+        session.hasContent = true
+        setCreating(false)
+        setSessionIds((prev) => [...prev])
+      }
     })
     session.ptyCleanups.push(removeData)
 
     const removeExit = window.api.terminal.onExit(termId, (code) => {
       session.xterm.write(`\r\n\x1b[90m[进程已退出，代码: ${code}]\x1b[0m\r\n`)
       session.running = false
+      if (!session.hasContent) {
+        session.hasContent = true
+        setCreating(false)
+      }
       setSessionIds((prev) => [...prev])
     })
     session.ptyCleanups.push(removeExit)
@@ -269,6 +280,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   }, [fitTerminal])
 
   const createSessionWithDir = useCallback(async () => {
+    setCreating(true)
     // 刷新模型列表和选择目录并行发起
     const [dir, resolvedModelId] = await Promise.all([
       window.api.terminal.selectDir(),
@@ -284,7 +296,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         return selectedModelId
       }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
     ])
-    if (!dir) return
+    if (!dir) { setCreating(false); return }
 
     const id = `session-${++sessionCounter}`
     const { xterm, fitAddon } = createXterm()
@@ -298,7 +310,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     const session: Session = {
       id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, domCleanups: [], ptyCleanups: []
+      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, domCleanups: [], ptyCleanups: []
     }
 
     sessionsRef.current.set(id, session)
@@ -312,7 +324,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     // 等 React 渲染完毕且 hostRef 可用后再挂载
     let hostAttempts = 0
     const waitForHost = (): void => {
-      if (cancelled) return
+      if (cancelled) { setCreating(false); return }
       hostAttempts++
       if (!hostRef.current) {
         if (hostAttempts > MAX_TRY_OPEN_ATTEMPTS) {
@@ -328,6 +340,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
           } else {
             setActiveSessionId(null)
           }
+          setCreating(false)
           return
         }
         requestAnimationFrame(waitForHost)
@@ -341,7 +354,6 @@ export function ClaudeCodePanel(): React.JSX.Element {
             session.container.remove()
             sessionsRef.current.delete(id)
             setSessionIds((prev) => prev.filter((s) => s !== id))
-            // 回退到上一个会话并恢复可见性
             const remaining = [...sessionsRef.current.keys()]
             if (remaining.length > 0) {
               switchSession(remaining[remaining.length - 1])
@@ -349,6 +361,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
               setActiveSessionId(null)
             }
           }
+          setCreating(false)
           return
         }
         startPty(session).then(() => {
@@ -357,10 +370,23 @@ export function ClaudeCodePanel(): React.JSX.Element {
           console.error("[ClaudeCode] PTY creation failed:", err)
           session.xterm.write(`\r\n\x1b[31m[启动失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
           session.running = false
+          session.hasContent = true // 关闭 loading 遮罩，让用户看到错误信息
+          setCreating(false)
           setSessionIds((prev) => [...prev])
         })
       }).catch((err) => {
         console.error("[ClaudeCode] Terminal mount failed:", err)
+        session.xterm.dispose()
+        session.container.remove()
+        sessionsRef.current.delete(id)
+        setSessionIds((prev) => prev.filter((s) => s !== id))
+        const remaining = [...sessionsRef.current.keys()]
+        if (remaining.length > 0) {
+          switchSession(remaining[remaining.length - 1])
+        } else {
+          setActiveSessionId(null)
+        }
+        setCreating(false)
       })
     }
     requestAnimationFrame(waitForHost)
@@ -424,12 +450,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const handleRestart = useCallback(async () => {
     if (!activeSession || restartingRef.current) return
     restartingRef.current = true
+    activeSession.hasContent = false
+    setSessionIds((prev) => [...prev]) // 显示 loading
     try {
       activeSession.xterm.clear()
       await startPty(activeSession)
     } catch (err) {
       activeSession.running = false
       activeSession.termId = null
+      activeSession.hasContent = true // 关闭 loading 遮罩，让用户看到错误信息
       activeSession.xterm.write(`\r\n\x1b[31m[重启失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
       setSessionIds((prev) => [...prev]) // 刷新 UI 显示重启按钮
     } finally {
@@ -443,6 +472,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
       await window.api.terminal.dispose(activeSession.termId)
       activeSession.termId = null
       activeSession.running = false
+      if (!activeSession.hasContent) {
+        activeSession.hasContent = true
+        setCreating(false)
+      }
       cleanupPty(activeSession)
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
@@ -477,9 +510,9 @@ export function ClaudeCodePanel(): React.JSX.Element {
             </select>
           </div>
         )}
-        <Button onClick={createSessionWithDir} className="gap-2">
-          <FolderOpen className="size-4" />
-          选择工作目录并启动
+        <Button onClick={createSessionWithDir} className="gap-2" disabled={creating}>
+          {creating ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
+          {creating ? "正在启动..." : "选择工作目录并启动"}
         </Button>
       </div>
     )
@@ -538,16 +571,81 @@ export function ClaudeCodePanel(): React.JSX.Element {
           )
         })}
         <button
-          className="flex items-center justify-center size-5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50"
+          className="flex items-center justify-center size-5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={createSessionWithDir}
           title="新建会话"
+          disabled={creating}
         >
           <Plus className="size-3.5" />
         </button>
       </div>
 
       {/* 终端容器 */}
-      <div ref={hostRef} className="flex-1 min-h-0 overflow-hidden" style={{ position: "relative", backgroundColor: "#faf9f6" }} />
+      <div ref={hostRef} className="flex-1 min-h-0 overflow-hidden" style={{ position: "relative", backgroundColor: "#faf9f6" }}>
+        {activeSession && !activeSession.hasContent && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-10 gap-4" style={{ backgroundColor: "#faf9f6" }}>
+            {/* Claude Code 像素吉祥物 - 逐帧行走动画 */}
+            <div className="claude-mascot-container">
+              <svg width="66" height="60" viewBox="0 0 11 10" xmlns="http://www.w3.org/2000/svg" style={{ shapeRendering: "crispEdges" }}>
+                {/* 耳朵 */}
+                <rect x="0" y="0" width="1" height="2" fill="#D77757"/>
+                <rect x="1" y="0" width="1" height="1" fill="#D77757"/>
+                <rect x="9" y="0" width="1" height="2" fill="#D77757"/>
+                <rect x="8" y="0" width="1" height="1" fill="#D77757"/>
+                {/* 身体 */}
+                <rect x="1" y="1" width="8" height="6" fill="#D77757"/>
+                <rect x="0" y="2" width="10" height="4" fill="#D77757"/>
+                {/* 眼睛 */}
+                <rect x="3" y="3" width="1" height="2" fill="#1a1a1a"/>
+                <rect x="6" y="3" width="1" height="2" fill="#1a1a1a"/>
+                {/* 腿 - 帧1 */}
+                <g className="legs-frame1">
+                  <rect x="1" y="7" width="1" height="2" fill="#C86F4A"/>
+                  <rect x="3" y="7" width="1" height="2" fill="#C86F4A"/>
+                  <rect x="6" y="7" width="1" height="2" fill="#C86F4A"/>
+                  <rect x="8" y="7" width="1" height="2" fill="#C86F4A"/>
+                </g>
+                {/* 腿 - 帧2 */}
+                <g className="legs-frame2">
+                  <rect x="1" y="7" width="1" height="1" fill="#C86F4A"/>
+                  <rect x="0" y="8" width="1" height="1" fill="#C86F4A"/>
+                  <rect x="4" y="7" width="1" height="2" fill="#C86F4A"/>
+                  <rect x="5" y="7" width="1" height="2" fill="#C86F4A"/>
+                  <rect x="9" y="7" width="1" height="1" fill="#C86F4A"/>
+                  <rect x="10" y="8" width="1" height="1" fill="#C86F4A"/>
+                </g>
+                {/* 尾巴 */}
+                <rect x="10" y="4" width="1" height="1" fill="#888"/>
+              </svg>
+            </div>
+            <span className="text-xs text-muted-foreground/50">正在启动 Claude Code...</span>
+            <style>{`
+              .claude-mascot-container {
+                animation: mascot-hop 0.5s ease-in-out infinite;
+              }
+              @keyframes mascot-hop {
+                0%, 100% { transform: translateY(0) rotate(0deg); }
+                30% { transform: translateY(-4px) rotate(-2deg); }
+                60% { transform: translateY(-4px) rotate(2deg); }
+              }
+              .legs-frame1 {
+                animation: frame1-toggle 0.5s steps(1) infinite;
+              }
+              .legs-frame2 {
+                animation: frame2-toggle 0.5s steps(1) infinite;
+              }
+              @keyframes frame1-toggle {
+                0%   { opacity: 1; }
+                50%  { opacity: 0; }
+              }
+              @keyframes frame2-toggle {
+                0%   { opacity: 0; }
+                50%  { opacity: 1; }
+              }
+            `}</style>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
