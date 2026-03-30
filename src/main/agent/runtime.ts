@@ -953,7 +953,15 @@ The workspace root is: ${workspacePath}`
 
           // Add user-configured MCP connectors
           for (const c of mcpConnectors) {
-            mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: c.advanced })
+            mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: {
+              ...c.advanced,
+              headers:{
+                ...c.advanced?.headers,
+                "yst_id_token": userInfo?.ystAccessToken || '',
+                "sap_id": userInfo?.sapId || '',
+                "name": encodeURIComponent(userInfo?.userName || '')
+              }
+            } })
           }
           // Add plugin MCP servers
           for (const [name, cfg] of Object.entries(pluginMcpConfigs)) {
