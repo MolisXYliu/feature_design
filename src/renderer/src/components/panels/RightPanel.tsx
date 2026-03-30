@@ -23,15 +23,21 @@ import {
   Plug,
   Power,
   AlertCircle,
-  Loader2,
   RotateCcw,
-  Webhook
+  Webhook,
+  Maximize2,
+  Minimize2,
+  EyeOff
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
 import { useShallow } from "zustand/react/shallow"
-import { useThreadState } from "@/lib/thread-context"
+import { useThreadState, useThreadStream } from "@/lib/thread-context"
+import { getFileType } from "@/lib/file-types"
 import { Badge } from "@/components/ui/badge"
+import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
+import { FileViewer } from "@/components/tabs/FileViewer"
+import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 
@@ -42,6 +48,7 @@ const HANDLE_HEIGHT = 6 // px
 const SECTION_GAP = 8 // px
 const MIN_CONTENT_HEIGHT = 60 // px
 const COLLAPSE_THRESHOLD = 55 // px - auto-collapse when below this
+const PREVIEW_MAX_HEIGHT = "100vh"
 
 type PanelHeights = { tasks: number; files: number; agents: number; skills: number; plugins: number; hooks: number }
 
@@ -125,7 +132,19 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
   )
 }
 
-export function RightPanel(): React.JSX.Element {
+interface RightPanelProps {
+  moduleMode: "work" | "preview"
+  onRequestPreviewMode?: () => void
+  onRequestWorkMode?: () => void
+  onPreviewFullscreenChange?: (isFullscreen: boolean) => void
+}
+
+export function RightPanel({
+  moduleMode,
+  onRequestPreviewMode,
+  onRequestWorkMode,
+  onPreviewFullscreenChange
+}: RightPanelProps): React.JSX.Element {
   const { currentThreadId, pluginVersion, skillGenerationByThread, setSkillGenerationPhase } = useAppStore(
     useShallow((s) => ({
       currentThreadId: s.currentThreadId,
@@ -141,11 +160,18 @@ export function RightPanel(): React.JSX.Element {
     currentThreadId
   )
   const threadState = useThreadState(currentThreadId)
+  const streamData = useThreadStream(currentThreadId ?? "")
   const todos = threadState?.todos ?? []
   const workspaceFiles = threadState?.workspaceFiles ?? []
   const subagents = threadState?.subagents ?? []
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
+  const [previewReloadToken, setPreviewReloadToken] = useState(0)
+  const lastAppliedPreviewKeyRef = useRef<string | null>(null)
+  const lastThreadIdRef = useRef<string | null>(null)
+  const prevStreamLoadingRef = useRef(false)
   const [tasksOpen, setTasksOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [agentsOpen, setAgentsOpen] = useState(false)
@@ -208,6 +234,98 @@ export function RightPanel(): React.JSX.Element {
     }
   }, [hooksOpen])
 
+  const latestResourceEvent = useMemo(() => {
+    const persisted = threadState?.messages ?? []
+    const streaming = (streamData.messages as Array<{ id?: string; tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }> | undefined) ?? []
+    const all = [
+      ...persisted.map((m) => ({ source: "persisted" as const, message: m })),
+      ...streaming.map((m) => ({ source: "streaming" as const, message: m }))
+    ]
+
+    const completedToolCallIds = new Set<string>()
+    for (const item of all) {
+      const message = item.message as {
+        role?: string
+        type?: string
+        tool_call_id?: string
+      }
+      if ((message.role === "tool" || message.type === "tool") && message.tool_call_id) {
+        completedToolCallIds.add(message.tool_call_id)
+      }
+    }
+
+    for (let i = all.length - 1; i >= 0; i--) {
+      const current = all[i]
+      const toolCalls = current.message?.tool_calls || []
+      for (let j = toolCalls.length - 1; j >= 0; j--) {
+        const tool = toolCalls[j] as { id?: string; name: string; args?: Record<string, unknown> }
+        if (!tool.id || !completedToolCallIds.has(tool.id)) {
+          continue
+        }
+        const event = buildPreviewEvent(tool, current.message?.id ?? `m-${i}`, j)
+        if (event) {
+          return { ...event, source: current.source }
+        }
+      }
+    }
+    return null
+  }, [threadState?.messages, streamData.messages])
+
+  useEffect(() => {
+    const wasLoading = prevStreamLoadingRef.current
+    const isLoading = streamData.isLoading
+    prevStreamLoadingRef.current = isLoading
+
+    // Render preview when this round finishes: true -> false
+    if (!(wasLoading && !isLoading)) return
+    if (!latestResourceEvent) return
+    if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
+
+    lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+    setPreviewPath(latestResourceEvent.path)
+    setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+    setPreviewReloadToken((v) => v + 1)
+    onRequestPreviewMode?.()
+  }, [streamData.isLoading, latestResourceEvent, onRequestPreviewMode])
+
+  useEffect(() => {
+    if (!currentThreadId) return
+    if (lastThreadIdRef.current !== currentThreadId) {
+      lastThreadIdRef.current = currentThreadId
+      setPreviewPath(null)
+      setPreviewDiff(null)
+      lastAppliedPreviewKeyRef.current = null
+      prevStreamLoadingRef.current = false
+    }
+  }, [currentThreadId])
+
+  useEffect(() => {
+    if (!currentThreadId) return
+    const cleanup = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId === currentThreadId && previewPath) {
+        setPreviewReloadToken((v) => v + 1)
+      }
+    })
+    return cleanup
+  }, [currentThreadId, previewPath])
+
+  useEffect(() => {
+    const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
+      if (!currentThreadId || threadId !== currentThreadId) return
+      setPreviewPath(filePath)
+      setPreviewDiff(null)
+      setPreviewReloadToken((v) => v + 1)
+      onRequestPreviewMode?.()
+    })
+    return cleanup
+  }, [currentThreadId, onRequestPreviewMode])
+
+  useEffect(() => {
+    if (moduleMode !== "preview" || !previewPath) {
+      onPreviewFullscreenChange?.(false)
+    }
+  }, [moduleMode, previewPath, onPreviewFullscreenChange])
+
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
   const [filesHeight, setFilesHeight] = useState<number | null>(null)
@@ -228,6 +346,7 @@ export function RightPanel(): React.JSX.Element {
 
   // Calculate available content height
   const getAvailableContentHeight = useCallback(() => {
+    if (moduleMode !== "work") return 0
     if (!containerRef.current) return 0
     const totalHeight = containerRef.current.clientHeight
 
@@ -246,7 +365,7 @@ export function RightPanel(): React.JSX.Element {
     used += HANDLE_HEIGHT * handles
 
     return Math.max(0, totalHeight - used)
-  }, [tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
+  }, [moduleMode, tasksOpen, filesOpen, agentsOpen, skillsOpen, pluginsOpen, hooksOpen])
 
   // Get current heights for each panel's content area
   const getContentHeights = useCallback(() => {
@@ -566,7 +685,7 @@ export function RightPanel(): React.JSX.Element {
     setHeights(getContentHeights())
   }, [getContentHeights])
 
-  const allPanelsClosed = !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
+  const allPanelsClosed = moduleMode === "work" && !tasksOpen && !filesOpen && !agentsOpen && !skillsOpen && !pluginsOpen && !hooksOpen
 
   return (
     <aside
@@ -576,8 +695,54 @@ export function RightPanel(): React.JSX.Element {
         allPanelsClosed ? "h-auto self-start" : "h-full"
       )}
     >
+      {moduleMode === "preview" && (
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+          <div
+            className="bg-white p-2 h-full min-h-0"
+            style={{ height: PREVIEW_MAX_HEIGHT }}
+          >
+            {previewPath ? (
+              <ResourcePreview
+                key={`${previewPath}:${previewReloadToken}`}
+                filePath={previewPath}
+                codeDiff={previewDiff}
+                workspacePath={threadState?.workspacePath ?? null}
+                threadId={currentThreadId ?? ""}
+                reloadToken={previewReloadToken}
+                onFullscreenChange={onPreviewFullscreenChange}
+                onHidePreview={onRequestWorkMode}
+              />
+            ) : (
+              <div className="h-full min-h-0 flex items-center justify-center p-4">
+                <div className="w-full max-w-sm rounded-2xl border border-border/70 bg-background-elevated/80 px-5 py-6 text-center shadow-sm">
+                  <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-xl border border-border bg-muted/30">
+                    <FileText className="size-5 text-muted-foreground" />
+                  </div>
+                  <div className="text-sm font-semibold text-foreground">暂无可预览文件</div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    生成或编辑文件后会自动在这里展示预览。
+                    也可以在工具调用里点击预览图标快速打开。
+                  </p>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onRequestWorkMode}
+                      className="inline-flex items-center justify-center rounded-md border border-border/80 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+                    >
+                      返回工作目录
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {moduleMode === "work" && (
+        <>
       {/* TASKS */}
-      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95">
+      <div className="flex flex-col shrink-0 border border-border/75 rounded-2xl bg-background/95 mt-2">
         <SectionHeader
           title="任务"
           icon={ListTodo}
@@ -686,6 +851,8 @@ export function RightPanel(): React.JSX.Element {
           </div>
         )}
       </div>
+        </>
+      )}
     </aside>
   )
 }
@@ -826,6 +993,129 @@ function TaskItem({ todo }: { todo: Todo }): React.JSX.Element {
   )
 }
 
+const RESOURCE_PREVIEW_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "bmp",
+  "ico",
+  "pdf",
+  "doc",
+  "docx",
+  "md",
+  "markdown",
+  "mdx",
+  "html",
+  "htm"
+])
+
+function getPathExtension(filePath: string): string {
+  const fileName = filePath.split(/[\\/]/).pop() || filePath
+  const ext = fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() : ""
+  return ext || ""
+}
+
+function isResourcePreviewPath(filePath: string): boolean {
+  const ext = getPathExtension(filePath)
+  return RESOURCE_PREVIEW_EXTENSIONS.has(ext)
+}
+
+function getToolCallFilePath(toolCall: { name: string; args?: Record<string, unknown> }): string | null {
+  if (toolCall.name !== "write_file" && toolCall.name !== "edit_file") return null
+  const raw = toolCall.args?.path ?? toolCall.args?.file_path
+  if (typeof raw !== "string" || !raw.trim()) return null
+  return raw
+}
+
+function isAbsolutePath(filePath: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\/)/.test(filePath)
+}
+
+function resolvePreviewPaths(filePath: string, workspacePath: string | null): {
+  fullPath: string
+  workspaceFilePath: string
+  inWorkspace: boolean
+} {
+  const input = filePath.trim().replace(/\\/g, "/")
+  if (!workspacePath) {
+    return { fullPath: input, workspaceFilePath: input, inWorkspace: false }
+  }
+
+  const ws = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "")
+  const fullPath = isAbsolutePath(input)
+    ? input
+    : `${ws}/${input.replace(/^\/+/, "")}`
+
+  const inWorkspace = fullPath === ws || fullPath.startsWith(`${ws}/`)
+  if (!inWorkspace) {
+    return { fullPath, workspaceFilePath: input, inWorkspace: false }
+  }
+
+  const rel = fullPath.slice(ws.length).replace(/^\/+/, "")
+  return {
+    fullPath,
+    workspaceFilePath: `/${rel}`,
+    inWorkspace: true
+  }
+}
+
+interface CodeDiffPayload {
+  oldValue: string
+  newValue: string
+}
+
+interface PreviewEvent {
+  path: string
+  key: string
+  codeDiff?: CodeDiffPayload
+}
+
+function buildPreviewEvent(
+  toolCall: { id?: string; name: string; args?: Record<string, unknown> },
+  messageId: string,
+  toolIndex: number
+): PreviewEvent | null {
+  const filePath = getToolCallFilePath(toolCall)
+  if (!filePath) return null
+
+  const ext = getPathExtension(filePath).toLowerCase()
+  const markdownLike = ext === "md" || ext === "markdown" || ext === "mdx"
+  const htmlLike = ext === "html" || ext === "htm"
+  const typeInfo = getFileType(filePath.split(/[\\/]/).pop() || filePath)
+  const codeLike = typeInfo.type === "code" && !markdownLike && !htmlLike
+
+  const isResource = isResourcePreviewPath(filePath)
+  if (!isResource && !codeLike) return null
+
+  const key = `${messageId}:${toolCall.id ?? `t-${toolIndex}`}:${filePath}`
+
+  if (!codeLike) {
+    return { path: filePath, key }
+  }
+
+  const args = toolCall.args || {}
+  const oldValue = ((args.old_string ?? args.old_str) as string | undefined) || ""
+  const newValue =
+    ((args.new_string ?? args.new_str ?? args.content) as string | undefined) || ""
+
+  if (toolCall.name === "write_file") {
+    return {
+      path: filePath,
+      key,
+      codeDiff: { oldValue: "", newValue }
+    }
+  }
+
+  return {
+    path: filePath,
+    key,
+    codeDiff: { oldValue, newValue }
+  }
+}
+
 function FilesContent(): React.JSX.Element {
   const { currentThreadId } = useAppStore()
   const threadState = useThreadState(currentThreadId)
@@ -908,6 +1198,132 @@ function FilesContent(): React.JSX.Element {
           <FileTree files={workspaceFiles} />
         </div>
       )}
+    </div>
+  )
+}
+
+function ResourcePreview({
+  filePath,
+  codeDiff,
+  workspacePath,
+  threadId,
+  reloadToken,
+  onFullscreenChange,
+  onHidePreview
+}: {
+  filePath: string
+  codeDiff?: CodeDiffPayload | null
+  workspacePath: string | null
+  threadId: string
+  reloadToken: number
+  onFullscreenChange?: (isFullscreen: boolean) => void
+  onHidePreview?: () => void
+}): React.JSX.Element {
+  const fileName = filePath.split(/[\\/]/).pop() || filePath
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  const resolved = useMemo(
+    () => resolvePreviewPaths(filePath, workspacePath),
+    [filePath, workspacePath]
+  )
+  const fullPath = resolved.fullPath
+
+  const openInFolder = useCallback(async () => {
+    try {
+      const platform = await window.electron.ipcRenderer.invoke("get-platform")
+      const normalizedPath = platform === "win32" ? fullPath.replace(/\//g, "\\") : fullPath
+      await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+    } catch (error) {
+      console.error("[ResourcePreview] Failed to show item in folder:", error)
+    }
+  }, [fullPath])
+
+  const toggleFullscreen = (): void => {
+    setIsFullscreen((prev) => !prev)
+  }
+
+  const handleHidePreview = (): void => {
+    setIsFullscreen(false)
+    onFullscreenChange?.(false)
+    onHidePreview?.()
+  }
+
+  useEffect(() => {
+    if (!isFullscreen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setIsFullscreen(false)
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [isFullscreen])
+
+  useEffect(() => {
+    onFullscreenChange?.(isFullscreen)
+  }, [isFullscreen, onFullscreenChange])
+
+  useEffect(() => {
+    return () => {
+      onFullscreenChange?.(false)
+    }
+  }, [onFullscreenChange])
+
+  return (
+    <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold truncate" title={filePath}>
+            {fileName}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleFullscreen}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title={isFullscreen ? "缩小全屏" : "全屏预览"}
+          >
+            {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            {isFullscreen ? "缩小" : "全屏"}
+          </button>
+          <button
+            onClick={handleHidePreview}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="隐藏预览并切换到工作目录"
+          >
+            <EyeOff className="size-3.5" />
+            隐藏
+          </button>
+          <button
+            onClick={openInFolder}
+            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="打开文件所在文件夹"
+          >
+            <FolderOpen className="size-3.5" />
+            文件夹
+          </button>
+        </div>
+      </div>
+
+      <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0">
+        {codeDiff && (
+          <div className="p-2">
+            <DiffDisplay oldValue={codeDiff.oldValue} newValue={codeDiff.newValue} />
+          </div>
+        )}
+
+        {!codeDiff && (
+          <FileViewer
+            threadId={threadId}
+            filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
+            externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
+            htmlFillHeight={isFullscreen}
+            reloadToken={reloadToken}
+          />
+        )}
+      </div>
     </div>
   )
 }

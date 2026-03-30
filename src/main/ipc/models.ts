@@ -1,4 +1,4 @@
-import { IpcMain, dialog, app } from "electron"
+import { IpcMain, dialog, app, BrowserWindow } from "electron"
 import Store from "electron-store"
 import * as fs from "fs/promises"
 import * as path from "path"
@@ -685,6 +685,103 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
     }
   )
+
+  // Read a text file from any absolute path (outside workspace allowed)
+  ipcMain.handle("workspace:readExternalFile", async (_event, filePath: string) => {
+    try {
+      const fullPath = path.resolve(filePath)
+      const stat = await fs.stat(fullPath)
+      if (stat.isDirectory()) {
+        return { success: false, error: "Cannot read directory as file" }
+      }
+      const content = await fs.readFile(fullPath, "utf-8")
+      return {
+        success: true,
+        content,
+        size: stat.size,
+        modified_at: stat.mtime.toISOString()
+      }
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : "Unknown error"
+      }
+    }
+  })
+
+  // Read a binary file from any absolute path (outside workspace allowed)
+  ipcMain.handle("workspace:readExternalBinaryFile", async (_event, filePath: string) => {
+    try {
+      const fullPath = path.resolve(filePath)
+      const stat = await fs.stat(fullPath)
+      if (stat.isDirectory()) {
+        return { success: false, error: "Cannot read directory as file" }
+      }
+      const buffer = await fs.readFile(fullPath)
+      const base64 = buffer.toString("base64")
+      return {
+        success: true,
+        content: base64,
+        size: stat.size,
+        modified_at: stat.mtime.toISOString()
+      }
+    } catch (e) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : "Unknown error"
+      }
+    }
+  })
+
+  // Parse a file and extract text content for chat attachments
+  ipcMain.handle(
+    "file:parse",
+    async (_event, filePath: string, maxLength?: number): Promise<{
+      success: boolean
+      attachment?: import("../file-parser").ParsedAttachment
+      error?: string
+    }> => {
+      try {
+        const { parseFile, isSupportedFile } = await import("../file-parser")
+        if (!isSupportedFile(filePath)) {
+          return { success: false, error: "不支持的文件类型，仅支持 txt、md、csv、docx、xlsx、xls" }
+        }
+        if (typeof maxLength === "number" && maxLength <= 0) {
+          return { success: false, error: "附件字符预算已用尽" }
+        }
+        const attachment = await parseFile(filePath, maxLength)
+        return { success: true, attachment }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "文件解析失败"
+        }
+      }
+    }
+  )
+
+  // Open native file picker for chat attachments
+  ipcMain.handle("file:select", async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return { canceled: true, filePaths: [] }
+    const result = await dialog.showOpenDialog(win, {
+      properties: ["openFile", "multiSelections"],
+      title: "选择附件",
+      filters: [
+        { name: "支持的文件", extensions: ["txt", "md", "csv", "docx", "xlsx", "xls"] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true, filePaths: [] }
+    }
+    return { canceled: false, filePaths: result.filePaths }
+  })
+
+  // Get supported file extensions
+  ipcMain.handle("file:supportedExtensions", async () => {
+    const { getSupportedExtensions } = await import("../file-parser")
+    return getSupportedExtensions()
+  })
 }
 
 export function getDefaultModel(): string {

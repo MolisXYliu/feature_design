@@ -1,4 +1,14 @@
 // Re-export types from electron for use in renderer
+
+export interface FileAttachment {
+  filename: string
+  filePath: string    // full path for display
+  content: string     // extracted text content
+  mimeType: string
+  size: number
+  truncated: boolean
+}
+
 export type ThreadStatus = "idle" | "busy" | "interrupted" | "error"
 
 export interface Thread {

@@ -1440,6 +1440,22 @@ export function setSandboxNuxCompleted(): void {
   updateSandboxSettings({ nuxCompleted: true })
 }
 
+// ── Keep Awake ───────────────────────────────────────────────────────────────
+
+const KEEP_AWAKE_FILE = join(OPENWORK_DIR, "keep-awake.json")
+
+export function isKeepAwakeEnabled(): boolean {
+  if (!existsSync(KEEP_AWAKE_FILE)) return false
+  try {
+    return JSON.parse(readFileSync(KEEP_AWAKE_FILE, "utf-8")).enabled === true
+  } catch { return false }
+}
+
+export function setKeepAwakeEnabled(enabled: boolean): void {
+  getOpenworkDir()
+  writeFileSync(KEEP_AWAKE_FILE, JSON.stringify({ enabled }, null, 2))
+}
+
 // ── Approval Rules (persistent) ──────────────────────────────────────────────
 
 const APPROVAL_RULES_FILE = join(OPENWORK_DIR, "approval-rules.json")

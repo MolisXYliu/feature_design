@@ -2,12 +2,13 @@ import type { Message, HITLRequest } from "@/types"
 import { ToolCallRenderer } from "./ToolCallRenderer";
 import { StreamingMarkdown } from "./StreamingMarkdown"
 import { getToolLabel } from "@/lib/tool-labels"
+import { emitOpenResourcePreview } from "@/lib/resource-preview-events"
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Wrench } from "lucide-react"
+import { ChevronDown, ChevronRight, Eye, Wrench } from "lucide-react"
 
 // 获取工具调用的简要描述
 function getToolCallSummary(toolCall: { name: string; args?: Record<string, unknown> }): string {
-  const label = getToolLabel(toolCall.name)
+  const label = getToolLabel(toolCall.name, { showToolName: false })
   const args = toolCall.args || {}
 
   // 获取主要参数用于显示
@@ -32,6 +33,15 @@ function isHtmlRenderToolCall(toolCall: { name: string; args?: Record<string, un
   if (!path) return false
   const lowerPath = path.toLowerCase()
   return lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+}
+
+function getToolPreviewPath(toolCall: { name: string; args?: Record<string, unknown> }): string | null {
+  if (toolCall.name !== "read_file" && toolCall.name !== "write_file" && toolCall.name !== "edit_file") {
+    return null
+  }
+  const path = (toolCall.args?.path ?? toolCall.args?.file_path) as string | undefined
+  if (!path || !path.trim()) return null
+  return path
 }
 
 interface ToolResultInfo {
@@ -210,6 +220,8 @@ export function MessageBubble({
               const isHtmlTool = isHtmlRenderToolCall(toolCall);
               const isExpanded = isHtmlTool ? collapsedHtmlTools.has(toolId) : collapsedTools.has(toolId);
               const summary = getToolCallSummary(toolCall);
+              const previewPath = getToolPreviewPath(toolCall);
+              const isOk = result !== undefined && !result.is_error
 
               // 如果工具需要审批，使用原来的ToolCallRenderer（批量时隐藏按钮）
               if (needsApproval) {
@@ -223,7 +235,11 @@ export function MessageBubble({
                     needsApproval={needsApproval}
                     showApprovalButtons={!isBatch}
                     onApprovalDecision={onApprovalDecision}
-                    approvalTypes={(pendingApproval as any)?._approvalTypes}
+                    approvalTypes={
+                      (pendingApproval as unknown as {
+                        _approvalTypes?: ("approve" | "approve_session" | "approve_permanent" | "reject")[]
+                      })?._approvalTypes
+                    }
                     threadId={threadId}
                     isStreaming={isStreaming}
                   />
@@ -246,30 +262,48 @@ export function MessageBubble({
 
                     <Wrench className="size-4 shrink-0 text-status-info" />
 
-                    <span className="text-xs font-medium shrink-0">{summary}</span>
+                    <span className="text-xs font-medium min-w-0 max-w-[420px] truncate text-left">
+                      {summary}
+                    </span>
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      {previewPath && isOk && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            emitOpenResourcePreview({ threadId, filePath: previewPath })
+                          }}
+                          className="inline-flex items-center justify-center rounded border border-border/70 bg-background px-1.5 py-1 text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+                          title="在右侧资源预览中打开"
+                          aria-label="在右侧资源预览中打开"
+                        >
+                          <Eye className="size-3.5" />
+                        </button>
+                      )}
 
-                    {/* 状态指示器 */}
-                    {result !== undefined && (
-                      <div className={`ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded ${
-                        result.is_error
-                          ? 'bg-red-100 text-red-700 border border-red-200'
-                          : 'bg-green-100 text-green-700 border border-green-200'
-                      }`}>
-                        {result.is_error ? "ERROR" : "OK"}
-                      </div>
-                    )}
+                      {/* 状态指示器 */}
+                      {result !== undefined && (
+                        <div className={`shrink-0 px-2 py-0.5 text-[10px] font-medium rounded ${
+                          result.is_error
+                            ? 'bg-red-100 text-red-700 border border-red-200'
+                            : 'bg-green-100 text-green-700 border border-green-200'
+                        }`}>
+                          {result.is_error ? "ERROR" : "OK"}
+                        </div>
+                      )}
 
-                    {result === undefined && isStreaming && (
-                      <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600 border border-gray-200 animate-pulse">
-                        RUNNING
-                      </div>
-                    )}
+                      {result === undefined && isStreaming && (
+                        <div className="shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600 border border-gray-200 animate-pulse">
+                          RUNNING
+                        </div>
+                      )}
 
-                    {result === undefined && !isStreaming && (
-                      <div className="ml-auto shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 border border-amber-200">
-                        INTERRUPTED
-                      </div>
-                    )}
+                      {result === undefined && !isStreaming && (
+                        <div className="shrink-0 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 border border-amber-200">
+                          INTERRUPTED
+                        </div>
+                      )}
+                    </div>
                   </button>
 
                   {/* 展开的详细内容 */}
