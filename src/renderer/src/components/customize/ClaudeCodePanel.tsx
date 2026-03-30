@@ -284,8 +284,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       if (!session.hasContent) {
         session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
         session.hasContent = true
-        setMountError("启动超时，请检查环境或重启")
-        setSessionIds((prev) => [...prev])
+        setSessionIds((prev) => [...prev]) // 关闭 loading 遮罩，错误信息在 xterm 内可见
       }
       releaseCreatingState(session)
     }, PTY_STARTUP_TIMEOUT_MS)
@@ -294,6 +293,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
   const switchSession = useCallback((id: string) => {
     setActiveSessionId(id)
+    setMountError(null) // 切 tab 时清掉旧的错误横幅
     for (const s of sessionsRef.current.values()) {
       s.container.style.display = s.id === id ? "" : "none"
     }
@@ -442,7 +442,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     if (!session) return
     sessionsRef.current.delete(id) // 立即删除作为互斥锁，防止并发二次进入 + 让其他回调的 guard 生效
     releaseCreatingState(session)
-    setMountError(null)
+    if (id === activeSessionId) setMountError(null) // 只清自己的错误，不影响其他 session
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
     const termId = session.termId
