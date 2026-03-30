@@ -331,7 +331,7 @@ function isAllowedDetailFile(type: MarketItemType, filename: string): boolean {
   const ext = getFileExt(filename)
   if (type === "skill") return ext === "zip" || ext === "md"
   if (type === "plugin") return ext === "zip"
-  return ext === "jcon"
+  return ext === "json"
 }
 
 export function MarketPanel(): React.JSX.Element {
@@ -735,7 +735,7 @@ export function MarketPanel(): React.JSX.Element {
             ? "Skill 详情文件仅支持 .zip 或 .md"
             : activeTab === "plugin"
               ? "Plugin 详情文件仅支持 .zip"
-              : "MCP 详情文件仅支持 .jcon"
+              : "MCP 详情文件仅支持 .json"
         )
       }
 
@@ -1326,7 +1326,7 @@ export function MarketPanel(): React.JSX.Element {
                     ? "(skill: .zip / .md)"
                     : activeTab === "plugin"
                       ? "(plugin: .zip)"
-                      : "(mcp: .jcon)"}
+                      : "(mcp: .json)"}
                 </span>
               </h3>
               {renderDetailFilePanel()}

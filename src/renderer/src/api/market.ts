@@ -115,7 +115,7 @@ export const marketApi = {
 
     const blob = await response.blob()
     const contentDisposition = response.headers.get("Content-Disposition")
-    const defaultExt = type === "skill" ? "zip" : type === "plugin" ? "zip" : "jcon"
+    const defaultExt = type === "skill" ? "zip" : type === "plugin" ? "zip" : "json"
     const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.${defaultExt}`
 
     return { blob, filename }
