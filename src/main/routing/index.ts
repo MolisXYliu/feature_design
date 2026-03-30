@@ -58,8 +58,8 @@ export interface RoutingFeedback {
   lastInputTokens?: number
 }
 
-const PREMIUM_STICKY_TTL_MS = 20 * 60 * 1000  // 20 min
-const FORCE_PREMIUM_TTL_MS  = 30 * 60 * 1000  // 30 min
+const PREMIUM_STICKY_TTL_MS = 40 * 60 * 1000  // 40 min
+const FORCE_PREMIUM_TTL_MS  = 60 * 60 * 1000  // 60 min
 
 function readThreadRoutingState(threadId: string | undefined): ThreadRoutingState | null {
   if (!threadId) return null
