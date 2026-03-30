@@ -83,6 +83,8 @@ import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
+import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "./updater"
+import { runStartupSelfCheck } from "./updater/rollback"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
 import  os from "os";
 
@@ -320,6 +322,7 @@ if (!gotTheLock) {
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
+    registerUpdaterHandlers()
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
@@ -395,10 +398,14 @@ if (!gotTheLock) {
 
     createWindow()
 
+    // Run post-update self-check before anything else
+    await runStartupSelfCheck()
+
     // Start scheduled task scheduler and heartbeat service
     startScheduler()
     startHeartbeat()
     startChatX()
+    startUpdateChecker()
 
     // ── Keep Awake ──
     applyKeepAwake(isKeepAwakeEnabled())
@@ -428,6 +435,7 @@ if (!gotTheLock) {
     stopScheduler()
     stopHeartbeat()
     stopChatX()
+    stopUpdateChecker()
     closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
     flush()
   })
