@@ -1,11 +1,9 @@
 export type MarketItemType = "skill" | "mcp" | "plugin"
 
-
 export interface MarketListResponse {
   type: string
   items: MarketItem[]
 }
-
 
 export interface MarketUploadResponse {
   type: string
@@ -29,6 +27,10 @@ export interface DownloadResponse {
   error?: string
 }
 
+export interface DownloadedItemFile {
+  blob: Blob
+  filename: string
+}
 
 export interface MarketItem {
   name: string
@@ -46,8 +48,8 @@ export interface MarketItem {
   type?: MarketItemType
   // Add field to track if user can delete this item
   canDelete?: boolean
-  ip?:string
-  installed?: boolean  // 新增已安装状态字段
+  ip?: string
+  installed?: boolean // 新增已安装状态字段
 }
 
 export interface MarketUpdateResponse {
@@ -63,14 +65,15 @@ const ENDPOINTS = {
   list: (resourceType: string) => `${API_BASE_URL}/list/${resourceType}`,
   upload: `${API_BASE_URL}/upload`,
   update: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`,
-  download: (resourceType: string, name: string) => `${API_BASE_URL}/download/${resourceType}/${name}`,
+  download: (resourceType: string, name: string) =>
+    `${API_BASE_URL}/download/${resourceType}/${name}`,
   delete: (resourceType: string, name: string) => `${API_BASE_URL}/${resourceType}/${name}`
 }
 
 // Utility function to download blob as file
 const downloadBlobAsFile = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
+  const a = document.createElement("a")
   a.href = url
   a.download = filename
   document.body.appendChild(a)
@@ -79,7 +82,6 @@ const downloadBlobAsFile = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url)
 }
 
-
 // Cache for API responses to prevent duplicate calls
 interface CacheEntry {
   data: MarketApiResponse
@@ -87,22 +89,6 @@ interface CacheEntry {
 }
 
 const API_CACHE = new Map<string, CacheEntry>()
-const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes in milliseconds
-
-// Helper function to check if cache is valid
-const isCacheValid = (timestamp: number): boolean => {
-  return Date.now() - timestamp < CACHE_DURATION
-}
-
-// Helper function to get cached data
-const getCachedData = (key: string): MarketApiResponse | null => {
-  const cached = API_CACHE.get(key)
-  if (cached && isCacheValid(cached.timestamp)) {
-    console.log(`Using cached data for ${key}`)
-    return cached.data
-  }
-  return null
-}
 
 // Helper function to set cached data
 const setCachedData = (key: string, data: MarketApiResponse): void => {
@@ -114,8 +100,29 @@ const setCachedData = (key: string, data: MarketApiResponse): void => {
 
 // Updated API functions with caching
 export const marketApi = {
+  async fetchInstallFile(name: string, type: MarketItemType): Promise<DownloadedItemFile> {
+    console.log(`Fetching install file for ${type} item: ${name}`)
+    const response = await fetch(ENDPOINTS.download(type, name), {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer your-api-token"
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const blob = await response.blob()
+    const contentDisposition = response.headers.get("Content-Disposition")
+    const defaultExt = type === "skill" ? "zip" : type === "plugin" ? "zip" : "jcon"
+    const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.${defaultExt}`
+
+    return { blob, filename }
+  },
+
   async getSkills(): Promise<MarketApiResponse> {
-    const cacheKey = 'skills'
+    const cacheKey = "skills"
 
     // Check cache first
     // const cachedData = getCachedData(cacheKey)
@@ -136,15 +143,15 @@ export const marketApi = {
       if (!response.ok) {
         console.error(`API request failed: ${response.status} ${response.statusText}`)
         const errorText = await response.text()
-        console.error('Response body:', errorText)
+        console.error("Response body:", errorText)
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const contentType = response.headers.get("content-type")
       if (!contentType || !contentType.includes("application/json")) {
         const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
+        console.error("Expected JSON but received:", responseText.substring(0, 200))
+        throw new Error("Response is not JSON")
       }
 
       const data: MarketListResponse = await response.json()
@@ -158,16 +165,16 @@ export const marketApi = {
 
       return result
     } catch (error) {
-      console.error('Error fetching skills:', error)
+      console.error("Error fetching skills:", error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : "Unknown error"
       }
     }
   },
 
   async getMcps(): Promise<MarketApiResponse> {
-    const cacheKey = 'mcps'
+    const cacheKey = "mcps"
 
     // Check cache first
     // const cachedData = getCachedData(cacheKey)
@@ -188,15 +195,15 @@ export const marketApi = {
       if (!response.ok) {
         console.error(`API request failed: ${response.status} ${response.statusText}`)
         const errorText = await response.text()
-        console.error('Response body:', errorText)
+        console.error("Response body:", errorText)
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const contentType = response.headers.get("content-type")
       if (!contentType || !contentType.includes("application/json")) {
         const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
+        console.error("Expected JSON but received:", responseText.substring(0, 200))
+        throw new Error("Response is not JSON")
       }
 
       const data: MarketListResponse = await response.json()
@@ -210,16 +217,16 @@ export const marketApi = {
 
       return result
     } catch (error) {
-      console.error('Error fetching MCPs:', error)
+      console.error("Error fetching MCPs:", error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : "Unknown error"
       }
     }
   },
 
   async getPlugins(): Promise<MarketApiResponse> {
-    const cacheKey = 'plugins'
+    const cacheKey = "plugins"
 
     // Check cache first
     // const cachedData = getCachedData(cacheKey)
@@ -240,15 +247,15 @@ export const marketApi = {
       if (!response.ok) {
         console.error(`API request failed: ${response.status} ${response.statusText}`)
         const errorText = await response.text()
-        console.error('Response body:', errorText)
+        console.error("Response body:", errorText)
         throw new Error(`HTTP error! status: ${response.status}`)
       }
 
       const contentType = response.headers.get("content-type")
       if (!contentType || !contentType.includes("application/json")) {
         const responseText = await response.text()
-        console.error('Expected JSON but received:', responseText.substring(0, 200))
-        throw new Error('Response is not JSON')
+        console.error("Expected JSON but received:", responseText.substring(0, 200))
+        throw new Error("Response is not JSON")
       }
 
       const data: MarketListResponse = await response.json()
@@ -262,10 +269,10 @@ export const marketApi = {
 
       return result
     } catch (error) {
-      console.error('Error fetching plugins:', error)
+      console.error("Error fetching plugins:", error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : "Unknown error"
       }
     }
   },
@@ -287,23 +294,13 @@ export const marketApi = {
     return await response.json()
   },
 
-  async downloadItem(name: string, type: MarketItemType, downloadToLocal = false): Promise<DownloadResponse> {
+  async downloadItem(
+    name: string,
+    type: MarketItemType,
+    downloadToLocal = false
+  ): Promise<DownloadResponse> {
     console.log(`Downloading ${type} item: ${name}`)
-    const response = await fetch(ENDPOINTS.download(type, name), {
-      method: "GET",
-      headers: {
-        Authorization: "Bearer your-api-token"
-      }
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
-
-    // For the actual download API, we get a file blob
-    const blob = await response.blob()
-    const contentDisposition = response.headers.get("Content-Disposition")
-    const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.zip`
+    const { blob, filename } = await this.fetchInstallFile(name, type)
 
     // If user wants to download to local file system
     if (downloadToLocal) {
@@ -356,7 +353,7 @@ export const marketApi = {
       try {
         const text = await blob.text()
         const mcpConfig = JSON.parse(text)
-        const config = mcpConfig?.mcpServers?.pubmed ||{}
+        const config = mcpConfig?.mcpServers?.pubmed || {}
 
         if (!config.name || !config.url) {
           return {
@@ -368,12 +365,12 @@ export const marketApi = {
         // Create all connectors
         if (typeof window.api?.mcp?.create === "function") {
           const targetConfig = {
-            name: config?.name || name || '',
-            url:config?.url,
+            name: config?.name || name || "",
+            url: config?.url,
             enabled: false,
-            advanced:{
+            advanced: {
               ...(config?.advanced || {}),
-              transport: config?.type || config?.advanced?.transport || ''
+              transport: config?.type || config?.advanced?.transport || ""
             }
           }
           await window.api.mcp.create(targetConfig)
@@ -393,7 +390,16 @@ export const marketApi = {
     return { success: true }
   },
 
-  async uploadFile(file: File, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
+  async uploadFile(
+    file: File,
+    resourceType: string,
+    name: string,
+    description: string,
+    category: string,
+    guidance?: string,
+    chineseName?: string,
+    userId?: string
+  ): Promise<{ success: boolean; data?: MarketUploadResponse; error?: string }> {
     console.log(`Uploading ${resourceType} file: ${file.name} category:${category}`)
 
     const formData = new FormData()
@@ -434,14 +440,23 @@ export const marketApi = {
     }
   },
 
-  async updateItem(file: File | null, resourceType: string, name: string, description: string, category: string, guidance?: string, chineseName?: string, userId?: string): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
+  async updateItem(
+    file: File | null,
+    resourceType: string,
+    name: string,
+    description: string,
+    category: string,
+    guidance?: string,
+    chineseName?: string,
+    userId?: string
+  ): Promise<{ success: boolean; data?: MarketUpdateResponse; error?: string }> {
     console.log(`Updating ${resourceType} item: ${name} category:${category}`)
 
     // First, get the current item to retrieve its version
     let currentVersion = "1.0.1" // Start from 1.0.1 for first update
     try {
       const currentItems = await this.getItemsByType(resourceType)
-      const currentItem = currentItems.data?.find(item => item.name === name)
+      const currentItem = currentItems.data?.find((item) => item.name === name)
       if (currentItem && currentItem.version) {
         currentVersion = this.incrementVersion(currentItem.version)
       }
@@ -453,7 +468,7 @@ export const marketApi = {
     formData.append("resource_type", resourceType)
     formData.append("name", name)
     formData.append("description", description)
-    if(file){
+    if (file) {
       formData.append("file", file)
     }
     formData.append("category", category)
@@ -493,13 +508,13 @@ export const marketApi = {
 
   // Helper method to increment version number
   incrementVersion(version: string): string {
-    const versionParts = version.split('.')
+    const versionParts = version.split(".")
     if (versionParts.length !== 3) {
       // Invalid version format, return default increment
       return "1.0.1"
     }
 
-    const [major, minor, patch] = versionParts.map(part => parseInt(part, 10))
+    const [major, minor, patch] = versionParts.map((part) => parseInt(part, 10))
 
     if (isNaN(major) || isNaN(minor) || isNaN(patch)) {
       return "1.0.1"

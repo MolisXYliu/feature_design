@@ -41,13 +41,16 @@ function ConfirmDeleteDialog(props: {
 }): React.JSX.Element {
   const { open, pluginName, onConfirm, onCancel } = props
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onCancel()
+      }}
+    >
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>确认卸载</DialogTitle>
-          <DialogDescription>
-            确定要卸载插件「{pluginName}」吗？此操作不可撤销。
-          </DialogDescription>
+          <DialogDescription>确定要卸载插件「{pluginName}」吗？此操作不可撤销。</DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="outline" size="sm" onClick={onCancel}>
@@ -69,7 +72,12 @@ function ErrorDialog(props: {
 }): React.JSX.Element {
   const { open, message, onClose } = props
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onClose()
+      }}
+    >
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>操作失败</DialogTitle>
@@ -178,7 +186,9 @@ function UploadPluginDialog(props: {
         <div
           className={cn(
             "mt-4 border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
-            dragOver ? "border-primary bg-primary/5" : "border-muted-foreground/30 hover:border-muted-foreground/50",
+            dragOver
+              ? "border-primary bg-primary/5"
+              : "border-muted-foreground/30 hover:border-muted-foreground/50",
             uploading && "pointer-events-none opacity-60"
           )}
           onDrop={onDrop}
@@ -250,19 +260,27 @@ export function PluginsPanel(): React.JSX.Element {
 
   // After install/update, refresh the selected plugin's detail if it was affected
   const handleInstallSuccess = useCallback(() => {
-    window.api.plugins.list().then((list) => {
-      setPlugins(list)
-      bumpPluginVersion()
-      if (selectedPlugin) {
-        const updated = list.find((p) => p.id === selectedPlugin.id || p.name === selectedPlugin.name)
-        if (updated) {
-          setSelectedPlugin(updated)
-          window.api.plugins.getDetail(updated.id).then(setDetail).catch(() => {
-            setDetail({ skills: [], mcpServers: [], manifest: null })
-          })
+    window.api.plugins
+      .list()
+      .then((list) => {
+        setPlugins(list)
+        bumpPluginVersion()
+        if (selectedPlugin) {
+          const updated = list.find(
+            (p) => p.id === selectedPlugin.id || p.name === selectedPlugin.name
+          )
+          if (updated) {
+            setSelectedPlugin(updated)
+            window.api.plugins
+              .getDetail(updated.id)
+              .then(setDetail)
+              .catch(() => {
+                setDetail({ skills: [], mcpServers: [], manifest: null })
+              })
+          }
         }
-      }
-    }).catch(console.error)
+      })
+      .catch(console.error)
   }, [selectedPlugin])
 
   useEffect(() => {
@@ -334,9 +352,7 @@ export function PluginsPanel(): React.JSX.Element {
     const q = debouncedQuery.trim().toLowerCase()
     if (!q) return plugins
     return plugins.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q)
+      (p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)
     )
   }, [plugins, debouncedQuery])
 
@@ -360,14 +376,22 @@ export function PluginsPanel(): React.JSX.Element {
                   <button
                     type="button"
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
-                    onClick={() => { setSearchQuery(""); setDebouncedQuery("") }}
+                    onClick={() => {
+                      setSearchQuery("")
+                      setDebouncedQuery("")
+                    }}
                     aria-label="清除"
                   >
                     <X className="size-3" />
                   </button>
                 )}
               </div>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => setUploadDialogOpen(true)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 shrink-0"
+                onClick={() => setUploadDialogOpen(true)}
+              >
                 <Plus className="size-4" />
               </Button>
             </div>
@@ -401,14 +425,26 @@ export function PluginsPanel(): React.JSX.Element {
                   key={plugin.id}
                   className={cn(
                     "w-full text-left rounded-md border border-border/70 p-2.5 transition-colors",
-                    selectedPlugin?.id === plugin.id ? "bg-muted/70 border-border" : "hover:bg-muted/50"
+                    selectedPlugin?.id === plugin.id
+                      ? "bg-muted/70 border-border"
+                      : "hover:bg-muted/50"
                   )}
                   onClick={() => handleSelectPlugin(plugin)}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <Puzzle className={cn("size-4 shrink-0", plugin.enabled ? "text-primary" : "text-muted-foreground/40")} />
-                      <span className={cn("text-sm font-medium truncate", !plugin.enabled && "text-muted-foreground")}>
+                      <Puzzle
+                        className={cn(
+                          "size-4 shrink-0",
+                          plugin.enabled ? "text-primary" : "text-muted-foreground/40"
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "text-sm font-medium truncate",
+                          !plugin.enabled && "text-muted-foreground"
+                        )}
+                      >
                         {plugin.name}
                       </span>
                     </div>
@@ -421,7 +457,9 @@ export function PluginsPanel(): React.JSX.Element {
                     </div>
                   </div>
                   {plugin.description && (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{plugin.description}</p>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {plugin.description}
+                    </p>
                   )}
                   <div className="flex items-center gap-3 mt-1.5">
                     {plugin.skillCount > 0 && (
@@ -474,13 +512,14 @@ export function PluginsPanel(): React.JSX.Element {
   )
 }
 
-function PluginDetailPanel(props: {
+export function PluginDetailPanel(props: {
   plugin: PluginMetadata | null
   detail: PluginDetail | null
   onToggleEnabled: (plugin: PluginMetadata) => void
   onDelete: (plugin: PluginMetadata) => void
+  hideActions?: boolean
 }): React.JSX.Element {
-  const { plugin, detail, onToggleEnabled, onDelete } = props
+  const { plugin, detail, onToggleEnabled, onDelete, hideActions = false } = props
 
   if (!plugin) {
     return (
@@ -492,7 +531,8 @@ function PluginDetailPanel(props: {
             </div>
             <h3 className="text-lg font-semibold text-foreground/80">Plugins 插件</h3>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              插件是打包好的功能扩展包，一个插件可以同时包含 Skills 技能和 MCP 服务器。相比单独添加技能或 MCP，插件提供了更便捷的「一键安装、整体管理」的体验。
+              插件是打包好的功能扩展包，一个插件可以同时包含 Skills 技能和 MCP
+              服务器。相比单独添加技能或 MCP，插件提供了更便捷的「一键安装、整体管理」的体验。
             </p>
           </div>
 
@@ -500,24 +540,47 @@ function PluginDetailPanel(props: {
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">插件包含什么？</p>
               <p className="text-[13px] text-muted-foreground leading-relaxed">
-                一个插件可以包含以下组件的任意组合：<span className="font-medium text-foreground/60">Skills</span>（位于 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">skills/</span> 目录）和 <span className="font-medium text-foreground/60">MCP 服务器</span>（通过 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.mcp.json</span> 配置）。安装后，包含的技能和 MCP 会自动注册，可以在插件详情页查看具体内容。
+                一个插件可以包含以下组件的任意组合：
+                <span className="font-medium text-foreground/60">Skills</span>（位于{" "}
+                <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">skills/</span>{" "}
+                目录）和 <span className="font-medium text-foreground/60">MCP 服务器</span>（通过{" "}
+                <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.mcp.json</span>{" "}
+                配置）。安装后，包含的技能和 MCP 会自动注册，可以在插件详情页查看具体内容。
               </p>
             </div>
 
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">如何安装？</p>
               <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span>点击 <span className="font-medium text-foreground/60">+</span> 按钮，上传 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.zip</span> 压缩包，或选择本地文件夹直接安装</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span>也可以前往 <span className="font-medium text-foreground/60">Market</span> 浏览社区发布的插件，一键下载安装</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span>安装后可查看插件的版本、作者、许可证、包含的组件等详情</li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">4.</span>通过开关随时启用或禁用，也可以完全卸载不需要的插件</li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">1.</span>点击{" "}
+                  <span className="font-medium text-foreground/60">+</span> 按钮，上传{" "}
+                  <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">.zip</span>{" "}
+                  压缩包，或选择本地文件夹直接安装
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">2.</span>也可以前往{" "}
+                  <span className="font-medium text-foreground/60">Market</span>{" "}
+                  浏览社区发布的插件，一键下载安装
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">3.</span>
+                  安装后可查看插件的版本、作者、许可证、包含的组件等详情
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">4.</span>
+                  通过开关随时启用或禁用，也可以完全卸载不需要的插件
+                </li>
               </ul>
             </div>
 
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">插件 vs 单独添加</p>
               <p className="text-[13px] text-muted-foreground leading-relaxed">
-                如果你只需要一个技能，直接在 Skills 页面上传即可。如果你只需要连接一个远程工具服务，在 MCPs 页面添加即可。但当你需要「一组关联的技能 + MCP 配置」打包分发时，插件是更好的选择——安装一次，全部就位。
+                如果你只需要一个技能，直接在 Skills
+                页面上传即可。如果你只需要连接一个远程工具服务，在 MCPs
+                页面添加即可。但当你需要「一组关联的技能 + MCP
+                配置」打包分发时，插件是更好的选择——安装一次，全部就位。
               </p>
             </div>
           </div>
@@ -548,26 +611,28 @@ function PluginDetailPanel(props: {
           </div>
           {author && <p className="text-xs text-muted-foreground mt-0.5">{author}</p>}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={() => onDelete(plugin)}
-          >
-            <Trash2 className="size-3" />
-            卸载
-          </Button>
-          <Button
-            variant={plugin.enabled ? "default" : "outline"}
-            size="sm"
-            className="h-7 gap-1.5 text-xs"
-            onClick={() => onToggleEnabled(plugin)}
-          >
-            <Power className="size-3" />
-            {plugin.enabled ? "已启用" : "已禁用"}
-          </Button>
-        </div>
+        {!hideActions && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={() => onDelete(plugin)}
+            >
+              <Trash2 className="size-3" />
+              卸载
+            </Button>
+            <Button
+              variant={plugin.enabled ? "default" : "outline"}
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => onToggleEnabled(plugin)}
+            >
+              <Power className="size-3" />
+              {plugin.enabled ? "已启用" : "已禁用"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Description */}
@@ -659,9 +724,7 @@ function PluginDetailPanel(props: {
           )}
 
           {/* Loading state */}
-          {!detail && (
-            <p className="text-xs text-muted-foreground">加载中...</p>
-          )}
+          {!detail && <p className="text-xs text-muted-foreground">加载中...</p>}
 
           {/* Plugin path */}
           <div className="pt-2 border-t border-border">
