@@ -17,7 +17,7 @@ interface Session {
   workDir: string
   claudeModelId?: string
   hasContent: boolean
-  isNewlyCreated: boolean // 只有 createSessionWithDir 创建的才为 true，restart 不设
+  ownsCreatingState: boolean // 只有 createSessionWithDir 创建的才为 true，表示该 session 持有 creating 锁
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
@@ -65,6 +65,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const [models, setModels] = useState<Array<{ id: string; name: string; model: string }>>([])
   const [selectedModelId, setSelectedModelId] = useState<string>("")
   const [creating, setCreating] = useState(false)
+  const [mountError, setMountError] = useState<string | null>(null)
 
   // 加载模型列表（仅打包环境）
   useEffect(() => {
@@ -206,6 +207,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.ptyCleanups = []
   }, [])
 
+  // 释放 creating 锁（仅当 session 持有该锁时）
+  // deps=[] 因为 setCreating 是 useState setter，引用永远稳定
+  const releaseCreatingState = useCallback((session: Session) => {
+    if (session.ownsCreatingState) {
+      session.ownsCreatingState = false
+      setCreating(false)
+    }
+  }, [])
+
   const startPty = useCallback(async (session: Session) => {
     if (session.termId) {
       await window.api.terminal.dispose(session.termId)
@@ -223,6 +233,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     // #2 fix: 如果 await 期间 session 被关闭，dispose 新创建的 PTY
     if (!sessionsRef.current.has(session.id)) {
       window.api.terminal.dispose(termId)
+      releaseCreatingState(session) // P0 fix: 防止 creating 永久卡死
       return
     }
     session.termId = termId
@@ -235,10 +246,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       // 首次收到数据时标记 hasContent，关闭 loading 遮罩
       if (!session.hasContent) {
         session.hasContent = true
-        if (session.isNewlyCreated) {
-          session.isNewlyCreated = false
-          setCreating(false)
-        }
+        releaseCreatingState(session)
         setSessionIds((prev) => [...prev])
       }
     })
@@ -249,10 +257,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       session.running = false
       if (!session.hasContent) {
         session.hasContent = true
-        if (session.isNewlyCreated) {
-          session.isNewlyCreated = false
-          setCreating(false)
-        }
+        releaseCreatingState(session)
       }
       setSessionIds((prev) => [...prev])
     })
@@ -270,7 +275,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     fitTerminal(session)
     setSessionIds((prev) => [...prev])
-  }, [fitTerminal, cleanupPty])
+  }, [fitTerminal, cleanupPty, releaseCreatingState])
 
   const switchSession = useCallback((id: string) => {
     setActiveSessionId(id)
@@ -317,7 +322,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     const session: Session = {
       id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, isNewlyCreated: true, domCleanups: [], ptyCleanups: []
+      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, domCleanups: [], ptyCleanups: []
     }
 
     sessionsRef.current.set(id, session)
@@ -331,7 +336,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     // 等 React 渲染完毕且 hostRef 可用后再挂载
     let hostAttempts = 0
     const waitForHost = (): void => {
-      if (cancelled) { setCreating(false); return }
+      if (cancelled) { releaseCreatingState(session); return }
       hostAttempts++
       if (!hostRef.current) {
         if (hostAttempts > MAX_TRY_OPEN_ATTEMPTS) {
@@ -347,7 +352,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
           } else {
             setActiveSessionId(null)
           }
-          setCreating(false)
+          releaseCreatingState(session)
+          setMountError("终端容器初始化超时，请重试")
           return
         }
         requestAnimationFrame(waitForHost)
@@ -367,18 +373,20 @@ export function ClaudeCodePanel(): React.JSX.Element {
             } else {
               setActiveSessionId(null)
             }
+            setMountError("终端挂载失败，请重试")
           }
-          setCreating(false)
+          releaseCreatingState(session)
           return
         }
         startPty(session).then(() => {
           if (!cancelled) xterm.focus()
+          else releaseCreatingState(session) // P0 fix: cancelled 后兜底释放 creating 锁
         }).catch((err) => {
           console.error("[ClaudeCode] PTY creation failed:", err)
           session.xterm.write(`\r\n\x1b[31m[启动失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
           session.running = false
           session.hasContent = true // 关闭 loading 遮罩，让用户看到错误信息
-          setCreating(false)
+          releaseCreatingState(session)
           setSessionIds((prev) => [...prev])
         })
       }).catch((err) => {
@@ -393,16 +401,18 @@ export function ClaudeCodePanel(): React.JSX.Element {
         } else {
           setActiveSessionId(null)
         }
-        setCreating(false)
+        releaseCreatingState(session)
+        setMountError(`终端挂载异常: ${err instanceof Error ? err.message : err}`)
       })
     }
     requestAnimationFrame(waitForHost)
-  }, [mountXterm, startPty, switchSession, selectedModelId])
+  }, [mountXterm, startPty, switchSession, selectedModelId, releaseCreatingState])
 
   // #16 fix: switchSession 从 setState 回调中移出
   const closeSession = useCallback(async (id: string) => {
     const session = sessionsRef.current.get(id)
     if (!session) return
+    releaseCreatingState(session)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
     if (session.termId) await window.api.terminal.dispose(session.termId)
@@ -421,7 +431,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       const newActive = remaining[remaining.length - 1]
       requestAnimationFrame(() => switchSession(newActive))
     }
-  }, [switchSession, cleanupPty, activeSessionId])
+  }, [switchSession, cleanupPty, releaseCreatingState, activeSessionId])
 
   // 组件卸载时清理所有会话
   useEffect(() => {
@@ -481,16 +491,13 @@ export function ClaudeCodePanel(): React.JSX.Element {
       activeSession.running = false
       if (!activeSession.hasContent) {
         activeSession.hasContent = true
-        if (activeSession.isNewlyCreated) {
-          activeSession.isNewlyCreated = false
-          setCreating(false)
-        }
+        releaseCreatingState(activeSession)
       }
       cleanupPty(activeSession)
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
     }
-  }, [activeSession, cleanupPty])
+  }, [activeSession, cleanupPty, releaseCreatingState])
 
   // 没有会话时显示欢迎页
   if (sessionIds.length === 0) {
@@ -520,10 +527,13 @@ export function ClaudeCodePanel(): React.JSX.Element {
             </select>
           </div>
         )}
-        <Button onClick={createSessionWithDir} className="gap-2" disabled={creating}>
+        <Button onClick={() => { setMountError(null); createSessionWithDir() }} className="gap-2" disabled={creating}>
           {creating ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
           {creating ? "正在启动..." : "选择工作目录并启动"}
         </Button>
+        {mountError && (
+          <p className="text-xs text-destructive">{mountError}</p>
+        )}
       </div>
     )
   }
@@ -582,13 +592,21 @@ export function ClaudeCodePanel(): React.JSX.Element {
         })}
         <button
           className="flex items-center justify-center size-5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
-          onClick={createSessionWithDir}
+          onClick={() => { setMountError(null); createSessionWithDir() }}
           title="新建会话"
           disabled={creating}
         >
           <Plus className="size-3.5" />
         </button>
       </div>
+
+      {/* 挂载错误提示 */}
+      {mountError && (
+        <div className="flex items-center justify-between px-3 py-1 bg-destructive/10 border-b border-destructive/20">
+          <p className="text-xs text-destructive">{mountError}</p>
+          <button className="text-xs text-destructive/60 hover:text-destructive" onClick={() => setMountError(null)}>✕</button>
+        </div>
+      )}
 
       {/* 终端容器 */}
       <div ref={hostRef} className="flex-1 min-h-0 overflow-hidden" style={{ position: "relative", backgroundColor: "#faf9f6" }}>
