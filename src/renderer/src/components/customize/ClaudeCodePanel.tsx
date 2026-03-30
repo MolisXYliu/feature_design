@@ -276,6 +276,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     fitTerminal(session)
     setSessionIds((prev) => [...prev])
+
+    // 超时兜底：若 15s 内仍无输出，释放 creating 锁（不影响 session 本身）
+    const creatingTimeout = setTimeout(() => { releaseCreatingState(session) }, 15_000)
+    session.ptyCleanups.push(() => clearTimeout(creatingTimeout))
   }, [fitTerminal, cleanupPty, releaseCreatingState])
 
   const switchSession = useCallback((id: string) => {
@@ -393,11 +397,14 @@ export function ClaudeCodePanel(): React.JSX.Element {
           else releaseCreatingState(session) // P0 fix: cancelled 后兜底释放 creating 锁
         }).catch((err) => {
           console.error("[ClaudeCode] PTY creation failed:", err)
-          session.xterm.write(`\r\n\x1b[31m[启动失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
-          session.running = false
-          session.hasContent = true // 关闭 loading 遮罩，让用户看到错误信息
+          // await 期间 session 可能已被 closeSession 销毁
+          if (sessionsRef.current.has(session.id)) {
+            session.xterm.write(`\r\n\x1b[31m[启动失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
+            session.running = false
+            session.hasContent = true
+            setSessionIds((prev) => [...prev])
+          }
           releaseCreatingState(session)
-          setSessionIds((prev) => [...prev])
         })
       }).catch((err) => {
         console.error("[ClaudeCode] Terminal mount failed:", err)
@@ -423,6 +430,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     const session = sessionsRef.current.get(id)
     if (!session) return
     releaseCreatingState(session)
+    setMountError(null)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
     if (session.termId) {
@@ -510,8 +518,11 @@ export function ClaudeCodePanel(): React.JSX.Element {
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
       try { await window.api.terminal.dispose(termId) }
       catch (e) { console.warn("[ClaudeCode] dispose failed in handleStop, PTY may still be running", e) }
-      activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
-      setSessionIds((prev) => [...prev])
+      // await 期间 session 可能已被 closeSession 销毁
+      if (sessionsRef.current.has(activeSession.id)) {
+        activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
+        setSessionIds((prev) => [...prev])
+      }
     }
   }, [activeSession, cleanupPty, releaseCreatingState])
 
