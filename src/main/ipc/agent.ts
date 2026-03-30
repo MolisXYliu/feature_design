@@ -570,6 +570,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     // Hoisted so catch block can access them for routing feedback
     let invokeRoutingResult: Awaited<ReturnType<typeof resolveModel>> | null = null
     let toolErrorCount = 0
+    // High-water mark of input tokens — hoisted for catch/finally access
+    let highWaterInputTokens = 0
 
     try {
       // Get workspace path from thread metadata - REQUIRED
@@ -934,6 +936,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               })
               _llmNodeByMessageId.set(aiMsgId, llmNodeId)
 
+              const usageForTrace = normalizeTokenUsage(getUsageMetadata(kwargs))
+
+              // Track high-water mark of input tokens for context window capacity guard
+              if (usageForTrace?.inputTokens && usageForTrace.inputTokens > highWaterInputTokens) {
+                highWaterInputTokens = usageForTrace.inputTokens
+              }
+
               tracer.recordModelCall({
                 messageId: aiMsgId,
                 startedAt: new Date().toISOString(),
@@ -943,7 +952,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                   content: extractText(kwargs.content),
                 },
                 toolCalls: outputToolCalls,
-                tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
+                tokenUsage: usageForTrace
               })
 
               tracer.endLlmNode({
@@ -951,7 +960,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                 output: extractText(kwargs.content),
                 status: "success",
                 metadata: {
-                  tokenUsage: normalizeTokenUsage(getUsageMetadata(kwargs))
+                  tokenUsage: usageForTrace
                 }
               })
             }
@@ -1079,7 +1088,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             resolvedModelId: invokeRoutingResult.resolvedModelId,
             outcome: "success",
             toolCallCount: toolCallCounter.getCount(),
-            toolErrorCount
+            toolErrorCount,
+            lastInputTokens: highWaterInputTokens > 0 ? highWaterInputTokens : undefined
           })
         }
 
@@ -1186,7 +1196,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             resolvedModelId: invokeRoutingResult.resolvedModelId,
             outcome: "error",
             toolCallCount: toolCallCounter.getCount(),
-            toolErrorCount
+            toolErrorCount,
+            lastInputTokens: highWaterInputTokens > 0 ? highWaterInputTokens : undefined
           })
         }
       } else {
@@ -1198,7 +1209,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             resolvedModelId: invokeRoutingResult.resolvedModelId,
             outcome: "cancelled",
             toolCallCount: toolCallCounter.getCount(),
-            toolErrorCount
+            toolErrorCount,
+            lastInputTokens: highWaterInputTokens > 0 ? highWaterInputTokens : undefined
           })
         }
       }
