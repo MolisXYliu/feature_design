@@ -104,6 +104,7 @@ interface TraceNode {
 interface TraceDetail extends TraceEntry {
   endedAt: string
   modelId: string
+  modelName?: string
   errorMessage?: string
   steps: TraceStep[]
   nodes?: TraceNode[]
@@ -367,7 +368,9 @@ function TraceDetailView({ detail, onClose }: { detail: TraceDetail; onClose: ()
       <div className="shrink-0 border-b border-border grid grid-cols-4">
         <Stat icon={<Timer className="size-3.5" />} label="耗时" value={fmt(detail.durationMs)} />
         <Stat icon={<Hash className="size-3.5" />} label="工具调用" value={String(detail.totalToolCalls)} />
-        <Stat icon={<Cpu className="size-3.5" />} label="模型" value={detail.modelId.split("/").pop() ?? detail.modelId} />
+        <Stat icon={<Cpu className="size-3.5" />} label="模型" value={
+          detail.modelName ?? (detail.modelId.startsWith("custom:") ? detail.modelId.slice("custom:".length) : detail.modelId.split("/").pop() ?? detail.modelId)
+        } />
         <Stat
           icon={<Sparkles className="size-3.5" />}
           label="使用技能"

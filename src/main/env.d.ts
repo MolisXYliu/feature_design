@@ -6,6 +6,10 @@ interface ImportMetaEnv {
   readonly VITE_CHATX_CHANNEL?: string
   readonly VITE_CHATX_CALLBACK_URL?: string
   readonly VITE_RENDER_URL?: string
+  /** Smart routing Layer 3 classifier — internal fallback model (injected at build time for internal builds) */
+  readonly VITE_ROUTING_CLASSIFIER_MODEL?: string
+  readonly VITE_ROUTING_CLASSIFIER_API_KEY?: string
+  readonly VITE_ROUTING_CLASSIFIER_BASE_URL?: string
 }
 
 interface ImportMeta {

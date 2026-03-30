@@ -24,6 +24,7 @@ interface CustomConfig {
   model: string
   apiKey: string
   maxTokensInput: string
+  tier: "premium" | "economy"
 }
 
 interface TokenLimits {
@@ -39,6 +40,7 @@ interface CustomModelItem {
   model: string
   hasApiKey: boolean
   maxTokens: number
+  tier?: "premium" | "economy"
 }
 
 const FALLBACK_LIMITS: TokenLimits = {
@@ -78,7 +80,8 @@ export function CustomModelDialog({
     baseUrl: "",
     model: "",
     apiKey: "",
-    maxTokensInput: String(FALLBACK_LIMITS.defaultMaxTokens)
+    maxTokensInput: String(FALLBACK_LIMITS.defaultMaxTokens),
+    tier: "premium"
   })
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -131,7 +134,8 @@ export function CustomModelDialog({
               baseUrl: resolvedExisting.baseUrl,
               model: resolvedExisting.model,
               apiKey: "",
-              maxTokensInput: String(resolvedExisting.maxTokens ?? limits.defaultMaxTokens)
+              maxTokensInput: String(resolvedExisting.maxTokens ?? limits.defaultMaxTokens),
+              tier: resolvedExisting.tier ?? "premium"
             })
             setHasExisting(true)
             setHasExistingKey(resolvedExisting.hasApiKey)
@@ -142,7 +146,8 @@ export function CustomModelDialog({
               baseUrl: "",
               model: "",
               apiKey: "",
-              maxTokensInput: String(limits.defaultMaxTokens)
+              maxTokensInput: String(limits.defaultMaxTokens),
+              tier: "premium"
             })
             setHasExisting(false)
             setHasExistingKey(false)
@@ -171,7 +176,8 @@ export function CustomModelDialog({
       baseUrl: picked.baseUrl,
       model: picked.model,
       apiKey: "",
-      maxTokensInput: String(picked.maxTokens ?? tokenLimits.defaultMaxTokens)
+      maxTokensInput: String(picked.maxTokens ?? tokenLimits.defaultMaxTokens),
+      tier: picked.tier ?? "premium"
     })
     setHasExisting(true)
     setHasExistingKey(picked.hasApiKey)
@@ -241,7 +247,8 @@ export function CustomModelDialog({
         baseUrl: config.baseUrl.trim(),
         model: config.model.trim(),
         apiKey: config.apiKey.trim() || undefined,
-        maxTokens: parsedMaxTokens
+        maxTokens: parsedMaxTokens,
+        tier: config.tier
       })
       const refreshed = await window.api.models.getCustomConfigs()
       setAllConfigs(refreshed)
@@ -291,7 +298,8 @@ export function CustomModelDialog({
           baseUrl: fallback.baseUrl,
           model: fallback.model,
           apiKey: "",
-          maxTokensInput: String(fallback.maxTokens ?? tokenLimits.defaultMaxTokens)
+          maxTokensInput: String(fallback.maxTokens ?? tokenLimits.defaultMaxTokens),
+          tier: fallback.tier ?? "premium"
         })
         setHasExisting(true)
         setHasExistingKey(fallback.hasApiKey)
@@ -303,7 +311,8 @@ export function CustomModelDialog({
           baseUrl: "",
           model: "",
           apiKey: "",
-          maxTokensInput: String(tokenLimits.defaultMaxTokens)
+          maxTokensInput: String(tokenLimits.defaultMaxTokens),
+          tier: "premium"
         })
         setHasExisting(false)
         setHasExistingKey(false)
@@ -339,7 +348,8 @@ export function CustomModelDialog({
                     baseUrl: "",
                     model: "",
                     apiKey: "",
-                    maxTokensInput: String(tokenLimits.defaultMaxTokens)
+                    maxTokensInput: String(tokenLimits.defaultMaxTokens),
+                    tier: "premium"
                   })
                   setHasExisting(false)
                   setHasExistingKey(false)
@@ -423,6 +433,29 @@ export function CustomModelDialog({
                 max={tokenLimits.maxMaxTokens}
               />
               {maxTokensError && <p className="text-xs text-destructive">{maxTokensError}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">智能路由档位</label>
+              <div className="flex gap-2">
+                {(["premium", "economy"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setConfig((c) => ({ ...c, tier: t }))}
+                    className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      config.tier === t
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {t === "premium" ? "⚡ 强力 — 复杂任务" : "🌿 经济 — 简单任务"}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                开启智能路由后，系统会根据任务复杂度自动选择对应档位的模型
+              </p>
             </div>
 
             <div className="space-y-1.5">

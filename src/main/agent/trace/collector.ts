@@ -35,7 +35,8 @@ import type {
   TraceNode,
   TraceNodeStatus,
   TraceOutcome,
-  ITraceReporter
+  ITraceReporter,
+  RoutingTrace
 } from "./types"
 import { NoopTraceReporter } from "./types"
 
@@ -99,6 +100,8 @@ export class TraceCollector {
   private readonly startedAt: string
   private readonly userMessage: string
   private modelId: string
+  private modelName: string | undefined
+  private routingTrace: RoutingTrace | undefined
 
   private steps: TraceStep[] = []
   private usedSkills: string[] = []
@@ -144,6 +147,31 @@ export class TraceCollector {
     const root = this.getNode(this.rootNodeId)
     if (root) {
       root.metadata = { ...(root.metadata ?? {}), modelId: id }
+    }
+  }
+
+  /** Set the human-readable model name (e.g. "minmax") for display in trace UI. */
+  setModelName(name: string): void {
+    this.modelName = name
+    const root = this.getNode(this.rootNodeId)
+    if (root) {
+      root.metadata = { ...(root.metadata ?? {}), modelName: name }
+    }
+  }
+
+  /**
+   * Attach the routing funnel record to this trace.
+   * Side-effect only — never throws.
+   */
+  setRoutingTrace(rt: RoutingTrace): void {
+    try {
+      this.routingTrace = rt
+      const root = this.getNode(this.rootNodeId)
+      if (root) {
+        root.metadata = { ...(root.metadata ?? {}), routingTrace: rt }
+      }
+    } catch (e) {
+      console.warn("[Tracer] setRoutingTrace failed:", e)
     }
   }
 
@@ -359,13 +387,15 @@ export class TraceCollector {
       durationMs,
       userMessage: this.userMessage,
       modelId: this.modelId,
+      ...(this.modelName ? { modelName: this.modelName } : {}),
       steps: this.steps,
       modelCalls: this.modelCalls,
       nodes: this.finalizeNodes(outcome, endedAt, errorMessage),
       totalToolCalls,
       outcome,
       ...(errorMessage ? { errorMessage } : {}),
-      usedSkills: this.usedSkills
+      usedSkills: this.usedSkills,
+      ...(this.routingTrace ? { metadata: { routingTrace: this.routingTrace } } : {})
     }
 
     writeTraceFile(trace)

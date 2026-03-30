@@ -15,8 +15,10 @@ import {
   getCustomSkillsDir,
   invalidateEnabledSkillsCache,
   isOnlineSkillEvolutionEnabled,
-  isSkillAutoProposeEnabled
+  isSkillAutoProposeEnabled,
+  getGlobalRoutingMode
 } from "../storage"
+import { resolveModel, rememberRoutingDecision, rememberRoutingFeedback } from "../routing"
 import { notifyIfBackground, stripThink } from "../services/notify"
 import { trySendChatXReply } from "../services/chatx"
 import { TraceCollector } from "../agent/trace/collector"
@@ -565,6 +567,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       return context
     }
 
+    // Hoisted so catch block can access them for routing feedback
+    let invokeRoutingResult: Awaited<ReturnType<typeof resolveModel>> | null = null
+    let toolErrorCount = 0
+
     try {
       // Get workspace path from thread metadata - REQUIRED
       const thread = getThread(threadId)
@@ -598,7 +604,36 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         } catch { /* non-critical */ }
       }
 
-      const effectiveModelId = modelId || (metadata.model as string | undefined)
+      const requestedModelId = modelId || (metadata.model as string | undefined)
+      invokeRoutingResult = await resolveModel({
+        taskSource: "chat",
+        message,
+        threadId,
+        requestedModelId,
+        routingMode: getGlobalRoutingMode()
+      }).catch(() => null)
+      const effectiveModelId = invokeRoutingResult?.resolvedModelId ?? requestedModelId
+
+      // Persist routing decision for thread continuity (sticky/force logic next turn)
+      if (invokeRoutingResult) rememberRoutingDecision(threadId, invokeRoutingResult)
+
+      // Attach routing funnel record to trace (setRoutingTrace is internally safe, never throws)
+      if (invokeRoutingResult?.routingTrace) {
+        tracer.setRoutingTrace(invokeRoutingResult.routingTrace)
+      }
+
+      // Emit routing result so the frontend can display which model was selected
+      if (invokeRoutingResult) {
+        window.webContents.send(channel, {
+          type: "custom",
+          data: {
+            type: "routing_result",
+            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            resolvedTier: invokeRoutingResult.resolvedTier,
+            routeReason: invokeRoutingResult.routeReason
+          }
+        })
+      }
 
       const agent = await createAgentRuntime({
         threadId,
@@ -622,8 +657,19 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         }
       )
 
-      // Update tracer with resolved modelId
-      if (effectiveModelId) tracer.setModelId(effectiveModelId)
+      // Update tracer with resolved modelId.
+      // Set modelName from config.model (the real API model name, e.g. "MiniMax-M2.7") as an
+      // initial fallback — it will be overwritten later by the actual model name from the API
+      // response metadata once the first AI message arrives (see response_metadata.model_name below).
+      if (effectiveModelId) {
+        tracer.setModelId(effectiveModelId)
+        const cfgIdForName = effectiveModelId.startsWith("custom:")
+          ? effectiveModelId.slice("custom:".length)
+          : effectiveModelId
+        const cfgForName = getCustomModelConfigs().find((c) => c.id === cfgIdForName)
+        // Use config.model (the actual API model name) as fallback, not config.name (display label)
+        if (cfgForName?.model) tracer.setModelName(cfgForName.model)
+      }
 
       // ── Tool-call extraction (tested in __tests__/tool-call-extraction.test.ts)
       //
@@ -800,7 +846,10 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
                 name?: string
                 tool_call_id?: string
                 usage_metadata?: unknown
-                response_metadata?: { token_usage?: unknown; usage?: unknown }
+                response_metadata?: { token_usage?: unknown; usage?: unknown; model_name?: string; model?: string }
+                status?: string
+                is_error?: boolean
+                additional_kwargs?: Record<string, unknown>
                 tool_calls?: Array<{
                   id?: string
                   name?: string
@@ -845,6 +894,13 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             const aiMsgId = typeof kwargs.id === "string" ? kwargs.id : ""
             if (isAI && aiMsgId && !_countedModelMsgIds.has(aiMsgId)) {
               _countedModelMsgIds.add(aiMsgId)
+
+              // Extract the real model name from API response metadata (e.g. "MiniMax-M2.7")
+              // This takes precedence over the user-configured model name (config.model)
+              const apiModelName = kwargs.response_metadata?.model_name ?? kwargs.response_metadata?.model
+              if (typeof apiModelName === "string" && apiModelName) {
+                tracer.setModelName(apiModelName)
+              }
 
               const inputSlice = state.messages
                 .slice(Math.max(0, i - MODEL_INPUT_WINDOW), i)
@@ -943,11 +999,20 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               const toolCallId = typeof kwargs.tool_call_id === "string" ? kwargs.tool_call_id : ""
               _countedToolResultMsgIds.add(toolMsgId)
               const parentId = toolCallId ? _toolNodeByRef.get(toolCallId) : undefined
+              const toolOutput = extractText(kwargs.content)
+              // Detect tool error: explicit status field, is_error flag, or error-prefix in output
+              const additionalKwargs = kwargs.additional_kwargs as Record<string, unknown> | undefined
+              const isToolError =
+                kwargs.status === "error" ||
+                kwargs.is_error === true ||
+                additionalKwargs?.is_error === true ||
+                /^(error:|mcp tool error:|tool error:|failed:)/i.test(toolOutput.trim())
+              if (isToolError) toolErrorCount += 1
               tracer.addToolResultNode({
                 parentId,
                 toolCallId: toolCallId || undefined,
-                output: extractText(kwargs.content),
-                status: "success",
+                output: toolOutput,
+                status: isToolError ? "error" : "success",
                 metadata: {
                   messageId: toolMsgId
                 }
@@ -1007,6 +1072,17 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         await tracer.finish("success")
 
+        // Write routing feedback so next turn can use sticky/force logic
+        if (invokeRoutingResult) {
+          rememberRoutingFeedback(threadId, {
+            resolvedTier: invokeRoutingResult.resolvedTier,
+            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            outcome: "success",
+            toolCallCount: toolCallCounter.getCount(),
+            toolErrorCount
+          })
+        }
+
         if (isOnlineSkillEvolutionEnabled()) {
           const proposalContext = appendTurnToProposalWindow("success")
 
@@ -1054,7 +1130,18 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         if (isMemoryEnabled() && conversation.length >= MIN_CHARS_FOR_MEMORY) {
           const memoryStore = await getMemoryStore()
           const allConfigs = getCustomModelConfigs()
-          const config = allConfigs.find((c) => c.id === (modelId?.replace("custom:", "") ?? "")) || allConfigs[0]
+
+          // Use routing to pick memory summarization model (economy in auto mode)
+          const memRoutingResult = await resolveModel({
+            taskSource: "memory_summarize",
+            threadId,
+            requestedModelId: modelId ?? undefined,
+            routingMode: getGlobalRoutingMode()
+          }).catch(() => null)
+          const memModelId = memRoutingResult?.resolvedModelId
+          const memCfgId = memModelId?.replace("custom:", "") ?? modelId?.replace("custom:", "") ?? ""
+          const config = allConfigs.find((c) => c.id === memCfgId) || allConfigs[0]
+
           if (!config) {
             console.warn("[Agent] No model config available — skipping memory summarization")
           } else if (config?.apiKey) {
@@ -1093,9 +1180,27 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         }
         tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         tracer.finish("error", errMsg).catch(() => {})
+        if (invokeRoutingResult) {
+          rememberRoutingFeedback(threadId, {
+            resolvedTier: invokeRoutingResult.resolvedTier,
+            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            outcome: "error",
+            toolCallCount: toolCallCounter.getCount(),
+            toolErrorCount
+          })
+        }
       } else {
         tracer.setUsedSkills(skillUsageDetector.getUsedSkillNames())
         tracer.finish("cancelled").catch(() => {})
+        if (invokeRoutingResult) {
+          rememberRoutingFeedback(threadId, {
+            resolvedTier: invokeRoutingResult.resolvedTier,
+            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            outcome: "cancelled",
+            toolCallCount: toolCallCounter.getCount(),
+            toolErrorCount
+          })
+        }
       }
     } finally {
       activeRuns.delete(threadId)
@@ -1150,7 +1255,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     window.once("closed", onWindowClosed)
 
     try {
-      const effectiveModelId = modelId || (metadata.model as string | undefined)
+      const requestedModelIdResume = modelId || (metadata.model as string | undefined)
+      const resumeRoutingResult = await resolveModel({
+        taskSource: "chat",
+        threadId,
+        continuation: "resume",
+        requestedModelId: requestedModelIdResume,
+        routingMode: getGlobalRoutingMode()
+      }).catch(() => null)
+      const effectiveModelId = resumeRoutingResult?.resolvedModelId ?? requestedModelIdResume
+
       const agent = await createAgentRuntime({
         threadId,
         workspacePath,
@@ -1251,7 +1365,16 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     window.once("closed", onWindowClosed)
 
     try {
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId, abortSignal: abortController.signal, noSkillEvolutionTool: true })
+      const interruptRoutingResult = await resolveModel({
+        taskSource: "chat",
+        threadId,
+        continuation: "interrupt",
+        requestedModelId: modelId ?? undefined,
+        routingMode: getGlobalRoutingMode()
+      }).catch(() => null)
+      const effectiveInterruptModelId = interruptRoutingResult?.resolvedModelId ?? modelId ?? undefined
+
+      const agent = await createAgentRuntime({ threadId, workspacePath, modelId: effectiveInterruptModelId, abortSignal: abortController.signal, noSkillEvolutionTool: true })
       const config = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
