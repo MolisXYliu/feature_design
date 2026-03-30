@@ -447,6 +447,7 @@ export interface CustomModelConfig {
   model: string
   apiKey?: string
   maxTokens?: number
+  tier?: "premium" | "economy"
 }
 
 export interface UserInfoConfig {
@@ -471,6 +472,7 @@ export interface CustomModelPublicConfig {
   model: string
   hasApiKey: boolean
   maxTokens: number
+  tier?: "premium" | "economy"
 }
 
 interface StoredCustomModelRecord {
@@ -479,6 +481,7 @@ interface StoredCustomModelRecord {
   baseUrl: string
   model: string
   maxTokens?: number
+  tier?: "premium" | "economy"
 }
 
 const CUSTOM_MODEL_FILE = join(OPENWORK_DIR, "custom-model.json")
@@ -654,7 +657,8 @@ function toPublicConfig(config: StoredCustomModelRecord, env?: Record<string, st
     baseUrl: config.baseUrl,
     model: config.model,
     hasApiKey: !!getCustomModelApiKey(config.id, env),
-    maxTokens: normalizeMaxTokens(config.maxTokens)
+    maxTokens: normalizeMaxTokens(config.maxTokens),
+    ...(config.tier !== undefined && { tier: config.tier })
   }
 }
 
@@ -667,7 +671,8 @@ export function getCustomModelConfigs(): CustomModelConfig[] {
     baseUrl: item.baseUrl,
     model: item.model,
     apiKey: getCustomModelApiKey(item.id, env),
-    maxTokens: normalizeMaxTokens(item.maxTokens)
+    maxTokens: normalizeMaxTokens(item.maxTokens),
+    ...(item.tier !== undefined && { tier: item.tier })
   }))
 }
 
@@ -681,7 +686,8 @@ export function getCustomModelConfigById(id: string): CustomModelConfig | null {
     baseUrl: record.baseUrl,
     model: record.model,
     apiKey: getCustomModelApiKey(record.id),
-    maxTokens: normalizeMaxTokens(record.maxTokens)
+    maxTokens: normalizeMaxTokens(record.maxTokens),
+    ...(record.tier !== undefined && { tier: record.tier })
   }
 }
 
@@ -733,7 +739,8 @@ export function upsertCustomModelConfig(
     name: normalizedName,
     baseUrl: validatedBaseUrl,
     model: normalizedModel,
-    maxTokens: validatedMaxTokens
+    maxTokens: validatedMaxTokens,
+    ...(config.tier !== undefined && { tier: config.tier })
   }
 
   const index = items.findIndex((item) => item.id === targetId)
@@ -1553,4 +1560,50 @@ export function setHookEnabled(id: string, enabled: boolean): void {
     i.id === id ? { ...i, enabled, updatedAt: new Date().toISOString() } : i
   )
   writeHooksAtomic(next)
+}
+
+// ─── Smart Model Routing ─────────────────────────────────────────────────────
+
+const ROUTING_SETTINGS_FILE = join(OPENWORK_DIR, "routing-settings.json")
+
+interface RoutingSettings {
+  mode: "auto" | "pinned"
+}
+
+function readRoutingSettings(): RoutingSettings {
+  if (!existsSync(ROUTING_SETTINGS_FILE)) return { mode: "pinned" }
+  try {
+    const content = readFileSync(ROUTING_SETTINGS_FILE, "utf-8")
+    const parsed = JSON.parse(content) as unknown
+    if (parsed && typeof parsed === "object" && "mode" in parsed) {
+      const m = (parsed as Record<string, unknown>).mode
+      if (m === "auto" || m === "pinned") return { mode: m }
+    }
+  } catch {
+    // ignore parse errors, fall back to default
+  }
+  return { mode: "pinned" }
+}
+
+export function getGlobalRoutingMode(): "auto" | "pinned" {
+  return readRoutingSettings().mode
+}
+
+export function setGlobalRoutingMode(mode: "auto" | "pinned"): void {
+  getOpenworkDir()
+  writeFileSync(ROUTING_SETTINGS_FILE, JSON.stringify({ mode }, null, 2), "utf-8")
+}
+
+/**
+ * Get the best model config for a given tier.
+ * Priority: exact tier match → fallback tier → configs[0]
+ */
+export function getModelByTier(tier: "premium" | "economy"): CustomModelConfig | null {
+  const configs = getCustomModelConfigs()
+  if (configs.length === 0) return null
+  // treat untagged models as premium
+  const exact = configs.find((c) => (c.tier ?? "premium") === tier)
+  if (exact) return exact
+  // fallback to any available config
+  return configs[0]
 }

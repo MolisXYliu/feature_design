@@ -103,7 +103,8 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       provider: "custom",
       model: customConfig.model,
       description: customConfig.baseUrl,
-      available: customConfig.hasApiKey
+      available: customConfig.hasApiKey,
+      ...(customConfig.tier !== undefined && { tier: customConfig.tier })
     }))
 
     return models

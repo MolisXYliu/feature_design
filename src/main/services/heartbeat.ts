@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron"
 import { HumanMessage } from "@langchain/core/messages"
-import { getHeartbeatConfig, getHeartbeatContent, saveHeartbeatConfig } from "../storage"
+import { getHeartbeatConfig, getHeartbeatContent, saveHeartbeatConfig, getGlobalRoutingMode } from "../storage"
+import { resolveModel } from "../routing"
 import { createAgentRuntime, getCheckpointer, closeCheckpointer } from "../agent/runtime"
 import {
   createThread as dbCreateThread,
@@ -206,7 +207,17 @@ async function executeHeartbeat(): Promise<void> {
     notifyRenderer("heartbeat:changed")
     return
   }
-  if (!config.modelId) {
+  const globalRoutingMode = getGlobalRoutingMode()
+  const routingResult = await resolveModel({
+    taskSource: "heartbeat",
+    threadId: HEARTBEAT_THREAD_ID,
+    requestedModelId: config.modelId || undefined,
+    routingMode: globalRoutingMode
+  }).catch(() => null)
+
+  const effectiveModelId = routingResult?.resolvedModelId ?? config.modelId ?? undefined
+
+  if (!effectiveModelId) {
     saveHeartbeatConfig({ lastRunStatus: "error", lastRunError: "No model configured", lastRunAt: new Date().toISOString() })
     notifyRenderer("heartbeat:changed")
     return
@@ -265,7 +276,7 @@ async function executeHeartbeat(): Promise<void> {
     const agent = await createAgentRuntime({
       threadId,
       workspacePath: config.workDir,
-      modelId: config.modelId || undefined,
+      modelId: effectiveModelId,
       extraSystemPrompt: heartbeatContext,
       noSchedulerTool: true,
       abortSignal: abortController.signal
