@@ -279,6 +279,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     // 超时兜底：若 15s 内仍无输出，释放 creating 锁并关闭 loading 遮罩
     const creatingTimeout = setTimeout(() => {
+      if (!sessionsRef.current.has(session.id)) return // session 已被关闭
       if (!session.hasContent) {
         session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
         session.hasContent = true
