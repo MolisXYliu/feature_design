@@ -28,11 +28,9 @@ import {
   CircleAlert,
   FilePenLine,
   Plus,
-  Loader2,
-  RotateCcw
+  Loader2
 } from "lucide-react"
 import type { FileAttachment } from "@/types"
-import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -51,7 +49,6 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
-import DisplayDiffTest from "./DisplayDiffTest"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -78,12 +75,6 @@ interface SkillIntentBannerRequest {
   recommendationReason?: string
   /** Opaque context — cached so the retry button can replay generation without a new threshold. */
   context: unknown
-}
-
-interface RunDiffSummary {
-  files: Array<{ path: string; additions: number; deletions: number }>
-  totalAdditions: number
-  totalDeletions: number
 }
 
 const THINKING_MESSAGES = [
@@ -150,9 +141,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   )
   const [yoloMode, setYoloMode] = useState(false)
   const [showCopyNotification, setShowCopyNotification] = useState(false)
-  const [runDiffSummary, setRunDiffSummary] = useState<RunDiffSummary | null>(null)
-  const [runDiffError, setRunDiffError] = useState<string | null>(null)
-  const [revertingRunDiff, setRevertingRunDiff] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
   // NUX (first-run sandbox setup)
   const [showNux, setShowNux] = useState(false)
@@ -699,7 +687,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }, [isLoading])
 
   const prevLoadingRef = useRef(false)
-  const prevRunLoadingRef = useRef(false)
   useEffect(() => {
     if (prevLoadingRef.current && !isLoading) {
       for (const rawMsg of streamData.messages) {
@@ -728,53 +715,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
     prevLoadingRef.current = isLoading
   }, [isLoading, streamData.messages, loadThreads, appendMessage])
-
-  useEffect(() => {
-    let cancelled = false
-    if (prevRunLoadingRef.current && !isLoading) {
-      window.api.workspace.getGitPanelState(threadId).then((state) => {
-        if (cancelled) return
-        if (!state.success || !state.isWorktree || !state.files?.length) {
-          setRunDiffSummary(null)
-          setRunDiffError(null)
-          return
-        }
-        const files = state.files.map((f) => ({
-          path: f.path,
-          additions: f.additions,
-          deletions: f.deletions
-        }))
-        const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0)
-        const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0)
-        setRunDiffSummary({ files, totalAdditions, totalDeletions })
-        setRunDiffError(null)
-      }).catch(() => {
-        if (!cancelled) {
-          setRunDiffSummary(null)
-        }
-      })
-    }
-    prevRunLoadingRef.current = isLoading
-    return () => { cancelled = true }
-  }, [isLoading, threadId])
-
-  const handleRevertRunDiff = useCallback(async (): Promise<void> => {
-    if (!runDiffSummary || revertingRunDiff) return
-    setRevertingRunDiff(true)
-    setRunDiffError(null)
-    try {
-      const result = await window.api.workspace.rejectWorktreeChanges(threadId)
-      if (!result.success) {
-        setRunDiffError(result.error || "撤销失败")
-        return
-      }
-      setRunDiffSummary(null)
-    } catch (error) {
-      setRunDiffError(error instanceof Error ? error.message : "撤销失败")
-    } finally {
-      setRevertingRunDiff(false)
-    }
-  }, [runDiffSummary, revertingRunDiff, threadId])
 
   const displayMessages = useMemo(() => {
     const threadMessageIds = new Set(threadMessages.map((m) => m.id))
@@ -950,8 +890,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }
 
     const rawMessage = input.trim()
-    setRunDiffSummary(null)
-    setRunDiffError(null)
     const currentAttachments = attachments.length > 0 ? [...attachments] : undefined
     // If user only uploaded files without text, add a default prompt
     const userText = rawMessage || (currentAttachments ? "请分析以下文件内容。" : "")
@@ -1979,36 +1917,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   </span>
                 </div>
                 {todos.length > 0 && <ChatTodos todos={todos} />}
-              </div>
-            )}
-            {!isLoading && runDiffSummary && (
-              <div className="rounded-xl border border-border bg-background p-3 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-medium">本次修改</div>
-                  <button
-                    type="button"
-                    onClick={handleRevertRunDiff}
-                    disabled={revertingRunDiff}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {revertingRunDiff ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
-                    撤销本次修改
-                  </button>
-                </div>
-                <div className="space-y-1.5">
-                  {runDiffSummary.files.map((file) => (
-                    <div key={file.path} className="flex items-center justify-between gap-3 text-xs">
-                      <span className="font-mono truncate" title={file.path}>{file.path}</span>
-                      <span className="shrink-0 text-muted-foreground">+{file.additions} -{file.deletions}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  合计：+{runDiffSummary.totalAdditions} -{runDiffSummary.totalDeletions}
-                </div>
-                {runDiffError && (
-                  <div className="text-xs text-destructive">{runDiffError}</div>
-                )}
               </div>
             )}
             {/* Error state */}

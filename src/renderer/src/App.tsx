@@ -384,12 +384,12 @@ function App(): React.JSX.Element {
                         : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
                   }`}
                   onClick={selectGitModule}
-                  title="Git Panel"
-                  aria-label="Git Panel"
+                  title="Git 操作"
+                  aria-label="Git 操作"
                   aria-pressed={rightModule === "git"}
                 >
                   <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
-                  <span>Git Panel</span>
+                  <span>Git 操作</span>
                 </button>
                 <button
                   type="button"

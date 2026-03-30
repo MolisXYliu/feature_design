@@ -342,7 +342,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                   )}
 
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
-                    提交、推送和回滚请在右上角的 Git Panel 中操作。
+                    提交、推送和回滚请在右上角的 Git 操作里进行。
                   </p>
                 </div>
               )}

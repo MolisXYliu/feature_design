@@ -49,6 +49,14 @@ interface PushStepResult {
   detail: string
 }
 
+function notifyWorkspaceFilesChanged(threadId: string, workspacePath: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send("workspace:files-changed", { threadId, workspacePath })
+    }
+  }
+}
+
 function normalizeTrackedPath(input: string): string {
   return String(input || "").trim().replace(/^"(.*)"$/, "$1").replace(/\\/g, "/")
 }
@@ -192,6 +200,41 @@ function isMissingRemoteBranchError(error: unknown): boolean {
     text.includes("couldn't find remote branch")
 }
 
+async function getUnmergedFiles(worktreePath: string): Promise<string[]> {
+  const out = await runGit(worktreePath, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "")
+  return out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+async function getFilesWithConflictMarkers(
+  worktreePath: string,
+  files: string[]
+): Promise<string[]> {
+  const relSet = new Set<string>()
+  for (const file of files) {
+    for (const rel of toWorktreeRelativePath(worktreePath, file)) {
+      relSet.add(rel)
+    }
+  }
+  const relFiles = Array.from(relSet)
+  if (relFiles.length === 0) return []
+  const out = await runGit(
+    worktreePath,
+    ["grep", "-n", "-E", "^(<<<<<<<|=======|>>>>>>>)", "--", ...relFiles]
+  ).catch(() => "")
+  const matched = new Set<string>()
+  for (const line of out.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const idx = trimmed.indexOf(":")
+    if (idx <= 0) continue
+    matched.add(trimmed.slice(0, idx))
+  }
+  return Array.from(matched)
+}
+
 async function resolveThreadWorkspaceContext(threadId: string): Promise<{
   metadata: Record<string, unknown>
   workspacePath: string | null
@@ -269,6 +312,15 @@ async function applyFileSnapshot(worktreePath: string, relPath: string, snapshot
 
 function getTrackedLlmFiles(metadata: Record<string, unknown>): string[] {
   const raw = metadata.llmModifiedFiles
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => normalizeTrackedPath(item))
+    .filter(Boolean)
+}
+
+function getRecentlyRevertedFiles(metadata: Record<string, unknown>): string[] {
+  const raw = metadata.llmRecentlyRevertedFiles
   if (!Array.isArray(raw)) return []
   return raw
     .filter((item): item is string => typeof item === "string")
@@ -950,6 +1002,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       if (baseCommit) metadata.worktreeBaseCommit = baseCommit
       metadata.llmModifiedFiles = []
       metadata.llmFileHistory = {}
+      metadata.llmRecentlyRevertedFiles = []
       updateThread(threadId, { metadata: JSON.stringify(metadata) })
     }
   )
@@ -968,6 +1021,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     delete metadata.worktreeBaseCommit
     delete metadata.llmModifiedFiles
     delete metadata.llmFileHistory
+    delete metadata.llmRecentlyRevertedFiles
     updateThread(threadId, { metadata: JSON.stringify(metadata) })
   })
 
@@ -981,10 +1035,19 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { metadata = {} }
       const workspacePath = typeof metadata.workspacePath === "string" ? metadata.workspacePath : null
       const existing = new Set(getTrackedLlmFiles(metadata))
+      const revertedSet = new Set(getRecentlyRevertedFiles(metadata))
       const fileHistory = getFileHistoryMap(metadata)
       for (const file of files || []) {
         const normalized = normalizeTrackedPath(file)
-        if (normalized) existing.add(normalized)
+        if (normalized) {
+          existing.add(normalized)
+          if (workspacePath) {
+            for (const rel of toWorktreeRelativePath(workspacePath, normalized)) {
+              revertedSet.delete(rel)
+            }
+          }
+          revertedSet.delete(normalized)
+        }
         if (!workspacePath) continue
         const relCandidates = toWorktreeRelativePath(workspacePath, normalized)
         for (const relPath of relCandidates) {
@@ -998,6 +1061,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
       metadata.llmModifiedFiles = Array.from(existing)
       metadata.llmFileHistory = fileHistory
+      metadata.llmRecentlyRevertedFiles = Array.from(revertedSet)
       updateThread(threadId, { metadata: JSON.stringify(metadata) })
       return { success: true, files: Array.from(existing) }
     }
@@ -1108,8 +1172,10 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { metadata = {} }
           metadata.llmModifiedFiles = []
           metadata.llmFileHistory = {}
+          metadata.llmRecentlyRevertedFiles = []
           updateThread(threadId, { metadata: JSON.stringify(metadata) })
         }
+        notifyWorkspaceFilesChanged(threadId, worktreePath)
         return { success: true }
       } catch (e) {
         return { success: false, error: e instanceof Error ? e.message : "提交失败" }
@@ -1146,35 +1212,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         const branch =
           context.worktreeBranch || (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
 
-        // Step 1: Pull first (always).
-        try {
-          await runGit(worktreePath, ["pull", "--rebase", "--autostash", "origin", branch])
-          steps.push({ step: "pull", status: "ok", detail: `pull --rebase origin ${branch} 成功` })
-        } catch (pullError) {
-          if (isMissingRemoteBranchError(pullError)) {
-            steps.push({ step: "pull", status: "skipped", detail: `远端不存在分支 ${branch}，将直接 push 创建` })
-          } else {
-            const detail = getExecErrorText(pullError)
-            if (isRebaseConflictError(pullError)) {
-              steps.push({ step: "pull", status: "failed", detail: "pull --rebase 发生冲突，请先手动解决冲突" })
-              steps.push({ step: "final", status: "failed", detail: "流程中断：pull 冲突" })
-              return {
-                success: false,
-                error: "远端分支同步时发生冲突，请先解决冲突后再 Push。",
-                steps
-              }
-            }
-            steps.push({ step: "pull", status: "failed", detail: detail || "pull 失败" })
-            steps.push({ step: "final", status: "failed", detail: "流程中断：pull 失败" })
-            return {
-              success: false,
-              error: `Pull 失败：${detail || "unknown error"}`,
-              steps
-            }
-          }
-        }
-
-        // Step 2: Auto-commit only pending tracked changes.
+        // Step 1: Auto-commit pending tracked changes first.
+        // This prevents `pull --rebase --autostash` style stash replay conflicts
+        // that can inject conflict markers into files.
         const tracked = getTrackedLlmFiles(context.metadata)
         if (tracked.length > 0) {
           const pending = await buildGitPanelState(worktreePath, tracked)
@@ -1198,6 +1238,68 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           }
         } else {
           steps.push({ step: "commit", status: "skipped", detail: "无 LLM 追踪文件，跳过自动提交" })
+        }
+
+        // Step 2: Pull before push (clean working tree, no autostash).
+        try {
+          await runGit(worktreePath, ["pull", "--rebase", "origin", branch])
+          steps.push({ step: "pull", status: "ok", detail: `pull --rebase origin ${branch} 成功` })
+        } catch (pullError) {
+          if (isMissingRemoteBranchError(pullError)) {
+            steps.push({ step: "pull", status: "skipped", detail: `远端不存在分支 ${branch}，将直接 push 创建` })
+          } else {
+            try {
+              await runGit(worktreePath, ["rebase", "--abort"])
+            } catch {
+              // ignore abort failure; keep original pull error details
+            }
+            const detail = getExecErrorText(pullError)
+            if (isRebaseConflictError(pullError)) {
+              steps.push({ step: "pull", status: "failed", detail: "pull --rebase 发生冲突，已自动执行 rebase --abort" })
+              steps.push({ step: "final", status: "failed", detail: "流程中断：pull 冲突" })
+              return {
+                success: false,
+                error: "远端分支同步时发生冲突，已自动回滚 rebase，请先解决冲突后再 Push。",
+                steps
+              }
+            }
+            steps.push({ step: "pull", status: "failed", detail: detail || "pull 失败" })
+            steps.push({ step: "final", status: "failed", detail: "流程中断：pull 失败" })
+            return {
+              success: false,
+              error: `Pull 失败：${detail || "unknown error"}`,
+              steps
+            }
+          }
+        }
+
+        const unmerged = await getUnmergedFiles(worktreePath)
+        if (unmerged.length > 0) {
+          steps.push({
+            step: "pull",
+            status: "failed",
+            detail: `检测到未解决冲突文件：${unmerged.slice(0, 3).join(", ")}${unmerged.length > 3 ? "..." : ""}`
+          })
+          steps.push({ step: "final", status: "failed", detail: "流程中断：存在未解决冲突" })
+          return {
+            success: false,
+            error: "存在未解决的 Git 冲突，请先解决后再 Push。",
+            steps
+          }
+        }
+
+        const markerFiles = await getFilesWithConflictMarkers(worktreePath, tracked)
+        if (markerFiles.length > 0) {
+          steps.push({
+            step: "final",
+            status: "failed",
+            detail: `检测到冲突标记（<<<<<<< / ======= / >>>>>>>）：${markerFiles.slice(0, 3).join(", ")}${markerFiles.length > 3 ? "..." : ""}`
+          })
+          return {
+            success: false,
+            error: "检测到代码中仍有 Git 冲突标记，请先处理后再 Push。",
+            steps
+          }
         }
 
         // Step 3: Push
@@ -1251,11 +1353,13 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { metadata = {} }
             metadata.llmModifiedFiles = []
             metadata.llmFileHistory = {}
+            metadata.llmRecentlyRevertedFiles = []
             updateThread(threadId, { metadata: JSON.stringify(metadata) })
           }
         }
 
         steps.push({ step: "final", status: "ok", detail: autoCommitted ? "自动提交并推送成功" : "推送成功" })
+        notifyWorkspaceFilesChanged(threadId, worktreePath)
         return { success: true, autoCommitted, steps }
       } catch (e) {
         const detail = getExecErrorText(e)
@@ -1276,19 +1380,51 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       if (!worktreePath || !context.isWorktree) {
         return { success: false, error: "当前任务不在 worktree 中" }
       }
-      const target = context.worktreeBaseCommit || "HEAD"
-      await runGit(worktreePath, ["reset", "--hard", target])
-      await runGit(worktreePath, ["clean", "-fd"])
+      const tracked = getTrackedLlmFiles(context.metadata)
+      const historyMap = getFileHistoryMap(context.metadata)
+
+      const targetPathSet = new Set<string>()
+      for (const item of tracked) {
+        for (const rel of toWorktreeRelativePath(worktreePath, item)) {
+          targetPathSet.add(rel)
+        }
+      }
+      const targetPaths = Array.from(targetPathSet)
+
+      for (const targetPath of targetPaths) {
+        const fileHistory = historyMap[targetPath] || []
+        if (fileHistory.length >= 2) {
+          const previous = fileHistory[fileHistory.length - 2]
+          await applyFileSnapshot(worktreePath, targetPath, previous)
+          fileHistory.pop()
+          historyMap[targetPath] = fileHistory
+          continue
+        }
+
+        try {
+          await runGit(worktreePath, ["restore", "--source", "HEAD", "--staged", "--worktree", "--", targetPath])
+        } catch (error) {
+          if (!isPathspecNoMatchError(error)) {
+            throw error
+          }
+        }
+        await runGit(worktreePath, ["clean", "-f", "--", targetPath]).catch(() => {})
+      }
+
+      const postState = await buildGitPanelState(worktreePath, tracked)
 
       const { getThread, updateThread } = await import("../db")
       const thread = getThread(threadId)
       if (thread) {
         let metadata: Record<string, unknown> = {}
         try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { metadata = {} }
-        metadata.llmModifiedFiles = []
-        metadata.llmFileHistory = {}
+        metadata.llmModifiedFiles = postState.changedFiles
+        metadata.llmFileHistory = historyMap
+        metadata.llmRecentlyRevertedFiles = []
         updateThread(threadId, { metadata: JSON.stringify(metadata) })
       }
+
+      notifyWorkspaceFilesChanged(threadId, worktreePath)
 
       return { success: true }
     } catch (e) {
@@ -1323,7 +1459,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           fileHistory.pop()
           historyMap[targetPath] = fileHistory
         } else {
-          const target = context.worktreeBaseCommit || "HEAD"
+          // No in-memory edit history: fallback to current committed version on this branch.
+          // This should be HEAD (latest local commit), not the original worktree base commit.
+          const target = "HEAD"
           try {
             await runGit(worktreePath, ["restore", "--source", target, "--staged", "--worktree", "--", targetPath])
           } catch (error) {
@@ -1343,9 +1481,13 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           try { metadata = thread.metadata ? JSON.parse(thread.metadata) : {} } catch { metadata = {} }
           metadata.llmModifiedFiles = postState.changedFiles
           metadata.llmFileHistory = historyMap
+          const reverted = new Set(getRecentlyRevertedFiles(metadata))
+          reverted.add(targetPath)
+          metadata.llmRecentlyRevertedFiles = Array.from(reverted)
           updateThread(threadId, { metadata: JSON.stringify(metadata) })
         }
 
+        notifyWorkspaceFilesChanged(threadId, worktreePath)
         return { success: true }
       } catch (e) {
         return { success: false, error: getExecErrorText(e) || (e instanceof Error ? e.message : "文件回滚失败") }
