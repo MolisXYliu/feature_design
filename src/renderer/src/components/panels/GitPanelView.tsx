@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
+import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 import { GitSubmitDialog } from "./GitSubmitDialog"
 
@@ -33,6 +34,7 @@ export function GitPanelView({
     files: Array<{ path: string; diff: string; additions: number; deletions: number }>
     totals: { additions: number; deletions: number; fileCount: number }
     hasPendingDiff: boolean
+    hasPushableCommit: boolean
     worktreeBranch?: string | null
     suggestedCommitMessage?: string
     error?: string
@@ -195,16 +197,31 @@ export function GitPanelView({
   )
 
   const hasPending = Boolean(state?.hasPendingDiff)
+  const hasPushableCommit = Boolean(state?.hasPushableCommit)
   const hasWorktree = Boolean(state?.isWorktree)
+  const canShowSubmit = hasWorktree && (hasPending || hasPushableCommit)
+  const workspaceName = workspacePath
+    ? workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath
+    : "未关联路径"
+  const headerMeta = `${workspaceName} • ${state?.totals.fileCount ?? 0} files, +${state?.totals.additions ?? 0} / -${state?.totals.deletions ?? 0}`
+  const branchName = state?.worktreeBranch || "-"
 
   return (
     <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
         <div className="min-w-0">
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
-          <div className="text-[10px] text-muted-foreground truncate">task_id: {threadId || "-"}</div>
+          <div className="flex items-center gap-1 min-w-0">
+            <div className="text-[10px] text-muted-foreground truncate">{headerMeta}</div>
+            <Badge variant="outline" className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1">
+              <GitBranch className="size-2.5" />
+              <span className="max-w-[140px] truncate" title={branchName}>
+                {branchName}
+              </span>
+            </Badge>
+          </div>
         </div>
-        {hasWorktree && (
+        {canShowSubmit && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => setSubmitAction(hasPending ? "commit" : "push")}
@@ -245,13 +262,6 @@ export function GitPanelView({
         )}
         {!loading && state?.isWorktree && (
           <>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{workspacePath || "未关联路径"}</span>
-              <span>•</span>
-              <span>
-                {state.totals.fileCount} files, +{state.totals.additions} / -{state.totals.deletions}
-              </span>
-            </div>
             {state.files.length === 0 ? (
               <div className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
                 当前没有待审批的 LLM 改动。

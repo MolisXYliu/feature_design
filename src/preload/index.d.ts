@@ -188,6 +188,7 @@ interface CustomAPI {
       files: Array<{ path: string; diff: string; additions: number; deletions: number }>
       totals: { additions: number; deletions: number; fileCount: number }
       hasPendingDiff: boolean
+      hasPushableCommit: boolean
       trackedFiles?: string[]
       worktreeBranch?: string | null
       suggestedCommitMessage?: string

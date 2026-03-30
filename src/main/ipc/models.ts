@@ -200,6 +200,29 @@ function parseRemoteHead(lsRemoteOutput: string, branch: string): string | null 
   return null
 }
 
+async function hasPushableCommits(
+  worktreePath: string,
+  branch: string,
+  baseCommit: string | null
+): Promise<boolean> {
+  const remoteRef = `refs/remotes/origin/${branch}`
+  try {
+    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef])
+    const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${remoteRef}..HEAD`])).trim()
+    const ahead = Number.parseInt(aheadRaw, 10)
+    return Number.isFinite(ahead) && ahead > 0
+  } catch {
+    if (!baseCommit) return false
+    try {
+      const sinceBaseRaw = (await runGit(worktreePath, ["rev-list", "--count", `${baseCommit}..HEAD`])).trim()
+      const sinceBase = Number.parseInt(sinceBaseRaw, 10)
+      return Number.isFinite(sinceBase) && sinceBase > 0
+    } catch {
+      return false
+    }
+  }
+}
+
 function isPathspecNoMatchError(error: unknown): boolean {
   return getExecErrorText(error).toLowerCase().includes("pathspec")
 }
@@ -1091,6 +1114,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           files: [],
           totals: { additions: 0, deletions: 0, fileCount: 0 },
           hasPendingDiff: false,
+          hasPushableCommit: false,
           error: "未配置工作区"
         }
       }
@@ -1102,12 +1126,24 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           files: [],
           totals: { additions: 0, deletions: 0, fileCount: 0 },
           hasPendingDiff: false,
+          hasPushableCommit: false,
           error: "当前任务未使用 worktree，无法打开 Git Panel"
         }
       }
 
       const tracked = getTrackedLlmFiles(context.metadata)
       const state = await buildGitPanelState(context.workspacePath, tracked)
+      let worktreeBranch = context.worktreeBranch
+      if (!worktreeBranch) {
+        try {
+          worktreeBranch = (await runGit(context.workspacePath, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
+        } catch {
+          worktreeBranch = null
+        }
+      }
+      const hasPushableCommit = worktreeBranch
+        ? await hasPushableCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit)
+        : false
       return {
         success: true,
         isWorktree: true,
@@ -1115,8 +1151,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         files: state.files,
         totals: state.totals,
         hasPendingDiff: state.files.length > 0,
+        hasPushableCommit,
         trackedFiles: tracked,
-        worktreeBranch: context.worktreeBranch,
+        worktreeBranch,
         suggestedCommitMessage:
           state.files.length > 0
             ? `feat(task:${threadId.slice(0, 8)}): update ${state.files.length} llm-modified file(s)`
@@ -1130,6 +1167,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         files: [],
         totals: { additions: 0, deletions: 0, fileCount: 0 },
         hasPendingDiff: false,
+        hasPushableCommit: false,
         error: e instanceof Error ? e.message : "加载 Git Panel 失败"
       }
     }
