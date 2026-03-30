@@ -276,9 +276,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
         const list = configs.map((c) => ({ id: c.id, name: c.name, model: c.model }))
         setModels(list)
         const valid = list.some((m) => m.id === selectedModelId)
-        if (list.length > 0 && !valid) {
-          setSelectedModelId(list[0].id)
-          return list[0].id
+        if (!valid) {
+          const fallback = list.length > 0 ? list[0].id : ""
+          setSelectedModelId(fallback)
+          return fallback
         }
         return selectedModelId
       }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
