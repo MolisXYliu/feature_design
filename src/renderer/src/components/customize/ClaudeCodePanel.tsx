@@ -387,6 +387,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         if (cancelled || !mounted) {
           // 挂载失败：清理空会话
           if (!mounted && !cancelled) {
+            session.domCleanups.forEach((fn) => fn())
             session.xterm.dispose()
             session.container.remove()
             sessionsRef.current.delete(id)
@@ -473,7 +474,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       for (const session of sessionsRef.current.values()) {
         session.ptyCleanups.forEach((fn) => fn())
         session.domCleanups.forEach((fn) => fn())
-        if (session.termId) window.api.terminal.dispose(session.termId)
+        if (session.termId) window.api.terminal.dispose(session.termId).catch((e) => console.warn("[ClaudeCode] dispose failed in unmount", e))
         session.xterm.dispose()
         session.container.remove()
       }
@@ -530,6 +531,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       if (!activeSession.hasContent) {
         activeSession.hasContent = true
         releaseCreatingState(activeSession)
+        setSessionIds((prev) => [...prev]) // 立即关闭 loading 遮罩，不等 await dispose
       }
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
       try { await window.api.terminal.dispose(termId) }
