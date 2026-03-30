@@ -206,9 +206,9 @@ function MarketItemCard({
               )}
               {isInstalled && !isFeatured && (
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-7 w-auto px-2 gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                  className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
                   onClick={handleUninstall}
                   title="卸载"
                 >
@@ -217,7 +217,7 @@ function MarketItemCard({
                 </Button>
               )}
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={handleLocalDownload}
@@ -230,7 +230,7 @@ function MarketItemCard({
           {(item.canDelete || (item.ip && ip && item.ip === ip)) && (
             <>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onUpdate(item)}
@@ -240,9 +240,9 @@ function MarketItemCard({
                 编辑
               </Button>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                className="h-7 w-auto px-2 gap-1 cursor-pointer"
+                className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
                 onClick={() => onDelete(item)}
                 title="删除"
               >
@@ -1177,19 +1177,7 @@ export function MarketPanel(): React.JSX.Element {
         <ScrollArea className="flex-1">
           <div className="p-5">
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
-              <div className="space-y-2 xl:order-1 order-2">
-                <h3 className="font-medium text-sm text-foreground/90">
-                  文件详情
-                  <span className="text-xs text-muted-foreground ml-2">
-                    {activeTab === "skill"
-                      ? "(skill: .zip / .md)"
-                      : activeTab === "plugin"
-                        ? "(plugin: .zip)"
-                        : "(mcp: .json)"}
-                  </span>
-                </h3>
-                {renderDetailFilePanel()}
-              </div>
+              <div className="space-y-2 xl:order-1 order-2">{renderDetailFilePanel()}</div>
 
               <div className="xl:order-2 order-1 space-y-3 xl:sticky xl:top-4 shadow">
                 <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 space-y-3">
@@ -1268,9 +1256,9 @@ export function MarketPanel(): React.JSX.Element {
                     )}
                     {selectedItem.installed && selectedItem.featured !== "精品" && (
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-8 gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
+                        className="h-8 gap-1.5 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
                         onClick={() => handleUninstall(selectedItem)}
                       >
                         <Trash2 className="size-3" />
@@ -1278,7 +1266,7 @@ export function MarketPanel(): React.JSX.Element {
                       </Button>
                     )}
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
                       className="h-8 gap-1.5"
                       onClick={() => handleDownload(selectedItem, true)}
@@ -1293,7 +1281,7 @@ export function MarketPanel(): React.JSX.Element {
                         selectedItem.ip === localStorage.getItem("localIp"))) && (
                       <>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
                           className="h-8 gap-1.5"
                           onClick={() => handleUpdate(selectedItem)}
@@ -1302,9 +1290,9 @@ export function MarketPanel(): React.JSX.Element {
                           编辑
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="h-8 gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          className="h-8 gap-1.5 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
                           onClick={() => handleDelete(selectedItem)}
                         >
                           <Trash2 className="size-3" />
