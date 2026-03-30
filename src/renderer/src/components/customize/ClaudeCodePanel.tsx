@@ -314,6 +314,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     } catch (err) {
       console.error("[ClaudeCode] Failed to initialize session:", err)
       setCreating(false)
+      setMountError(`启动失败: ${err instanceof Error ? err.message : err}`)
       return
     }
     if (!dir) { setCreating(false); return } // session 未创建，无 ownsCreatingState，直接重置
@@ -423,7 +424,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     releaseCreatingState(session)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
-    if (session.termId) await window.api.terminal.dispose(session.termId)
+    if (session.termId) try { await window.api.terminal.dispose(session.termId) } catch { /* IPC 失败忽略 */ }
     session.xterm.dispose()
     session.container.remove()
     sessionsRef.current.delete(id)
@@ -503,7 +504,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         releaseCreatingState(activeSession)
       }
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
-      await window.api.terminal.dispose(termId)
+      try { await window.api.terminal.dispose(termId) } catch { /* IPC 失败忽略 */ }
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
     }
