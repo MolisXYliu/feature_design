@@ -956,10 +956,7 @@ The workspace root is: ${workspacePath}`
             mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: {
               ...c.advanced,
               headers:{
-                ...c.advanced?.headers,
-                "yst_id_token": userInfo?.ystAccessToken || '',
-                "sap_id": userInfo?.sapId || '',
-                "name": encodeURIComponent(userInfo?.userName || '')
+                ...c.advanced?.headers
               }
             } })
           }
