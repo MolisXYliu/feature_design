@@ -169,6 +169,10 @@ async function runGit(worktreePath: string, args: string[]): Promise<string> {
   }
 }
 
+function logGitStep(threadId: string, action: string, detail: string): void {
+  console.log(`[GitPanel][${threadId}][${action}] ${detail}`)
+}
+
 function parseRemoteHead(lsRemoteOutput: string, branch: string): string | null {
   const target = `refs/heads/${branch}`
   for (const line of lsRemoteOutput.split("\n")) {
@@ -1149,21 +1153,27 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       { threadId, message }: { threadId: string; message: string }
     ) => {
       try {
+        logGitStep(threadId, "commit", "开始提交")
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
         if (!worktreePath || !context.isWorktree) {
+          logGitStep(threadId, "commit", "失败：当前任务不在 worktree 中")
           return { success: false, error: "当前任务不在 worktree 中" }
         }
         const tracked = getTrackedLlmFiles(context.metadata)
         if (tracked.length === 0) {
+          logGitStep(threadId, "commit", "失败：没有可提交的 LLM 改动文件")
           return { success: false, error: "没有可提交的 LLM 改动文件" }
         }
         const state = await buildGitPanelState(worktreePath, tracked)
         if (state.changedFiles.length === 0) {
+          logGitStep(threadId, "commit", "失败：没有需要提交的改动")
           return { success: false, error: "没有需要提交的改动" }
         }
 
+        logGitStep(threadId, "commit", `add 文件数：${state.changedFiles.length}`)
         await runGit(worktreePath, ["add", "--", ...state.changedFiles])
+        logGitStep(threadId, "commit", `commit message: ${message}`)
         await runGit(worktreePath, ["commit", "-m", message])
         const { getThread, updateThread } = await import("../db")
         const thread = getThread(threadId)
@@ -1176,8 +1186,10 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           updateThread(threadId, { metadata: JSON.stringify(metadata) })
         }
         notifyWorkspaceFilesChanged(threadId, worktreePath)
+        logGitStep(threadId, "commit", "提交成功")
         return { success: true }
       } catch (e) {
+        logGitStep(threadId, "commit", `异常：${getExecErrorText(e) || (e instanceof Error ? e.message : "提交失败")}`)
         return { success: false, error: e instanceof Error ? e.message : "提交失败" }
       }
     }
@@ -1186,6 +1198,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(
     "workspace:pushWorktree",
     async (_event, { threadId, message }: { threadId: string; message?: string }) => {
+      logGitStep(threadId, "push", "开始推送流程")
       let autoCommitted = false
       let autoCommitHead: string | null = null
       const steps: PushStepResult[] = []
@@ -1193,6 +1206,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
         if (!worktreePath || !context.isWorktree) {
+          logGitStep(threadId, "push", "失败：当前任务不在 worktree 中")
           steps.push({ step: "final", status: "failed", detail: "当前任务不在 worktree 中" })
           return { success: false, error: "当前任务不在 worktree 中", steps }
         }
@@ -1222,6 +1236,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             const commitMessage = (message || "").trim() ||
               `chore(task:${threadId.slice(0, 8)}): auto commit before push`
             try {
+              logGitStep(threadId, "push", `自动提交 message: ${commitMessage}`)
               await runGit(worktreePath, ["add", "--", ...pending.changedFiles])
               await runGit(worktreePath, ["commit", "-m", commitMessage])
               autoCommitted = true
@@ -1242,6 +1257,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
         // Step 2: Pull before push (clean working tree, no autostash).
         try {
+          logGitStep(threadId, "push", `执行 pull --rebase origin ${branch}`)
           await runGit(worktreePath, ["pull", "--rebase", "origin", branch])
           steps.push({ step: "pull", status: "ok", detail: `pull --rebase origin ${branch} 成功` })
         } catch (pullError) {
@@ -1304,6 +1320,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
         // Step 3: Push
         try {
+          logGitStep(threadId, "push", `执行 push origin ${branch}`)
           await runGit(worktreePath, ["push", "-u", "origin", branch])
           steps.push({ step: "push", status: "ok", detail: `push origin ${branch} 成功` })
         } catch (pushError) {
@@ -1360,9 +1377,11 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
         steps.push({ step: "final", status: "ok", detail: autoCommitted ? "自动提交并推送成功" : "推送成功" })
         notifyWorkspaceFilesChanged(threadId, worktreePath)
+        logGitStep(threadId, "push", "推送流程成功")
         return { success: true, autoCommitted, steps }
       } catch (e) {
         const detail = getExecErrorText(e)
+        logGitStep(threadId, "push", `异常：${detail || (e instanceof Error ? e.message : "推送失败")}`)
         steps.push({ step: "final", status: "failed", detail: detail || "流程异常中断" })
         return {
           success: false,
@@ -1375,9 +1394,11 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle("workspace:rejectWorktreeChanges", async (_event, { threadId }: { threadId: string }) => {
     try {
+      logGitStep(threadId, "reject_all", "开始全部回退")
       const context = await resolveThreadWorkspaceContext(threadId)
       const worktreePath = context.workspacePath
       if (!worktreePath || !context.isWorktree) {
+        logGitStep(threadId, "reject_all", "失败：当前任务不在 worktree 中")
         return { success: false, error: "当前任务不在 worktree 中" }
       }
       const tracked = getTrackedLlmFiles(context.metadata)
@@ -1425,9 +1446,11 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
 
       notifyWorkspaceFilesChanged(threadId, worktreePath)
+      logGitStep(threadId, "reject_all", `完成，处理文件数：${targetPaths.length}`)
 
       return { success: true }
     } catch (e) {
+      logGitStep(threadId, "reject_all", `异常：${getExecErrorText(e) || (e instanceof Error ? e.message : "回滚失败")}`)
       return { success: false, error: e instanceof Error ? e.message : "回滚失败" }
     }
   })
@@ -1436,9 +1459,11 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     "workspace:rejectWorktreeFile",
     async (_event, { threadId, filePath }: { threadId: string; filePath: string }) => {
       try {
+        logGitStep(threadId, "reject_file", `开始回退文件：${filePath}`)
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
         if (!worktreePath || !context.isWorktree) {
+          logGitStep(threadId, "reject_file", "失败：当前任务不在 worktree 中")
           return { success: false, error: "当前任务不在 worktree 中" }
         }
 
@@ -1448,6 +1473,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         const targetPath = candidates.find((c) => tracked.some((t) => toWorktreeRelativePath(worktreePath, t).includes(c)))
           || candidates[0]
         if (!targetPath) {
+          logGitStep(threadId, "reject_file", "失败：无法解析待回退文件路径")
           return { success: false, error: "无法解析待回退文件路径" }
         }
 
@@ -1488,8 +1514,10 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         }
 
         notifyWorkspaceFilesChanged(threadId, worktreePath)
+        logGitStep(threadId, "reject_file", `回退成功：${targetPath}`)
         return { success: true }
       } catch (e) {
+        logGitStep(threadId, "reject_file", `异常：${getExecErrorText(e) || (e instanceof Error ? e.message : "文件回滚失败")}`)
         return { success: false, error: getExecErrorText(e) || (e instanceof Error ? e.message : "文件回滚失败") }
       }
     }

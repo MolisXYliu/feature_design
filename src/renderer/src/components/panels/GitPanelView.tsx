@@ -3,8 +3,6 @@ import {
   ChevronRight,
   ChevronDown,
   CheckCircle2,
-  Clock,
-  XCircle,
   Loader2,
   AlertCircle,
   RotateCcw,
@@ -20,24 +18,15 @@ export function GitPanelView({
   threadId: string
   workspacePath: string | null
 }): React.JSX.Element {
-  const AUTO_PUSH_SUCCESS_MESSAGE = "已自动提交并推送成功（代码已写入当前 worktree 目录）"
-
-  type PushStep = {
-    step: "pull" | "commit" | "push" | "verify" | "final"
-    status: "ok" | "failed" | "skipped"
-    detail: string
-  }
-
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<"commit" | "push" | "reject" | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [pushSteps, setPushSteps] = useState<PushStep[]>([])
+  const [toastText, setToastText] = useState<string | null>(null)
+  const [toastVariant, setToastVariant] = useState<"success" | "error">("success")
   const [cardNumber, setCardNumber] = useState("")
   const [commitMessage, setCommitMessage] = useState("")
   const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null)
   const [revertingFilePath, setRevertingFilePath] = useState<string | null>(null)
-  const prevHasPendingRef = useRef<boolean | null>(null)
   const [state, setState] = useState<{
     success: boolean
     isWorktree: boolean
@@ -49,6 +38,23 @@ export function GitPanelView({
     error?: string
   } | null>(null)
 
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showToast = useCallback((text: string, variant: "success" | "error" = "success"): void => {
+    setToastVariant(variant)
+    setToastText(text)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      setToastText(null)
+    }, 2200)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
+  }, [])
+
   const refresh = useCallback(async () => {
     if (!threadId) return
     setLoading(true)
@@ -59,11 +65,13 @@ export function GitPanelView({
         setCommitMessage((prev) => prev || next.suggestedCommitMessage || "")
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败")
+      const err = e instanceof Error ? e.message : "加载失败"
+      setError(err)
+      showToast(err, "error")
     } finally {
       setLoading(false)
     }
-  }, [threadId])
+  }, [threadId, showToast])
 
   useEffect(() => {
     refresh()
@@ -86,7 +94,6 @@ export function GitPanelView({
     const cleanup = window.api.workspace.onFilesChanged((data) => {
       if (data.threadId !== threadId) return
       if (refreshTimer) clearTimeout(refreshTimer)
-      // Coalesce rapid file watcher events from a single edit/save.
       refreshTimer = setTimeout(() => {
         refresh()
       }, 120)
@@ -102,48 +109,48 @@ export function GitPanelView({
       if (!threadId) return
       const formattedCommitMessage = `${cardNumber.trim()} #comment fix:${commitMessage.trim()} #CMBDevClaw`
       if ((action === "commit" || action === "push") && !cardNumber.trim()) {
-        setError("cardNumber 不能为空")
+        const err = "cardNumber 不能为空"
+        setError(err)
+        showToast(err, "error")
         return
       }
       if ((action === "commit" || action === "push") && !commitMessage.trim()) {
-        setError("commitMessage 不能为空")
+        const err = "commitMessage 不能为空"
+        setError(err)
+        showToast(err, "error")
         return
       }
+
       setRunning(action)
       setError(null)
-      setMessage(null)
-      setPushSteps([])
       try {
         if (action === "commit") {
           const result = await window.api.workspace.commitWorktree(threadId, formattedCommitMessage)
           if (!result.success) throw new Error(result.error || "提交失败")
-          setMessage("提交成功")
+          showToast("提交成功", "success")
           setCardNumber("")
           setCommitMessage("")
         } else if (action === "push") {
           const result = await window.api.workspace.pushWorktree(threadId, formattedCommitMessage)
-          setPushSteps(result.steps || [])
           if (!result.success) throw new Error(result.error || "推送失败")
-          setMessage(
-            result.autoCommitted
-              ? AUTO_PUSH_SUCCESS_MESSAGE
-              : "推送成功（代码位于当前 worktree 目录）"
-          )
+          showToast("推送成功", "success")
           setCardNumber("")
           setCommitMessage("")
         } else {
           const result = await window.api.workspace.rejectWorktreeChanges(threadId)
           if (!result.success) throw new Error(result.error || "回滚失败")
-          setMessage("已全部回退到上一版编辑内容")
+          showToast("已全部回退到上一版编辑内容", "success")
         }
         await refresh()
       } catch (e) {
-        setError(e instanceof Error ? e.message : "操作失败")
+        const err = e instanceof Error ? e.message : "操作失败"
+        setError(err)
+        showToast(err, "error")
       } finally {
         setRunning(null)
       }
     },
-    [threadId, cardNumber, commitMessage, refresh]
+    [threadId, cardNumber, commitMessage, refresh, showToast]
   )
 
   const handleRevertFile = useCallback(
@@ -151,45 +158,30 @@ export function GitPanelView({
       if (!threadId) return
       setRevertingFilePath(filePath)
       setError(null)
-      setMessage(null)
       try {
         const result = await window.api.workspace.rejectWorktreeFile(threadId, filePath)
         if (!result.success) throw new Error(result.error || "文件回退失败")
-        setMessage(`已回退文件：${filePath}`)
+        showToast(`已回退文件：${filePath}`, "success")
         await refresh()
       } catch (e) {
-        setError(e instanceof Error ? e.message : "文件回退失败")
+        const err = e instanceof Error ? e.message : "文件回退失败"
+        setError(err)
+        showToast(err, "error")
       } finally {
         setRevertingFilePath(null)
       }
     },
-    [threadId, refresh]
+    [threadId, refresh, showToast]
   )
 
   const hasPending = Boolean(state?.hasPendingDiff)
-
-  useEffect(() => {
-    const prev = prevHasPendingRef.current
-    prevHasPendingRef.current = hasPending
-    if (prev === null) return
-    // Only clear previous push result cards when diff re-appears after being clean.
-    if (!(prev === false && hasPending === true)) return
-    if (message === AUTO_PUSH_SUCCESS_MESSAGE) {
-      setMessage(null)
-    }
-    if (pushSteps.length > 0) {
-      setPushSteps([])
-    }
-  }, [hasPending, message, pushSteps.length])
 
   return (
     <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
         <div className="min-w-0">
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
-          <div className="text-[10px] text-muted-foreground truncate">
-            task_id: {threadId || "-"}
-          </div>
+          <div className="text-[10px] text-muted-foreground truncate">task_id: {threadId || "-"}</div>
         </div>
         <button
           onClick={() => runAction("reject")}
@@ -233,9 +225,7 @@ export function GitPanelView({
                   <div key={file.path} className="rounded-md border border-border/70 p-2 bg-background">
                     <button
                       type="button"
-                      onClick={() =>
-                        setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
-                      }
+                      onClick={() => setExpandedFilePath((prev) => (prev === file.path ? null : file.path))}
                       className="w-full flex items-center justify-between gap-2 text-xs"
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
@@ -286,30 +276,6 @@ export function GitPanelView({
       </div>
 
       <div className="border-t border-border/70 p-3 bg-background-elevated/50 space-y-2 shrink-0">
-        {message && (
-          <div className="text-xs text-status-nominal">{message}</div>
-        )}
-        {pushSteps.length > 0 && (
-          <div className="rounded-md border border-border/70 bg-background p-2 space-y-1">
-            {pushSteps.map((step, idx) => (
-              <div key={`${step.step}-${idx}`} className="flex items-start gap-2 text-xs">
-                {step.status === "ok" ? (
-                  <CheckCircle2 className="size-3.5 mt-0.5 shrink-0 text-status-nominal" />
-                ) : step.status === "failed" ? (
-                  <XCircle className="size-3.5 mt-0.5 shrink-0 text-destructive" />
-                ) : (
-                  <Clock className="size-3.5 mt-0.5 shrink-0 text-muted-foreground" />
-                )}
-                <div className="min-w-0">
-                  <div className="font-medium text-foreground">
-                    {step.step.toUpperCase()} · {step.status}
-                  </div>
-                  <div className="text-muted-foreground break-words">{step.detail}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
         <input
           value={cardNumber}
           onChange={(e) => setCardNumber(e.target.value)}
@@ -359,6 +325,21 @@ export function GitPanelView({
           </button>
         </div>
       </div>
+
+      {toastText && (
+        <div className="pointer-events-none fixed left-1/2 top-[10vh] z-[120] -translate-x-1/2">
+          <div
+            className={cn(
+              "rounded-md border px-4 py-2 text-sm shadow-lg backdrop-blur-sm",
+              toastVariant === "success"
+                ? "border-green-300/80 bg-green-50/95 text-green-700"
+                : "border-red-300/80 bg-red-50/95 text-red-700"
+            )}
+          >
+            {toastText}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
