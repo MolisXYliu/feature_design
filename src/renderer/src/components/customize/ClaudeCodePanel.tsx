@@ -424,7 +424,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
     releaseCreatingState(session)
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
-    if (session.termId) try { await window.api.terminal.dispose(session.termId) } catch { /* IPC 失败忽略 */ }
+    if (session.termId) {
+      try { await window.api.terminal.dispose(session.termId) }
+      catch { console.warn("[ClaudeCode] dispose failed in closeSession, continuing cleanup") }
+    }
     session.xterm.dispose()
     session.container.remove()
     sessionsRef.current.delete(id)
@@ -504,7 +507,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
         releaseCreatingState(activeSession)
       }
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
-      try { await window.api.terminal.dispose(termId) } catch { /* IPC 失败忽略 */ }
+      try { await window.api.terminal.dispose(termId) }
+      catch { console.warn("[ClaudeCode] dispose failed in handleStop, PTY may still be running") }
       activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
       setSessionIds((prev) => [...prev])
     }
