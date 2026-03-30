@@ -25,7 +25,7 @@ interface Session {
 
 let sessionCounter = 0
 const MAX_TRY_OPEN_ATTEMPTS = 100
-const PTY_STARTUP_TIMEOUT_MS = 15_000
+const PTY_STARTUP_TIMEOUT_MS = 15_000 // Claude Code CLI 冷启动约 8-10s，留有余量
 
 // 判断是否为打包环境
 const isPackaged = !window.location.hostname.includes("localhost")
