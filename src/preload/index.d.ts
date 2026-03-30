@@ -156,6 +156,20 @@ interface CustomAPI {
       modified_at?: string
       error?: string
     }>
+    readExternalFile: (filePath: string) => Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }>
+    readExternalBinaryFile: (filePath: string) => Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }>
     clearWorktreeContext: (threadId: string) => Promise<void>
     saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string) => Promise<void>
     isGit: (folderPath: string) => Promise<{
@@ -231,6 +245,10 @@ interface CustomAPI {
     setEnabled: (enabled: boolean) => Promise<void>
     getStats: () => Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }>
     onChanged: (callback: () => void) => () => void
+  }
+  keepAwake: {
+    get: () => Promise<boolean>
+    set: (enabled: boolean) => Promise<void>
   }
   scheduledTasks: {
     list: () => Promise<ScheduledTask[]>

@@ -307,6 +307,28 @@ const api = {
     }> => {
       return ipcRenderer.invoke("workspace:readBinaryFile", { threadId, filePath })
     },
+    readExternalFile: (
+      filePath: string
+    ): Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("workspace:readExternalFile", filePath)
+    },
+    readExternalBinaryFile: (
+      filePath: string
+    ): Promise<{
+      success: boolean
+      content?: string
+      size?: number
+      modified_at?: string
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("workspace:readExternalBinaryFile", filePath)
+    },
     clearWorktreeContext: (threadId: string): Promise<void> => {
       return ipcRenderer.invoke("workspace:clearWorktreeContext", threadId) as Promise<void>
     },
@@ -438,6 +460,10 @@ const api = {
       advanced?: McpConnectorConfig["advanced"]
     }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>
       ipcRenderer.invoke("mcp:testConnection", params)
+  },
+  keepAwake: {
+    get: (): Promise<boolean> => ipcRenderer.invoke("keepAwake:get"),
+    set: (enabled: boolean): Promise<void> => ipcRenderer.invoke("keepAwake:set", enabled)
   },
   scheduledTasks: {
     list: (): Promise<ScheduledTask[]> => ipcRenderer.invoke("scheduledTasks:list"),

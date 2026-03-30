@@ -1,4 +1,4 @@
-export type FileType = "image" | "video" | "audio" | "pdf" | "code" | "text" | "binary"
+export type FileType = "image" | "video" | "audio" | "pdf" | "doc" | "code" | "text" | "binary"
 
 interface FileTypeInfo {
   type: FileType
@@ -24,6 +24,7 @@ const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "ogg", "ogv", "mov", "avi", "wm
 const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "m4a", "flac", "aac", "weba"])
 
 const PDF_EXTENSIONS = new Set(["pdf"])
+const DOC_EXTENSIONS = new Set(["doc", "docx"])
 
 const CODE_EXTENSIONS = new Set([
   "ts",
@@ -123,6 +124,14 @@ export function getFileType(fileName: string): FileTypeInfo {
     }
   }
 
+  if (DOC_EXTENSIONS.has(ext)) {
+    return {
+      type: "doc",
+      mimeType: getMimeType(ext),
+      canPreview: true
+    }
+  }
+
   if (CODE_EXTENSIONS.has(ext)) {
     return {
       type: "code",
@@ -178,7 +187,11 @@ function getMimeType(ext: string): string {
     weba: "audio/webm",
 
     // PDF
-    pdf: "application/pdf"
+    pdf: "application/pdf",
+
+    // Office docs
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
   }
 
   return mimeTypes[ext] || "application/octet-stream"
@@ -187,6 +200,6 @@ function getMimeType(ext: string): string {
 export function isBinaryFile(fileName: string): boolean {
   const { type } = getFileType(fileName)
   return (
-    type === "image" || type === "video" || type === "audio" || type === "pdf" || type === "binary"
+    type === "image" || type === "video" || type === "audio" || type === "pdf" || type === "doc" || type === "binary"
   )
 }
