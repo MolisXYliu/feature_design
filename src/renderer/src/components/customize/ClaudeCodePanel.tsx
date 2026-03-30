@@ -218,7 +218,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
   const startPty = useCallback(async (session: Session) => {
     if (session.termId) {
-      await window.api.terminal.dispose(session.termId)
+      try { await window.api.terminal.dispose(session.termId) }
+      catch { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY") }
       session.termId = null
     }
     // #1 #2 fix: 只清理 PTY 相关的 cleanup，保留 DOM 级别的
