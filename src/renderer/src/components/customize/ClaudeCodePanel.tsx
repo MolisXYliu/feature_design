@@ -508,11 +508,14 @@ export function ClaudeCodePanel(): React.JSX.Element {
       activeSession.xterm.clear()
       await startPty(activeSession)
     } catch (err) {
-      activeSession.running = false
-      activeSession.termId = null
-      activeSession.hasContent = true // 关闭 loading 遮罩，让用户看到错误信息
-      activeSession.xterm.write(`\r\n\x1b[31m[重启失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
-      setSessionIds((prev) => [...prev]) // 刷新 UI 显示重启按钮
+      // await 期间 session 可能已被 closeSession 销毁
+      if (sessionsRef.current.has(activeSession.id)) {
+        activeSession.running = false
+        activeSession.termId = null
+        activeSession.hasContent = true
+        activeSession.xterm.write(`\r\n\x1b[31m[重启失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
+        setSessionIds((prev) => [...prev])
+      }
     } finally {
       restartingRef.current = false
     }
