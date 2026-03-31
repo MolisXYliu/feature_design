@@ -81,10 +81,12 @@ export function fetchLatestJson(baseUrl: string): Promise<LatestJson> {
   const url = new URL(`${baseUrl}/download`)
   url.searchParams.set("file", "cmbdevclaw-latest.json")
   const urlStr = url.toString()
+  console.log("[Updater] Fetching:", urlStr)
 
   return new Promise((resolve, reject) => {
     const client = urlStr.startsWith("https") ? https : http
     const req = client.request(urlStr, { method: "POST", timeout: 10000 }, (res) => {
+      console.log("[Updater] Response status:", res.statusCode)
       if (res.statusCode !== 200) {
         reject(new Error(`HTTP ${res.statusCode} fetching latest.json`))
         res.resume()
@@ -94,6 +96,7 @@ export function fetchLatestJson(baseUrl: string): Promise<LatestJson> {
       let data = ""
       res.on("data", (chunk: Buffer) => { data += chunk.toString() })
       res.on("end", () => {
+        console.log("[Updater] Response body:", data)
         try {
           const json = JSON.parse(data) as LatestJson
           resolve(json)

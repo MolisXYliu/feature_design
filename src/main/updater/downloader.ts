@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, unlinkSync, createReadStream, existsSync } from "fs"
+import { createWriteStream, mkdirSync, unlinkSync, createReadStream, existsSync, statSync } from "fs"
 import { createHash } from "crypto"
 import { createGunzip } from "zlib"
 import { pipeline } from "stream/promises"
@@ -125,7 +125,8 @@ export async function downloadUpdate(
   const updatesDir = getUpdatesDir()
   const isGz = fileName.endsWith(".gz")
   const downloadPath = join(updatesDir, fileName)
-  const finalPath = isGz ? join(updatesDir, "app.asar") : downloadPath
+  // Use .tmp suffix to avoid Electron ASAR interception (Electron treats .asar as read-only archives)
+  const finalPath = isGz ? join(updatesDir, "app-update.tmp") : downloadPath
 
   // Clean up any previous download
   try { unlinkSync(downloadPath) } catch { /* file may not exist */ }
@@ -143,10 +144,12 @@ export async function downloadUpdate(
   console.log("[Updater] SHA256 verified OK")
 
   if (isGz) {
-    console.log("[Updater] Decompressing...")
+    const gzSize = statSync(downloadPath).size
+    console.log("[Updater] Decompressing... gz size:", gzSize)
     await pipeline(createReadStream(downloadPath), createGunzip(), createWriteStream(finalPath))
+    const asarSize = statSync(finalPath).size
+    console.log("[Updater] Decompressed to", finalPath, "asar size:", asarSize)
     try { unlinkSync(downloadPath) } catch { /* ignore */ }
-    console.log("[Updater] Decompressed to", finalPath)
   }
 
   return finalPath

@@ -179,13 +179,9 @@ export function registerUpdaterHandlers(): void {
  * Waits 30s after startup, then checks every 30 minutes.
  */
 export function startUpdateChecker(): void {
-  initialCheckTimer = setTimeout(() => {
-    initialCheckTimer = null
-    performCheck(false)
-    checkInterval = setInterval(() => performCheck(false), CHECK_INTERVAL_MS)
-  }, INITIAL_DELAY_MS)
-
-  console.log("[Updater] Scheduled: first check in 30s, then every 30min")
+  // Check immediately on startup, no periodic polling
+  performCheck(false)
+  console.log("[Updater] Startup update check triggered")
 }
 
 /**
