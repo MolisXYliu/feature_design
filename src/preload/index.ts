@@ -404,6 +404,15 @@ const api = {
         Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
       >
     },
+    removeWorktree: (
+      gitRoot: string,
+      worktreePath: string
+    ): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:removeWorktree", {
+        gitRoot,
+        worktreePath
+      }) as Promise<{ success: boolean; error?: string }>
+    },
     createWorktree: (
       gitRoot: string,
       branch: string

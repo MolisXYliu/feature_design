@@ -4,7 +4,8 @@ import {
   ChevronDown,
   AlertCircle,
   RotateCcw,
-  GitBranch
+  GitBranch,
+  FolderOpen
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
@@ -14,10 +15,12 @@ import { GitSubmitDialog } from "./GitSubmitDialog"
 
 export function GitPanelView({
   threadId,
-  workspacePath
+  workspacePath,
+  onOpenFileFolder
 }: {
   threadId: string
   workspacePath: string | null
+  onOpenFileFolder?: (filePath: string) => void
 }): React.JSX.Element {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<"commit" | "push" | "reject" | null>(null)
@@ -289,6 +292,25 @@ export function GitPanelView({
                         </span>
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenFileFolder?.(file.path)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onOpenFileFolder?.(file.path)
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+                        >
+                          <FolderOpen className="size-3" />
+                          打开文件夹
+                        </span>
                         <span
                           role="button"
                           tabIndex={0}

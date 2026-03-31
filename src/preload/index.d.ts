@@ -209,6 +209,10 @@ interface CustomAPI {
     listWorktrees: (gitRoot: string) => Promise<
       Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
     >
+    removeWorktree: (gitRoot: string, worktreePath: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
     createWorktree: (gitRoot: string, branch: string) => Promise<{
       success: boolean
       path?: string

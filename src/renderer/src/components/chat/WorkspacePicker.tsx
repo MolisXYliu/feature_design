@@ -1,5 +1,15 @@
 import { selectWorkspaceFolder } from "@/lib/workspace-utils"
-import { Check, ChevronDown, Folder, GitBranch, Loader2, AlertCircle, Copy, CheckCheck } from "lucide-react"
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  GitBranch,
+  Loader2,
+  AlertCircle,
+  Copy,
+  CheckCheck,
+  Trash2
+} from "lucide-react"
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -12,6 +22,7 @@ interface WorkspacePickerProps {
 }
 
 type WorkspaceMode = "local" | "worktree"
+type WorktreeItem = { path: string; branch: string; isMain: boolean; createdAt?: Date }
 
 function PathRow({ label, path, highlight = false }: { label: string; path: string; highlight?: boolean }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
@@ -82,6 +93,21 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
   const [creatingWorktree, setCreatingWorktree] = useState(false)
   const [branchName, setBranchName] = useState("")
   const [worktreeError, setWorktreeError] = useState<string | null>(null)
+  const [worktreeList, setWorktreeList] = useState<WorktreeItem[]>([])
+  const [worktreeListLoading, setWorktreeListLoading] = useState(false)
+  const [removingWorktreePath, setRemovingWorktreePath] = useState<string | null>(null)
+
+  async function refreshWorktreeList(root: string): Promise<void> {
+    setWorktreeListLoading(true)
+    try {
+      const rows = await window.api.workspace.listWorktrees(root)
+      setWorktreeList(rows)
+    } catch {
+      setWorktreeList([])
+    } finally {
+      setWorktreeListLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -113,6 +139,11 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
         setIsGit(gitInfo.isGit)
         setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
         setIsWorktreePath(gitInfo.isWorktreePath)
+        if (gitInfo.isGit && gitInfo.gitRoot) {
+          await refreshWorktreeList(gitInfo.gitRoot)
+        } else {
+          setWorktreeList([])
+        }
 
         // Load worktree context from thread metadata
         const thread = await window.api.threads.get(threadId)
@@ -141,6 +172,11 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       setIsGit(gitInfo.isGit)
       setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
       setIsWorktreePath(gitInfo.isWorktreePath)
+      if (gitInfo.isGit && gitInfo.gitRoot) {
+        await refreshWorktreeList(gitInfo.gitRoot)
+      } else {
+        setWorktreeList([])
+      }
       setMode("local")
       setIsWorktree(false)
       setWorktreeBranch(null)
@@ -177,6 +213,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       if (diskResult.success && diskResult.files) setWorkspaceFiles(diskResult.files)
       setCreatingWorktree(false)
       setBranchName("")
+      await refreshWorktreeList(gitRoot)
       setOpen(false)
     } catch (e) {
       setWorktreeError(e instanceof Error ? e.message : "创建失败")
@@ -193,6 +230,28 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
     } else {
       setCreatingWorktree(false)
       setBranchName("")
+    }
+  }
+
+  async function handleRemoveWorktree(item: WorktreeItem): Promise<void> {
+    if (!gitRoot || item.isMain) return
+    if (workspacePath === item.path) {
+      setWorktreeError("当前正在使用该 Worktree，请先切换到其他路径后再删除。")
+      return
+    }
+    setRemovingWorktreePath(item.path)
+    setWorktreeError(null)
+    try {
+      const result = await window.api.workspace.removeWorktree(gitRoot, item.path)
+      if (!result.success) {
+        setWorktreeError(result.error ?? "删除失败")
+        return
+      }
+      await refreshWorktreeList(gitRoot)
+    } catch (e) {
+      setWorktreeError(e instanceof Error ? e.message : "删除失败")
+    } finally {
+      setRemovingWorktreePath(null)
     }
   }
 
@@ -344,6 +403,55 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     提交、推送和回滚请在右上角的 Git 操作里进行。
                   </p>
+                </div>
+              )}
+
+              {isGit && gitRoot && (isWorktree || mode === "worktree") && (
+                <div className="space-y-1.5">
+                  <div className="text-xs text-muted-foreground">Worktree 列表</div>
+                  <div className="max-h-40 overflow-auto rounded-md border border-border bg-background-secondary">
+                    {worktreeListLoading ? (
+                      <div className="h-16 flex items-center justify-center text-xs text-muted-foreground">
+                        <Loader2 className="size-3 mr-1.5 animate-spin" />
+                        加载中...
+                      </div>
+                    ) : worktreeList.length === 0 ? (
+                      <div className="h-16 flex items-center justify-center text-xs text-muted-foreground">
+                        暂无 Worktree
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border">
+                        {worktreeList.map((item) => (
+                          <div key={item.path} className="px-2 py-1.5 flex items-center gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[11px] truncate text-foreground">{item.branch}</div>
+                              <div className="text-[10px] truncate text-muted-foreground">{item.path}</div>
+                            </div>
+                            {item.isMain ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                main
+                              </span>
+                            ) : (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-destructive hover:text-destructive"
+                                onClick={() => handleRemoveWorktree(item)}
+                                disabled={removingWorktreePath === item.path}
+                              >
+                                {removingWorktreePath === item.path ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="size-3" />
+                                )}
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

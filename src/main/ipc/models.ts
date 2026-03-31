@@ -941,6 +941,23 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     }
   })
 
+  // Remove a worktree path from a git repo.
+  ipcMain.handle(
+    "workspace:removeWorktree",
+    async (_event, { gitRoot, worktreePath }: { gitRoot: string; worktreePath: string }) => {
+      try {
+        await runGit(gitRoot, ["worktree", "remove", "--force", worktreePath])
+        await runGit(gitRoot, ["worktree", "prune"]).catch(() => "")
+        return { success: true }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "删除 Worktree 失败"
+        }
+      }
+    }
+  )
+
   // Create a new worktree; enforces MAX_WORKTREES limit
   ipcMain.handle(
     "workspace:createWorktree",
