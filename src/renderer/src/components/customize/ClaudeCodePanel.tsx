@@ -64,6 +64,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const sessionsRef = useRef<Map<string, Session>>(new Map())
   const [sessionIds, setSessionIds] = useState<string[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const activeSessionIdRef = useRef<string | null>(null)
   const [models, setModels] = useState<Array<{ id: string; name: string; model: string }>>([])
   const [selectedModelId, setSelectedModelId] = useState<string>("")
   const [creating, setCreating] = useState(false)
@@ -305,9 +306,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
     session.ptyCleanups.push(() => clearTimeout(creatingTimeout))
   }, [fitTerminal, cleanupPty, releaseCreatingState])
 
-  const switchSession = useCallback((id: string) => {
+  // 同步更新 ref，让 async 函数中读到最新值
+  const updateActiveSessionId = useCallback((id: string | null) => {
+    activeSessionIdRef.current = id
     setActiveSessionId(id)
-    setMountError(null) // 切 tab 时清掉旧的错误横幅
+  }, [])
+
+  const switchSession = useCallback((id: string) => {
+    updateActiveSessionId(id)
+    setMountError(null)
     for (const s of sessionsRef.current.values()) {
       s.container.style.display = s.id === id ? "" : "none"
     }
@@ -375,7 +382,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     sessionsRef.current.set(id, session)
     setSessionIds((prev) => [...prev, id])
-    setActiveSessionId(id)
+    updateActiveSessionId(id)
 
     // P3 fix: 用 cancelled flag 防止组件卸载后仍创建 PTY
     let cancelled = false
@@ -398,7 +405,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
           if (remaining.length > 0) {
             switchSession(remaining[remaining.length - 1])
           } else {
-            setActiveSessionId(null)
+            updateActiveSessionId(null)
           }
           releaseCreatingState(session)
           setMountError("终端容器初始化超时，请重试")
@@ -420,7 +427,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
             if (remaining.length > 0) {
               switchSession(remaining[remaining.length - 1])
             } else {
-              setActiveSessionId(null)
+              updateActiveSessionId(null)
             }
             setMountError("终端挂载失败，请重试")
           }
@@ -452,7 +459,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         if (remaining.length > 0) {
           switchSession(remaining[remaining.length - 1])
         } else {
-          setActiveSessionId(null)
+          updateActiveSessionId(null)
         }
         releaseCreatingState(session)
         setMountError(`终端挂载异常: ${err instanceof Error ? err.message : err}`)
@@ -471,11 +478,12 @@ export function ClaudeCodePanel(): React.JSX.Element {
     releaseCreatingState(session)
 
     // await 前同步切换 active session，避免 tab 消失后出现空白闪烁
-    if (id === activeSessionId) {
+    // 读 ref 而非闭包值，防快速连续关闭多 tab 时 activeSessionId 过时
+    if (id === activeSessionIdRef.current) {
       setMountError(null)
       const remaining = [...sessionsRef.current.keys()]
       if (remaining.length > 0) switchSession(remaining[remaining.length - 1])
-      else setActiveSessionId(null)
+      else updateActiveSessionId(null)
     }
 
     cleanupPty(session)
@@ -488,7 +496,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     }
     session.xterm.dispose()
     session.container.remove()
-  }, [switchSession, cleanupPty, releaseCreatingState, activeSessionId])
+  }, [switchSession, cleanupPty, releaseCreatingState, updateActiveSessionId])
 
   // 组件卸载时清理所有会话
   useEffect(() => {
