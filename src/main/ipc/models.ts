@@ -159,28 +159,29 @@ async function addSafeDirectory(worktreePath: string): Promise<void> {
   await execFileAsync("git", ["config", "--global", "--add", "safe.directory", worktreePath])
 }
 
-async function runGit(worktreePath: string, args: string[]): Promise<string> {
+async function runGit(worktreePath: string, args: string[], options?: { silent?: boolean }): Promise<string> {
+  const silent = Boolean(options?.silent)
   const baseArgs = ["-C", worktreePath, ...args]
   const command = formatGitCommand(worktreePath, args)
-  console.log(`[GitPanel][exec] ${command}`)
+  if (!silent) console.log(`[GitPanel][exec] ${command}`)
   try {
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
-    console.log(`[GitPanel][exec][ok] ${command}`)
+    if (!silent) console.log(`[GitPanel][exec][ok] ${command}`)
     return stdout
   } catch (error) {
     if (!isDubiousOwnershipError(error)) {
-      console.error(`[GitPanel][exec][fail] ${command}\n${getExecErrorText(error)}`)
+      if (!silent) console.error(`[GitPanel][exec][fail] ${command}\n${getExecErrorText(error)}`)
       throw error
     }
-    console.warn(`[GitPanel][exec][retry-safe-directory] ${command}`)
+    if (!silent) console.warn(`[GitPanel][exec][retry-safe-directory] ${command}`)
     // Auto-heal ownership trust issue for this specific worktree, then retry once.
     await addSafeDirectory(worktreePath)
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
-    console.log(`[GitPanel][exec][ok-after-retry] ${command}`)
+    if (!silent) console.log(`[GitPanel][exec][ok-after-retry] ${command}`)
     return stdout
   }
 }
@@ -192,7 +193,7 @@ function isGitDirWorktree(gitDir: string): boolean {
 
 async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
   try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
     return isGitDirWorktree(stdout)
   } catch {
     return false
@@ -219,18 +220,20 @@ function parseRemoteHead(lsRemoteOutput: string, branch: string): string | null 
 async function hasPushableCommits(
   worktreePath: string,
   branch: string,
-  baseCommit: string | null
+  baseCommit: string | null,
+  options?: { silent?: boolean }
 ): Promise<boolean> {
+  const silent = Boolean(options?.silent)
   const remoteRef = `refs/remotes/origin/${branch}`
   try {
-    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef])
-    const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${remoteRef}..HEAD`])).trim()
+    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef], { silent })
+    const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${remoteRef}..HEAD`], { silent })).trim()
     const ahead = Number.parseInt(aheadRaw, 10)
     return Number.isFinite(ahead) && ahead > 0
   } catch {
     if (!baseCommit) return false
     try {
-      const sinceBaseRaw = (await runGit(worktreePath, ["rev-list", "--count", `${baseCommit}..HEAD`])).trim()
+      const sinceBaseRaw = (await runGit(worktreePath, ["rev-list", "--count", `${baseCommit}..HEAD`], { silent })).trim()
       const sinceBase = Number.parseInt(sinceBaseRaw, 10)
       return Number.isFinite(sinceBase) && sinceBase > 0
     } catch {
@@ -387,11 +390,16 @@ function getRecentlyRevertedFiles(metadata: Record<string, unknown>): string[] {
     .filter(Boolean)
 }
 
-async function buildGitPanelState(worktreePath: string, trackedFiles: string[]): Promise<{
+async function buildGitPanelState(
+  worktreePath: string,
+  trackedFiles: string[],
+  options?: { silent?: boolean }
+): Promise<{
   files: GitPanelFileDiff[]
   changedFiles: string[]
   totals: { additions: number; deletions: number; fileCount: number }
 }> {
+  const silent = Boolean(options?.silent)
   const trackedSet = new Set<string>()
   for (const tracked of trackedFiles) {
     for (const rel of toWorktreeRelativePath(worktreePath, tracked)) {
@@ -404,7 +412,7 @@ async function buildGitPanelState(worktreePath: string, trackedFiles: string[]):
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
-  const statusOut = await runGit(worktreePath, ["status", "--porcelain", "--", ...normalizedTrackedFiles])
+  const statusOut = await runGit(worktreePath, ["status", "--porcelain", "--", ...normalizedTrackedFiles], { silent })
   const changedFiles = Array.from(new Set(parsePorcelainPaths(statusOut))).filter((p) =>
     trackedSet.has(p)
   )
@@ -422,12 +430,12 @@ async function buildGitPanelState(worktreePath: string, trackedFiles: string[]):
     let deletions = 0
 
     try {
-      diffText = await runGit(worktreePath, ["diff", "--", relPath])
+      diffText = await runGit(worktreePath, ["diff", "--", relPath], { silent })
     } catch {
       diffText = ""
     }
 
-    const numstatOut = await runGit(worktreePath, ["diff", "--numstat", "--", relPath]).catch(() => "")
+    const numstatOut = await runGit(worktreePath, ["diff", "--numstat", "--", relPath], { silent }).catch(() => "")
     if (numstatOut.trim()) {
       const first = numstatOut.trim().split("\n")[0].split("\t")
       const a = Number(first[0])
@@ -472,7 +480,7 @@ async function buildGitPanelState(worktreePath: string, trackedFiles: string[]):
 
 async function getGitRoot(folderPath: string): Promise<string | null> {
   try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
     return stdout.trim()
   } catch {
     return null
@@ -1163,7 +1171,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
 
       const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked)
+      const state = await buildGitPanelState(context.workspacePath, tracked, { silent: true })
       let worktreeBranch = context.worktreeBranch
       if (!worktreeBranch) {
         try {
@@ -1173,7 +1181,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         }
       }
       const hasPushableCommit = worktreeBranch
-        ? await hasPushableCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit)
+        ? await hasPushableCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit, { silent: true })
         : false
       return {
         success: true,
@@ -1211,7 +1219,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         return { success: true, isWorktree: false, hasPendingDiff: false, changedFiles: 0 }
       }
       const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked)
+      const state = await buildGitPanelState(context.workspacePath, tracked, { silent: true })
       return {
         success: true,
         isWorktree: true,
