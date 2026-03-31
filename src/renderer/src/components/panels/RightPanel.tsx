@@ -327,7 +327,26 @@ export function RightPanel({
       lastAutoSwitchedBatchKeyRef.current !== latestCompletedLlmBatch.batchKey
     ) {
       lastAutoSwitchedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
-      onRequestGitMode?.()
+      const switchPanelByWorkspaceType = async (): Promise<void> => {
+        try {
+          if (!currentThreadId) return
+          const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+          if (summary.isWorktree && summary.hasPendingDiff) {
+            onRequestGitMode?.()
+            return
+          }
+        } catch {
+          // ignore summary refresh errors
+        }
+        if (!latestResourceEvent) return
+        if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
+        lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+        setPreviewPath(latestResourceEvent.path)
+        setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+        setPreviewReloadToken((v) => v + 1)
+        onRequestPreviewMode?.()
+      }
+      void switchPanelByWorkspaceType()
       return
     }
     if (!latestResourceEvent) return
@@ -338,7 +357,7 @@ export function RightPanel({
     setPreviewDiff(latestResourceEvent.codeDiff ?? null)
     setPreviewReloadToken((v) => v + 1)
     onRequestPreviewMode?.()
-  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode])
+  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode, currentThreadId])
 
   useEffect(() => {
     if (!currentThreadId) return
