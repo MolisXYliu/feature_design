@@ -143,11 +143,12 @@ export function GitPanelView({
         return
       }
 
-      const customMessage = commitMessage.trim()
-      const fallbackMessage =
-        (state?.suggestedCommitMessage || "").trim() || `chore(task:${threadId.slice(0, 8)}): update llm changes`
-      const coreMessage = customMessage || fallbackMessage
-      const finalMessage = `${cardNumber.trim()} #comment fix:${coreMessage} #CMBDevClaw`
+      if ((action === "commit" || hasPendingChanges) && !commitMessage.trim()) {
+        showToast("commitMessage 不能为空", "error")
+        return
+      }
+
+      const finalMessage = `${cardNumber.trim()} #comment fix:${commitMessage.trim()} #CMBDevClaw`
 
       setRunning(action)
       setError(null)
@@ -175,7 +176,7 @@ export function GitPanelView({
         setRunning(null)
       }
     },
-    [threadId, cardNumber, commitMessage, state?.hasPendingDiff, state?.suggestedCommitMessage, refresh, showToast]
+    [threadId, cardNumber, commitMessage, state?.hasPendingDiff, refresh, showToast]
   )
 
   const handleRevertFile = useCallback(
@@ -216,7 +217,10 @@ export function GitPanelView({
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
           <div className="flex items-center gap-1 min-w-0">
             <div className="text-[10px] text-muted-foreground truncate">{headerMeta}</div>
-            <Badge variant="outline" className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1">
+            <Badge
+              variant="outline"
+              className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1"
+            >
               <GitBranch className="size-2.5" />
               <span className="max-w-[140px] truncate" title={branchName}>
                 {branchName}
@@ -284,11 +288,20 @@ export function GitPanelView({
                         ) : (
                           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="font-mono font-semibold truncate text-left" title={file.path}>{file.path}</span>
+                        <span
+                          className="font-mono font-semibold truncate text-left"
+                          title={file.path}
+                        >
+                          {file.path}
+                        </span>
                         <span className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold">
-                          <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            +{file.additions}
+                          </span>
                           <span className="text-muted-foreground">/</span>
-                          <span className="text-rose-600 dark:text-rose-400">-{file.deletions}</span>
+                          <span className="text-rose-600 dark:text-rose-400">
+                            -{file.deletions}
+                          </span>
                         </span>
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
@@ -331,7 +344,12 @@ export function GitPanelView({
                             revertingFilePath === file.path && "opacity-80"
                           )}
                         >
-                          <RotateCcw className={cn("size-3", revertingFilePath === file.path && "animate-spin")} />
+                          <RotateCcw
+                            className={cn(
+                              "size-3",
+                              revertingFilePath === file.path && "animate-spin"
+                            )}
+                          />
                           {revertingFilePath === file.path ? "回退中..." : "回退"}
                         </span>
                       </span>
@@ -369,7 +387,6 @@ export function GitPanelView({
           void runSubmit(action)
         }}
       />
-
     </div>
   )
 }

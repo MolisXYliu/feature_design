@@ -64,6 +64,8 @@ function App(): React.JSX.Element {
   const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
+  const moduleActiveClass = "text-status-warning bg-status-warning/15 border-status-warning/45 hover:bg-status-warning/20"
+  const moduleInactiveClass = "text-foreground hover:bg-muted/45"
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
 
@@ -410,8 +412,8 @@ function App(): React.JSX.Element {
                   type="button"
                   className={`${panelToggleBaseClass} ${
                     rightModule === "preview"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
@@ -425,10 +427,10 @@ function App(): React.JSX.Element {
                   type="button"
                   className={`${panelToggleBaseClass} ${
                     rightModule === "git"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
+                      ? moduleActiveClass
                       : hasPendingGitDiff
-                        ? "text-status-warning bg-status-warning/10 border-status-warning/40 hover:bg-status-warning/20"
-                        : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                        ? "text-foreground border-status-warning/40 hover:bg-muted/45"
+                        : moduleInactiveClass
                   }`}
                   onClick={selectGitModule}
                   title="Git 操作"
@@ -442,8 +444,8 @@ function App(): React.JSX.Element {
                   type="button"
                   className={`${panelToggleBaseClass} ${
                     rightModule === "work"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
