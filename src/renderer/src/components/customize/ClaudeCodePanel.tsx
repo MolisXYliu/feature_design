@@ -170,6 +170,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
           // 每个 session 只观察自己的 container，避免多 session 叠加 observer
           let colsTimer: ReturnType<typeof setTimeout> | null = null
           const resizeObserver = new ResizeObserver(() => {
+            if (!sessionsRef.current.has(session.id)) return // disconnect 后仍可能触发已排队回调
             if (!isVisible()) {
               pendingResizeRef.current = true
               return
