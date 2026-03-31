@@ -158,6 +158,12 @@ exit /b 0
  */
 export function installAsarUpdate(newAsarPath: string, toVersion: string): void {
   const fromVersion = app.getVersion()
+  console.log(`[Updater] Installing ASAR update: ${fromVersion} → ${toVersion}`)
+  console.log("[Updater] New ASAR source:", newAsarPath)
+  console.log("[Updater] Target ASAR:", getAppAsarPath())
+  console.log("[Updater] Backup path:", getBackupPath())
+  console.log("[Updater] EXE path:", getExePath())
+
   const batContent = generateUpdateBat(newAsarPath, fromVersion, toVersion)
   const batPath = join(getUpdatesDir(), "update.bat")
 
