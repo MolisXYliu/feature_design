@@ -711,7 +711,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
                 <rect x="10" y="4" width="1" height="1" fill="#888"/>
               </svg>
             </div>
-            <span className="text-xs text-muted-foreground/50">正在启动 Claude Code...</span>
+            <span className="text-xs text-muted-foreground/50">{activeSession?.restarting ? "正在重启 Claude Code..." : "正在启动 Claude Code..."}</span>
             <style>{`
               .claude-mascot-container {
                 animation: mascot-hop 0.5s ease-in-out infinite;
