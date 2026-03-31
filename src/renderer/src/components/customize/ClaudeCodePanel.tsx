@@ -260,6 +260,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       if (!sessionsRef.current.has(session.id)) return
       session.xterm.write(`\r\n\x1b[90m[进程已退出，代码: ${code}]\x1b[0m\r\n`)
       session.running = false
+      session.termId = null // 进程已退出，清零防止重启时多余 dispose
       if (!session.hasContent) {
         session.hasContent = true
         releaseCreatingState(session)
@@ -311,6 +312,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     const session = sessionsRef.current.get(id)
     if (session) {
       requestAnimationFrame(() => {
+        if (!sessionsRef.current.has(id)) return // RAF 前 session 可能已被关闭
         fitTerminal(session)
         session.xterm.focus()
       })
