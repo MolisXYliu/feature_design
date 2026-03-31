@@ -101,6 +101,7 @@ export function registerUpdaterHandlers(): void {
     if (!baseUrl) throw new Error("更新服务器地址未配置")
 
     updateStatus = "downloading"
+    console.log(`[Updater] Downloading: ${lastCheckResult.downloadFile}, size: ${lastCheckResult.downloadSize}, sha256: ${lastCheckResult.downloadSha256}`)
 
     try {
       downloadedFilePath = await downloadUpdate(
@@ -111,6 +112,7 @@ export function registerUpdaterHandlers(): void {
         (p) => broadcast("update:progress", p)
       )
 
+      console.log("[Updater] Download complete, file saved to:", downloadedFilePath)
       updateStatus = "downloaded"
       broadcast("update:downloaded", {
         version: lastCheckResult.version,
@@ -121,6 +123,7 @@ export function registerUpdaterHandlers(): void {
     } catch (err) {
       updateStatus = "error"
       const message = err instanceof Error ? err.message : "Download failed"
+      console.error("[Updater] Download failed:", message)
       broadcast("update:error", { message })
       throw err
     }
