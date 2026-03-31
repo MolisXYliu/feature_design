@@ -283,11 +283,15 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
     // 超时兜底：若 PTY_STARTUP_TIMEOUT_MS 内仍无输出，释放 creating 锁并关闭 loading 遮罩
     const creatingTimeout = setTimeout(() => {
-      if (!sessionsRef.current.has(session.id)) return // session 已被关闭
-      if (!session.hasContent) {
-        session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
-        session.hasContent = true
-        setSessionIds((prev) => [...prev]) // 关闭 loading 遮罩，错误信息在 xterm 内可见
+      if (!sessionsRef.current.has(session.id)) return
+      try {
+        if (!session.hasContent) {
+          session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
+          session.hasContent = true
+          setSessionIds((prev) => [...prev])
+        }
+      } catch (e) {
+        console.warn("[ClaudeCode] timeout handler write failed", e)
       }
       releaseCreatingState(session)
     }, PTY_STARTUP_TIMEOUT_MS)
