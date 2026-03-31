@@ -119,6 +119,7 @@ async function executeTask(taskId: string): Promise<void> {
 
   let threadCreated = false
   let hasStreamedContent = false
+  let taskError: unknown = null
 
   try {
     const workspacePath = task.workDir
@@ -193,7 +194,6 @@ async function executeTask(taskId: string): Promise<void> {
     }
 
     if (!abortController.signal.aborted) {
-      broadcastToChannel(channel, { type: "done" })
       updateScheduledTaskRunResult(taskId, "ok", null)
       recordRun(taskId, task.name, startedAt, "ok", null)
       if (task.frequency === "once") {
@@ -207,22 +207,20 @@ async function executeTask(taskId: string): Promise<void> {
       }
       console.log(`[Scheduler] Task completed: ${task.name}`)
     } else {
-      broadcastToChannel(channel, { type: "done" })
       updateScheduledTaskRunResult(taskId, "error", "Cancelled by user")
       recordRun(taskId, task.name, startedAt, "error", "Cancelled by user")
       console.log(`[Scheduler] Task cancelled: ${task.name}`)
     }
   } catch (error) {
+    taskError = error
     const isAbortError =
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"))
     const errMsg = isAbortError ? "Cancelled by user" : (error instanceof Error ? error.message : String(error))
     if (isAbortError) {
-      broadcastToChannel(channel, { type: "done" })
       updateScheduledTaskRunResult(taskId, "error", errMsg)
       console.log(`[Scheduler] Task cancelled: ${task.name}`)
     } else {
-      broadcastToChannel(channel, { type: "error", error: errMsg })
       updateScheduledTaskRunResult(taskId, "error", errMsg)
       showTaskNotification(task.name, "error", errMsg)
       console.error(`[Scheduler] Task error: ${task.name}:`, errMsg)
@@ -237,9 +235,28 @@ async function executeTask(taskId: string): Promise<void> {
       }
     }
   } finally {
+    // IMPORTANT: delete from runningTasks BEFORE broadcasting done/error to the
+    // renderer, otherwise the renderer's loadThreadHistory → isRunning check will
+    // see the task as still running and re-set scheduledTaskLoading = true (race).
     runningTasks.delete(taskId)
     activeAbortControllers.delete(taskId)
     closeCheckpointer(threadId).catch(() => {})
+
+    // Now broadcast lifecycle event — renderer can safely call isRunning() = false
+    if (taskError) {
+      const isAbortError =
+        taskError instanceof Error &&
+        (taskError.name === "AbortError" || taskError.message.includes("aborted"))
+      if (isAbortError) {
+        broadcastToChannel(channel, { type: "done" })
+      } else {
+        const errMsg = taskError instanceof Error ? taskError.message : String(taskError)
+        broadcastToChannel(channel, { type: "error", error: errMsg })
+      }
+    } else {
+      broadcastToChannel(channel, { type: "done" })
+    }
+
     notifyRenderer("scheduledTasks:changed")
     notifyRenderer("threads:changed")
   }
