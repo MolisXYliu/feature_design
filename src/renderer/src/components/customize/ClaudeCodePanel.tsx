@@ -549,7 +549,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     activeSession.hasContent = false
     setSessionIds((prev) => [...prev]) // 显示 loading
     try {
-      activeSession.xterm.clear()
+      activeSession.xterm.reset() // reset 而非 clear，彻底重置终端模式（焦点报告等），防乱码
       await startPty(activeSession)
       if (sessionsRef.current.has(activeSession.id) && activeSession.id === activeSessionIdRef.current) activeSession.xterm.focus()
     } catch (err) {
