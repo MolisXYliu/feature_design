@@ -310,6 +310,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         console.warn("[ClaudeCode] timeout handler write failed", e)
         if (!session.hasContent) {
           session.hasContent = true
+          session.restarting = false
           setSessionIds((prev) => [...prev])
         }
       }
@@ -640,7 +641,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
               {activeSession.workDir.split(/[\\/]/).pop() || activeSession.workDir}
             </span>
           )}
-          {activeSession?.running ? (
+          {activeSession?.running && !activeSession.restarting ? (
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleStop} title="停止">
               <Square className="size-3.5" />
             </Button>
