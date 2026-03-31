@@ -540,6 +540,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const handleRestart = useCallback(async () => {
     if (!activeSession || activeSession.restarting) return
     activeSession.restarting = true
+    activeSession.running = false
     setMountError(null)
     activeSession.hasContent = false
     setSessionIds((prev) => [...prev]) // 显示 loading
