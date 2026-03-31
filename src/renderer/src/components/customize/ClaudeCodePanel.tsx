@@ -292,6 +292,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
         }
       } catch (e) {
         console.warn("[ClaudeCode] timeout handler write failed", e)
+        if (!session.hasContent) {
+          session.hasContent = true
+          setSessionIds((prev) => [...prev])
+        }
       }
       releaseCreatingState(session)
     }, PTY_STARTUP_TIMEOUT_MS)
@@ -331,7 +335,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
             return fallback
           }
           return selectedModelId
-        }).catch(() => selectedModelId) : Promise.resolve(selectedModelId)
+        }).catch((e) => { console.warn("[ClaudeCode] Failed to load model configs:", e); return selectedModelId }) : Promise.resolve(selectedModelId)
       ])
     } catch (err) {
       console.error("[ClaudeCode] Failed to initialize session:", err)
@@ -449,8 +453,18 @@ export function ClaudeCodePanel(): React.JSX.Element {
     const session = sessionsRef.current.get(id)
     if (!session) return
     sessionsRef.current.delete(id) // 立即删除作为互斥锁，防止并发二次进入 + 让其他回调的 guard 生效
+    session.container.style.display = "none"
+    setSessionIds((prev) => prev.filter((s) => s !== id))
     releaseCreatingState(session)
-    if (id === activeSessionId) setMountError(null) // 只清自己的错误，不影响其他 session
+
+    // await 前同步切换 active session，避免 tab 消失后出现空白闪烁
+    if (id === activeSessionId) {
+      setMountError(null)
+      const remaining = [...sessionsRef.current.keys()]
+      if (remaining.length > 0) switchSession(remaining[remaining.length - 1])
+      else setActiveSessionId(null)
+    }
+
     cleanupPty(session)
     session.domCleanups.forEach((fn) => fn())
     const termId = session.termId
@@ -461,18 +475,6 @@ export function ClaudeCodePanel(): React.JSX.Element {
     }
     session.xterm.dispose()
     session.container.remove()
-
-    // sessionsRef 已在函数顶部删除，作为 source of truth
-    setSessionIds((prev) => prev.filter((s) => s !== id))
-
-    const remaining = [...sessionsRef.current.keys()]
-    if (remaining.length === 0) {
-      setActiveSessionId(null)
-    } else if (activeSessionId === id) {
-      // 只在关闭的是当前激活的 tab 时才切换
-      const newActive = remaining[remaining.length - 1]
-      requestAnimationFrame(() => switchSession(newActive))
-    }
   }, [switchSession, cleanupPty, releaseCreatingState, activeSessionId])
 
   // 组件卸载时清理所有会话
@@ -529,6 +531,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
 
   // #3 fix: handleStop 清理 PTY 监听器
   const handleStop = useCallback(async () => {
+    if (activeSession?.restarting) return // restart 期间不允许 Stop，防止干掉新建的 PTY
     if (activeSession?.termId) {
       const termId = activeSession.termId
       activeSession.termId = null
@@ -536,15 +539,14 @@ export function ClaudeCodePanel(): React.JSX.Element {
       if (!activeSession.hasContent) {
         activeSession.hasContent = true
         releaseCreatingState(activeSession)
-        setSessionIds((prev) => [...prev]) // 立即关闭 loading 遮罩，不等 await dispose
       }
+      setSessionIds((prev) => [...prev]) // 立即刷新 UI（关闭 loading 遮罩 + 按钮从 Stop 变 Restart），不等 await dispose
       cleanupPty(activeSession) // 先清监听器，防止 dispose 期间 onExit 双写退出信息
       try { await window.api.terminal.dispose(termId) }
       catch (e) { console.warn("[ClaudeCode] dispose failed in handleStop, PTY may still be running", e) }
-      // await 期间 session 可能已被 closeSession 销毁
-      if (sessionsRef.current.has(activeSession.id)) {
+      // await 期间 session 可能已被 closeSession 销毁或被 Restart 重新启动
+      if (sessionsRef.current.has(activeSession.id) && !activeSession.running && !activeSession.restarting) {
         activeSession.xterm.write("\r\n\x1b[90m[已停止]\x1b[0m\r\n")
-        setSessionIds((prev) => [...prev])
       }
     }
   }, [activeSession, cleanupPty, releaseCreatingState])
