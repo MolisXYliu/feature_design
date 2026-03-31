@@ -2093,7 +2093,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   placeholder={attachments.length > 0 ? "输入消息或直接发送文件..." : "输入消息..."}
                   disabled={isLoading}
                   className={cn(
-                    "relative z-[1] flex-1 resize-none bg-transparent",
+                    "relative z-[1] w-full resize-none bg-transparent overflow-y-auto",
                     "px-4 py-3 text-sm placeholder:text-muted-foreground",
                     "focus:outline-none disabled:opacity-70",
                     attachments.length > 0 && "pt-1.5"
