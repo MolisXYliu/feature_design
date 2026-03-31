@@ -184,6 +184,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
             if (session.xterm.cols !== dims.cols) {
               if (colsTimer) clearTimeout(colsTimer)
               colsTimer = setTimeout(() => {
+                if (!sessionsRef.current.has(session.id)) return
                 const fresh = calcDimensions(session)
                 if (fresh && session.xterm.cols !== fresh.cols) {
                   session.xterm.resize(fresh.cols, session.xterm.rows)
