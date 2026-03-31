@@ -406,6 +406,14 @@ export class ElectronIPCTransport implements UseStreamTransport {
         break
       }
 
+      // Custom events (e.g. routing_result) sent directly from main process
+      case "custom":
+        events.push({
+          event: "custom",
+          data: event.data
+        })
+        break
+
       case "error":
         events.push({
           event: "error",

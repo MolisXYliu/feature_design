@@ -33,6 +33,13 @@ export interface TokenUsage {
   lastUpdated: Date
 }
 
+// Routing result from auto-routing engine
+export interface RoutingResultState {
+  resolvedModelId: string
+  resolvedTier: "premium" | "economy"
+  routeReason: string
+}
+
 // Per-thread state (persisted/restored from checkpoints)
 export interface ThreadState {
   messages: Message[]
@@ -50,6 +57,7 @@ export interface ThreadState {
   draftInput: string
   scheduledTaskLoading: boolean
   scheduledTaskId: string | null
+  routingResult: RoutingResultState | null
 }
 
 // Stream instance type
@@ -114,7 +122,8 @@ const createDefaultThreadState = (): ThreadState => ({
   tokenUsage: null,
   draftInput: "",
   scheduledTaskLoading: false,
-  scheduledTaskId: null
+  scheduledTaskId: null,
+  routingResult: null
 })
 
 const defaultStreamData: StreamData = {
@@ -148,6 +157,10 @@ interface CustomEventData {
     cacheReadTokens?: number
     cacheCreationTokens?: number
   }
+  // routing result fields
+  resolvedModelId?: string
+  resolvedTier?: "premium" | "economy"
+  routeReason?: string
 }
 
 // Component that holds a stream and notifies subscribers
@@ -421,6 +434,23 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             }))
           }
           break
+        case "routing_result":
+          if (data.resolvedModelId && data.resolvedTier) {
+            updateThreadState(threadId, () => ({
+              routingResult: {
+                resolvedModelId: data.resolvedModelId!,
+                resolvedTier: data.resolvedTier!,
+                routeReason: data.routeReason ?? ""
+              },
+              // Sync currentModel to the routing-resolved model so that
+              // ContextUsageIndicator tracks the correct context window.
+              // Note: only update in-memory state, do NOT persist to thread
+              // metadata — that stays as the user's manual selection for
+              // pinned mode fallback.
+              currentModel: data.resolvedModelId!
+            }))
+          }
+          break
         case "token_usage":
           // Only update if we have meaningful token values (> 0)
           // This prevents resetting the usage when streaming ends
@@ -576,8 +606,25 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
               actions.setWorkspaceFiles(diskResult.files)
             }
           }
-          if (metadata.model) {
-            updateThreadState(threadId, () => ({ currentModel: metadata.model as string }))
+          // Restore the effective model: prefer the routing-resolved model (smart routing),
+          // fall back to user's pinned model selection.
+          const routingState = metadata.routingState as
+            | { lastResolvedModelId?: string; lastResolvedTier?: string }
+            | undefined
+          const effectiveModel = routingState?.lastResolvedModelId || (metadata.model as string) || ""
+          if (effectiveModel) {
+            updateThreadState(threadId, () => ({
+              currentModel: effectiveModel,
+              ...(routingState?.lastResolvedModelId
+                ? {
+                    routingResult: {
+                      resolvedModelId: routingState.lastResolvedModelId!,
+                      resolvedTier: (routingState.lastResolvedTier as "premium" | "economy") ?? "premium",
+                      routeReason: "restored from thread state"
+                    }
+                  }
+                : {})
+            }))
           }
           if (metadata.scheduledTaskId) {
             const taskId = metadata.scheduledTaskId as string

@@ -1,6 +1,6 @@
 {
   "name": "CMBDevClaw",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "CMBDevClaw description",
   "main": "./out/main/index.js",
   "files": [
@@ -25,7 +25,7 @@
     "desktop"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=18 <24"
   },
   "scripts": {
     "format": "prettier --write .",

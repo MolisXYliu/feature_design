@@ -75,6 +75,7 @@ import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
 import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
+import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
 import { S3TraceReporter } from "./agent/trace/s3-reporter"
 import { initializeDatabase, flush } from "./db"
@@ -320,6 +321,7 @@ if (!gotTheLock) {
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
     registerTerminalHandlers(ipcMain)
+    registerRoutingHandlers(ipcMain)
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {

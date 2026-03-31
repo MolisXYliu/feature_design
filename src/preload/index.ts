@@ -1047,6 +1047,10 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("hooks:delete", id),
     setEnabled: (id: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("hooks:setEnabled", { id, enabled })
+  },
+  routing: {
+    getMode: (): Promise<"auto" | "pinned"> => ipcRenderer.invoke("routing:getMode"),
+    setMode: (mode: "auto" | "pinned"): Promise<void> => ipcRenderer.invoke("routing:setMode", mode)
   }
 }
 

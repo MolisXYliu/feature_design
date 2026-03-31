@@ -49,6 +49,8 @@ export interface ModelConfig {
   model: string
   description?: string
   available: boolean
+  /** Routing tier — absent means premium */
+  tier?: "premium" | "economy"
 }
 
 import type {

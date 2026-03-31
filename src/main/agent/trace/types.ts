@@ -97,6 +97,49 @@ export interface TraceStep {
   toolCalls: TraceToolCall[]
 }
 
+// ─────────────────────────────────────────────────────────
+// Routing trace types
+// ─────────────────────────────────────────────────────────
+
+/** Result record for one layer in the three-layer routing funnel. */
+export interface RoutingLayerRecord {
+  /** Which layer produced this record */
+  layer: "pinned" | "thread" | "layer1" | "layer2" | "layer3"
+  /** Wall-clock time this layer took in ms */
+  durationMs: number
+  /** Conclusion from this layer ("uncertain" = layer passed through without a decision) */
+  result: "premium" | "economy" | "uncertain" | "reuse"
+  /** Human-readable reason (e.g. "TOOL_INTENT_PATTERN matched", "forcePremiumUntil active") */
+  reason: string
+  /** Extra detail specific to this layer (matched rule name, LLM raw output, etc.) */
+  detail?: Record<string, unknown>
+}
+
+/**
+ * Complete routing funnel record for one agent invocation.
+ * Attached to AgentTrace.metadata.routingTrace for offline analysis.
+ */
+export interface RoutingTrace {
+  /** First 100 chars of the user message used for routing classification */
+  messageSnippet: string
+  /** Task source that triggered this routing call */
+  taskSource: "chat" | "heartbeat" | "scheduler_reminder" | "scheduler_action" | "memory_summarize" | "optimizer"
+  /** Whether this was a resume or interrupt continuation (undefined for fresh invocations) */
+  continuation?: "resume" | "interrupt"
+  /** Global routing mode at invocation time */
+  routingMode: "auto" | "pinned"
+  /** Final resolved tier */
+  resolvedTier: "premium" | "economy"
+  /** Final resolved model ID */
+  resolvedModelId: string
+  /** Which layer produced the final decision */
+  decidedByLayer: "pinned" | "thread" | "layer1" | "layer2" | "layer3"
+  /** Total routing time in ms (sum of all layers evaluated) */
+  totalDurationMs: number
+  /** Per-layer records in evaluation order */
+  layers: RoutingLayerRecord[]
+}
+
 /** How the agent's run ended. */
 export type TraceOutcome =
   | "success"   // Agent completed the task and said so
@@ -129,6 +172,8 @@ export interface AgentTrace {
   userMessage: string
   /** Model identifier used for this run */
   modelId: string
+  /** Human-readable model name (e.g. "minmax"), populated at recording time */
+  modelName?: string
   /** Ordered list of reasoning steps */
   steps: TraceStep[]
   /** Ordered model-call runs (request + response) */
@@ -145,7 +190,9 @@ export interface AgentTrace {
   usedSkills: string[]
   /**
    * Optional free-form metadata.
-   * Future: workspacePath, git branch, session tags, etc.
+   * Known keys:
+   *   - routingTrace: RoutingTrace — complete three-layer routing funnel record
+   *   - workspacePath, git branch, session tags, etc.
    */
   metadata?: Record<string, unknown>
 }

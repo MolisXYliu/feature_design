@@ -84,6 +84,7 @@ interface CustomAPI {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        tier?: "premium" | "economy"
       }>
     >
     getCustomConfig: (id?: string) => Promise<{
@@ -93,6 +94,7 @@ interface CustomAPI {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      tier?: "premium" | "economy"
     } | null>
     setCustomConfig: (config: {
       id: string
@@ -101,6 +103,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      tier?: "premium" | "economy"
     }) => Promise<void>
     // Backward-compatible alias, prefer upsertCustomConfig in new code.
     upsertCustomConfig: (config: {
@@ -110,6 +113,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      tier?: "premium" | "economy"
     }) => Promise<{ id: string }>
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
     getUserInfo: () => Promise<UserInfoConfig | null>
@@ -513,6 +517,10 @@ interface CustomAPI {
     update: (config: HookUpsert & { id: string }) => Promise<{ id: string }>
     delete: (id: string) => Promise<void>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
+  }
+  routing: {
+    getMode: () => Promise<"auto" | "pinned">
+    setMode: (mode: "auto" | "pinned") => Promise<void>
   }
 }
 
