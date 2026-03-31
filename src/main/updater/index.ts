@@ -182,9 +182,12 @@ export function registerUpdaterHandlers(): void {
  * Waits 30s after startup, then checks every 30 minutes.
  */
 export function startUpdateChecker(): void {
-  // Check immediately on startup, no periodic polling
-  performCheck(false)
-  console.log("[Updater] Startup update check triggered")
+  // Delay 5s to allow renderer to finish loading and register listeners
+  initialCheckTimer = setTimeout(() => {
+    initialCheckTimer = null
+    performCheck(false)
+  }, 5000)
+  console.log("[Updater] Startup update check scheduled in 5s")
 }
 
 /**

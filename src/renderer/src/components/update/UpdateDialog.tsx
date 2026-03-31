@@ -48,6 +48,19 @@ export function UpdateDialog({
   useEffect(() => {
     const api = window.api.update
 
+    // On mount, pull current status in case update was detected before renderer loaded
+    api.getStatus().then((s) => {
+      if (s.status === "available" && s.update) {
+        setUpdateInfo(s.update)
+        setStage("available")
+        onOpenChange(true)
+      } else if (s.status === "downloaded" && s.update) {
+        setUpdateInfo(s.update)
+        setStage("downloaded")
+        onOpenChange(true)
+      }
+    }).catch(() => { /* ignore */ })
+
     const removeAvailable = api.onAvailable((info) => {
       setUpdateInfo(info)
       setStage("available")
