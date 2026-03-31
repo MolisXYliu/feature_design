@@ -159,28 +159,29 @@ async function addSafeDirectory(worktreePath: string): Promise<void> {
   await execFileAsync("git", ["config", "--global", "--add", "safe.directory", worktreePath])
 }
 
-async function runGit(worktreePath: string, args: string[]): Promise<string> {
+async function runGit(worktreePath: string, args: string[], options?: { silent?: boolean }): Promise<string> {
+  const silent = Boolean(options?.silent)
   const baseArgs = ["-C", worktreePath, ...args]
   const command = formatGitCommand(worktreePath, args)
-  console.log(`[GitPanel][exec] ${command}`)
+  if (!silent) console.log(`[GitPanel][exec] ${command}`)
   try {
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
-    console.log(`[GitPanel][exec][ok] ${command}`)
+    if (!silent) console.log(`[GitPanel][exec][ok] ${command}`)
     return stdout
   } catch (error) {
     if (!isDubiousOwnershipError(error)) {
-      console.error(`[GitPanel][exec][fail] ${command}\n${getExecErrorText(error)}`)
+      if (!silent) console.error(`[GitPanel][exec][fail] ${command}\n${getExecErrorText(error)}`)
       throw error
     }
-    console.warn(`[GitPanel][exec][retry-safe-directory] ${command}`)
+    if (!silent) console.warn(`[GitPanel][exec][retry-safe-directory] ${command}`)
     // Auto-heal ownership trust issue for this specific worktree, then retry once.
     await addSafeDirectory(worktreePath)
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
-    console.log(`[GitPanel][exec][ok-after-retry] ${command}`)
+    if (!silent) console.log(`[GitPanel][exec][ok-after-retry] ${command}`)
     return stdout
   }
 }
@@ -192,7 +193,7 @@ function isGitDirWorktree(gitDir: string): boolean {
 
 async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
   try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
     return isGitDirWorktree(stdout)
   } catch {
     return false
@@ -472,7 +473,7 @@ async function buildGitPanelState(worktreePath: string, trackedFiles: string[]):
 
 async function getGitRoot(folderPath: string): Promise<string | null> {
   try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
     return stdout.trim()
   } catch {
     return null
