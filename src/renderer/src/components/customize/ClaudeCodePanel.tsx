@@ -348,19 +348,28 @@ export function ClaudeCodePanel(): React.JSX.Element {
     }
     if (!dir) { setCreating(false); return } // session 未创建，无 ownsCreatingState，直接重置
 
-    const id = `session-${++sessionCounter}`
-    const { xterm, fitAddon } = createXterm()
-    const container = document.createElement("div")
-    container.style.position = "absolute"
-    container.style.top = "0"
-    container.style.left = "0"
-    container.style.right = "0"
-    container.style.bottom = "0"
-    container.style.overflow = "hidden"
+    let id: string
+    let session: Session
+    try {
+      id = `session-${++sessionCounter}`
+      const { xterm, fitAddon } = createXterm()
+      const container = document.createElement("div")
+      container.style.position = "absolute"
+      container.style.top = "0"
+      container.style.left = "0"
+      container.style.right = "0"
+      container.style.bottom = "0"
+      container.style.overflow = "hidden"
 
-    const session: Session = {
-      id, termId: null, xterm, fitAddon, container,
-      running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, restarting: false, domCleanups: [], ptyCleanups: []
+      session = {
+        id, termId: null, xterm, fitAddon, container,
+        running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, restarting: false, domCleanups: [], ptyCleanups: []
+      }
+    } catch (err) {
+      console.error("[ClaudeCode] Failed to create session:", err)
+      setCreating(false)
+      setMountError(`会话创建失败: ${err instanceof Error ? err.message : err}`)
+      return
     }
 
     sessionsRef.current.set(id, session)
@@ -418,7 +427,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
           return
         }
         startPty(session).then(() => {
-          if (!cancelled) xterm.focus()
+          if (!cancelled) session.xterm.focus()
           else releaseCreatingState(session) // P0 fix: cancelled 后兜底释放 creating 锁
         }).catch((err) => {
           console.error("[ClaudeCode] PTY creation failed:", err)
