@@ -48,16 +48,29 @@ export function HtmlPreview({
       <div className="px-2 py-1 text-[11px] text-muted-foreground border-b border-border bg-background-elevated truncate">
         HTML Preview{path ? ` · ${getFileName(path)}` : ""}
       </div>
-      <iframe
-        ref={iframeRef}
-        title={path || "html-preview"}
-        srcDoc={content}
-        className={`w-full border-0 ${fillHeight ? "flex-1 min-h-0" : ""}`}
-        style={fillHeight ? { height: "100%" } : { height: `max(${iframeHeight}px, 90vh)` }}
-        sandbox="allow-same-origin"
-        scrolling={fillHeight ? "auto" : "no"}
-        onLoad={syncHeight}
-      />
+      <div
+        className={`w-full overflow-auto ${fillHeight ? "flex-1 min-h-0" : ""}`}
+        style={fillHeight ? undefined : { maxHeight: "80vh" }}
+      >
+        <iframe
+          ref={iframeRef}
+          title={path || "html-preview"}
+          srcDoc={content}
+          className={`border-0 ${fillHeight ? "h-full" : ""}`}
+          style={
+            fillHeight
+              ? { height: "100%", minWidth: "1000px", width: "max(100%, 1000px)" }
+              : {
+                  height: `max(${iframeHeight}px, 90vh)`,
+                  minWidth: "1000px",
+                  width: "max(100%, 1000px)"
+                }
+          }
+          sandbox="allow-same-origin"
+          scrolling={fillHeight ? "auto" : "no"}
+          onLoad={syncHeight}
+        />
+      </div>
     </div>
   )
 }

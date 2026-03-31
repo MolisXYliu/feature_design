@@ -158,7 +158,7 @@ function createWindow(): void {
   const devWindowIcon = process.platform === "win32" && isDev ? getDevWindowsIconPath() : undefined
 
   mainWindow = new BrowserWindow({
-    width: 1440,
+    width: 1500,
     height: 900,
     minWidth: 1200,
     minHeight: 700,
