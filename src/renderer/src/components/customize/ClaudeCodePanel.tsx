@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
-import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2 } from "lucide-react"
+import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Terminal } from "@xterm/xterm"
@@ -620,6 +620,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
               点击下方按钮选择项目目录，Claude Code 将在该目录下启动。<br />
               你可以通过顶部 Tab 栏新建多个会话，每个会话对应不同的项目目录。
             </p>
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-amber-50 border border-amber-200">
+              <TriangleAlert className="size-4 text-amber-500 shrink-0" />
+              <span className="text-xs text-amber-700">当前会话仅在本次运行期间有效，关闭或重启应用后需要重新创建</span>
+            </div>
           </div>
           {isPackaged && models.length > 0 && (
             <div className="flex items-center gap-2">
