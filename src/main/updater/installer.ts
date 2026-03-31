@@ -182,10 +182,10 @@ export function installAsarUpdate(newAsarPath: string, toVersion: string): void 
   console.log("[Updater] Generated update.bat at", batPath)
 
   // Spawn BAT script in detached mode so it survives app exit
-  const child = spawn("cmd", ["/c", batPath], {
+  const child = spawn("cmd", ["/c", batPath, "&&", "pause"], {
     detached: true,
     stdio: "ignore",
-    windowsHide: true
+    windowsHide: false  // temporarily visible for debugging
   })
   child.unref()
 
