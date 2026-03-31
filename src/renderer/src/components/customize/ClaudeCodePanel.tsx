@@ -146,58 +146,66 @@ export function ClaudeCodePanel(): React.JSX.Element {
           return
         }
         if (session.container.offsetWidth > 0 && session.container.offsetHeight > 0) {
-          // #7 fix: 防止 xterm.open 重复调用
-          if (!session.xterm.element) {
-            session.xterm.open(session.container)
-          }
-          session.fitAddon.fit()
-
-          // 加载 WebGL，完成后刷新维度
           try {
-            const webgl = new WebglAddon()
-            session.xterm.loadAddon(webgl)
-            webgl.onContextLoss(() => {
-              console.warn("[ClaudeCode] WebGL context lost, falling back to canvas")
-              webgl.dispose()
+            // #7 fix: 防止 xterm.open 重复调用
+            if (!session.xterm.element) {
+              session.xterm.open(session.container)
+            }
+            session.fitAddon.fit()
+
+            // 加载 WebGL，完成后刷新维度
+            try {
+              const webgl = new WebglAddon()
+              session.xterm.loadAddon(webgl)
+              webgl.onContextLoss(() => {
+                console.warn("[ClaudeCode] WebGL context lost, falling back to canvas")
+                webgl.dispose()
+              })
+            } catch (e) {
+              console.warn("[ClaudeCode] WebGL addon failed, using canvas renderer:", e)
+            }
+
+            // #18 fix: 合并为一次延迟 fit
+            setTimeout(() => {
+              try { if (!cancelled) fitTerminal(session) } catch (e) {
+                console.warn("[ClaudeCode] fitTerminal in setTimeout failed", e)
+              }
+              resolve(!cancelled)
+            }, 100)
+
+            // #10 fix: ResizeObserver 绑定在 session.container 上而非 hostRef
+            let colsTimer: ReturnType<typeof setTimeout> | null = null
+            const resizeObserver = new ResizeObserver(() => {
+              if (!sessionsRef.current.has(session.id)) return
+              if (!isVisible()) {
+                pendingResizeRef.current = true
+                return
+              }
+              const dims = calcDimensions(session)
+              if (!dims) return
+              if (session.xterm.rows !== dims.rows) {
+                session.xterm.resize(session.xterm.cols, dims.rows)
+              }
+              if (session.xterm.cols !== dims.cols) {
+                if (colsTimer) clearTimeout(colsTimer)
+                colsTimer = setTimeout(() => {
+                  if (!sessionsRef.current.has(session.id)) return
+                  const fresh = calcDimensions(session)
+                  if (fresh && session.xterm.cols !== fresh.cols) {
+                    session.xterm.resize(fresh.cols, session.xterm.rows)
+                  }
+                }, 100)
+              }
+            })
+            resizeObserver.observe(session.container)
+            session.domCleanups.push(() => {
+              resizeObserver.disconnect()
+              if (colsTimer) clearTimeout(colsTimer)
             })
           } catch (e) {
-            console.warn("[ClaudeCode] WebGL addon failed, using canvas renderer:", e)
+            console.error("[ClaudeCode] xterm.open/fit failed:", e)
+            resolve(false) // 向调用方发信号，走失败清理路径
           }
-
-          // #18 fix: 合并为一次延迟 fit
-          setTimeout(() => { if (!cancelled) fitTerminal(session); resolve(!cancelled) }, 100)
-
-          // #10 fix: ResizeObserver 绑定在 session.container 上而非 hostRef
-          // 每个 session 只观察自己的 container，避免多 session 叠加 observer
-          let colsTimer: ReturnType<typeof setTimeout> | null = null
-          const resizeObserver = new ResizeObserver(() => {
-            if (!sessionsRef.current.has(session.id)) return // disconnect 后仍可能触发已排队回调
-            if (!isVisible()) {
-              pendingResizeRef.current = true
-              return
-            }
-            const dims = calcDimensions(session)
-            if (!dims) return
-            if (session.xterm.rows !== dims.rows) {
-              session.xterm.resize(session.xterm.cols, dims.rows)
-            }
-            if (session.xterm.cols !== dims.cols) {
-              if (colsTimer) clearTimeout(colsTimer)
-              colsTimer = setTimeout(() => {
-                if (!sessionsRef.current.has(session.id)) return
-                const fresh = calcDimensions(session)
-                if (fresh && session.xterm.cols !== fresh.cols) {
-                  session.xterm.resize(fresh.cols, session.xterm.rows)
-                }
-              }, 100)
-            }
-          })
-          resizeObserver.observe(session.container)
-          // #1 fix: ResizeObserver 放到 domCleanups，startPty 不会清理它
-          session.domCleanups.push(() => {
-            resizeObserver.disconnect()
-            if (colsTimer) clearTimeout(colsTimer)
-          })
         } else {
           requestAnimationFrame(tryOpen)
         }
@@ -538,6 +546,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     try {
       activeSession.xterm.clear()
       await startPty(activeSession)
+      if (sessionsRef.current.has(activeSession.id)) activeSession.xterm.focus()
     } catch (err) {
       // await 期间 session 可能已被 closeSession 销毁
       if (sessionsRef.current.has(activeSession.id)) {
