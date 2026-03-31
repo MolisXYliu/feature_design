@@ -59,6 +59,9 @@ function generateUpdateBat(
 chcp 65001 >nul
 echo [Updater] Waiting for application to exit...
 
+:: Initial wait to give app.quit() time to fully exit
+timeout /t 3 /nobreak >nul
+
 set RETRY=0
 :WAIT_EXIT
 tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
@@ -222,6 +225,9 @@ echo [FullUpdater] Waiting for application to exit...
 echo [FullUpdater] zip=${zipPath}
 echo [FullUpdater] appDir=${appDir}
 echo [FullUpdater] exePath=${exePath}
+
+:: Initial wait to give app.quit() time to fully exit
+timeout /t 3 /nobreak >nul
 
 set RETRY=0
 :WAIT_EXIT
