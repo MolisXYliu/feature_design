@@ -219,13 +219,14 @@ export function ClaudeCodePanel(): React.JSX.Element {
   }, [])
 
   const startPty = useCallback(async (session: Session) => {
-    if (session.termId) {
-      try { await window.api.terminal.dispose(session.termId) }
-      catch (e) { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY", e) }
-      session.termId = null
-    }
-    // #1 #2 fix: 只清理 PTY 相关的 cleanup，保留 DOM 级别的
+    const oldTermId = session.termId
+    session.termId = null
+    // 先清监听器再 dispose，防止 dispose 触发 onExit 写入残留文字（如 restart 场景）
     cleanupPty(session)
+    if (oldTermId) {
+      try { await window.api.terminal.dispose(oldTermId) }
+      catch (e) { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY", e) }
+    }
 
     const termId = await window.api.terminal.create({
       workDir: session.workDir || undefined,
