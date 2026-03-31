@@ -606,8 +606,25 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
               actions.setWorkspaceFiles(diskResult.files)
             }
           }
-          if (metadata.model) {
-            updateThreadState(threadId, () => ({ currentModel: metadata.model as string }))
+          // Restore the effective model: prefer the routing-resolved model (smart routing),
+          // fall back to user's pinned model selection.
+          const routingState = metadata.routingState as
+            | { lastResolvedModelId?: string; lastResolvedTier?: string }
+            | undefined
+          const effectiveModel = routingState?.lastResolvedModelId || (metadata.model as string) || ""
+          if (effectiveModel) {
+            updateThreadState(threadId, () => ({
+              currentModel: effectiveModel,
+              ...(routingState?.lastResolvedModelId
+                ? {
+                    routingResult: {
+                      resolvedModelId: routingState.lastResolvedModelId!,
+                      resolvedTier: (routingState.lastResolvedTier as "premium" | "economy") ?? "premium",
+                      routeReason: "restored from thread state"
+                    }
+                  }
+                : {})
+            }))
           }
           if (metadata.scheduledTaskId) {
             const taskId = metadata.scheduledTaskId as string

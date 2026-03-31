@@ -59,8 +59,14 @@ export function ModelSwitcher({ threadId }: ModelSwitcherProps): React.JSX.Eleme
     window.api.threads.get(threadId).then((thread) => {
       if (cancelled) return
       const metadata = thread?.metadata || {}
-      if (metadata.model) {
-        setCurrentModel(metadata.model as string)
+      // Prefer routing-resolved model (smart routing) over user's pinned selection,
+      // so that the context window indicator reflects the actually-used model.
+      const routingState = metadata.routingState as
+        | { lastResolvedModelId?: string }
+        | undefined
+      const effectiveModel = routingState?.lastResolvedModelId || (metadata.model as string) || ""
+      if (effectiveModel) {
+        setCurrentModel(effectiveModel)
       }
       setMetadataLoaded(true)
     })

@@ -649,9 +649,10 @@ function buildFallbackChain(primaryTier: "premium" | "economy"): string[] {
 // window can handle the current conversation.  If not, try other economy
 // models with a larger window; escalate to premium as a last resort.
 //
-// Threshold: currentInputTokens < 0.85 × model.maxTokens
+// Threshold: currentInputTokens < 0.75 × model.maxTokens
+// Aligned with summarization trigger ratio so guard fires before context compaction.
 //
-const CONTEXT_CAPACITY_RATIO = 0.85
+const CONTEXT_CAPACITY_RATIO = 0.75
 
 /**
  * Guard: ensure the economy model's context window is large enough.
