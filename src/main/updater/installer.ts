@@ -62,39 +62,47 @@ echo [Updater] Waiting for application to exit...
 set RETRY=0
 :WAIT_EXIT
 tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
-if %ERRORLEVEL%==0 (
-    if %RETRY% LSS 30 (
-        set /A RETRY+=1
-        timeout /t 1 /nobreak >nul
-        goto WAIT_EXIT
-    ) else (
-        echo [Updater] Timeout waiting for app to exit, aborting
-        exit /b 1
-    )
-)
+if not %ERRORLEVEL%==0 goto APP_EXITED
+if %RETRY% GEQ 30 goto TIMEOUT
+set /A RETRY+=1
+timeout /t 1 /nobreak >nul
+goto WAIT_EXIT
 
+:TIMEOUT
+echo [Updater] Timeout waiting for app to exit, aborting
+exit /b 1
+
+:APP_EXITED
 echo [Updater] Application exited, starting update...
 
 :: Step 1: Backup current version
-if exist "${appAsarPath}" (
-    copy /Y "${appAsarPath}" "${backupPath}" >nul
-    if %ERRORLEVEL% NEQ 0 (
-        echo [Updater] Backup failed
-        exit /b 1
-    )
-    echo [Updater] Backed up current version
-)
+if not exist "${appAsarPath}" goto SKIP_BACKUP
+copy /Y "${appAsarPath}" "${backupPath}" >nul
+if not %ERRORLEVEL%==0 goto BACKUP_FAILED
+echo [Updater] Backed up current version
+goto DO_REPLACE
 
+:BACKUP_FAILED
+echo [Updater] Backup failed
+exit /b 1
+
+:SKIP_BACKUP
+echo [Updater] No existing asar to backup
+
+:DO_REPLACE
 :: Step 2: Replace app.asar
 copy /Y "${newAsarPath}" "${appAsarPath}" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [Updater] Replace failed, rolling back...
-    copy /Y "${backupPath}" "${appAsarPath}" >nul
-    echo [Updater] Rolled back to previous version
-    exit /b 1
-)
+if not %ERRORLEVEL%==0 goto REPLACE_FAILED
 echo [Updater] Replace successful
+goto WRITE_MARKER
 
+:REPLACE_FAILED
+echo [Updater] Replace failed, rolling back...
+copy /Y "${backupPath}" "${appAsarPath}" >nul
+echo [Updater] Rolled back to previous version
+exit /b 1
+
+:WRITE_MARKER
 :: Step 3: Write update marker for startup self-check
 echo {"fromVersion":"${fromVersion}","toVersion":"${toVersion}","updatedAt":"%date% %time%"} > "${markerPath}"
 
@@ -125,24 +133,27 @@ echo [Updater] Rolling back...
 set RETRY=0
 :WAIT_EXIT
 tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
-if %ERRORLEVEL%==0 (
-    if %RETRY% LSS 30 (
-        set /A RETRY+=1
-        timeout /t 1 /nobreak >nul
-        goto WAIT_EXIT
-    ) else (
-        echo [Updater] Timeout, aborting rollback
-        exit /b 1
-    )
-)
+if not %ERRORLEVEL%==0 goto DO_ROLLBACK
+if %RETRY% GEQ 30 goto TIMEOUT
+set /A RETRY+=1
+timeout /t 1 /nobreak >nul
+goto WAIT_EXIT
 
+:TIMEOUT
+echo [Updater] Timeout, aborting rollback
+exit /b 1
+
+:DO_ROLLBACK
 :: Replace with backup
 copy /Y "${backupAsarPath}" "${appAsarPath}" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [Updater] Rollback failed
-    exit /b 1
-)
+if not %ERRORLEVEL%==0 goto ROLLBACK_FAILED
+goto DONE
 
+:ROLLBACK_FAILED
+echo [Updater] Rollback failed
+exit /b 1
+
+:DONE
 :: Remove update marker
 if exist "${markerPath}" del /Q "${markerPath}" >nul 2>&1
 
