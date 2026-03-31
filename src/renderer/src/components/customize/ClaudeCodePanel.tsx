@@ -611,7 +611,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleStop} title="停止">
               <Square className="size-3.5" />
             </Button>
-          ) : activeSession ? (
+          ) : activeSession?.hasContent ? (
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleRestart} title="重启">
               <RotateCcw className="size-3.5" />
             </Button>
