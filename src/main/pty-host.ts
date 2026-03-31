@@ -119,7 +119,7 @@ function handleCreate(msg: CreateMsg): void {
         ? `${claudeCmd}; ${varsToUnset.map((v) => `Remove-Item Env:\\${v} -ErrorAction SilentlyContinue`).join("; ")}`
         : claudeCmd]
     : ["-c", varsToUnset.length > 0
-        ? claudeCmd + ` ; env ${varsToUnset.map((v) => `-u ${v}`).join(" ")} exec ${shell}`
+        ? claudeCmd + ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}; exec ${shell}`
         : claudeCmd + ` ; exec ${shell}`]
 
   const pty = ptySpawn(shell, shellArgs, {

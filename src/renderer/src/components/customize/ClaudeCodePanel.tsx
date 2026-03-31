@@ -239,12 +239,29 @@ export function ClaudeCodePanel(): React.JSX.Element {
       catch (e) { console.warn("[ClaudeCode] dispose failed in startPty, continuing with new PTY", e) }
     }
 
+    // restart 时用 escape 序列重置终端模式，再 clear 清屏
+    // 不用 reset()——它会触发 canvas/WebGL 重绘产生黑色方块
+    // 不用 \x1bc (RIS)——xterm.js 将其视为硬重置，同样可能触发重绘
+    if (session.restarting) {
+      session.xterm.write(
+        "\x1b[?1004l" + // 禁用焦点报告 (DECSET 1004)
+        "\x1b[?1049l" + // 退出 alternate screen buffer
+        "\x1b[?25h" +   // 显示光标
+        "\x1b[?1l" +    // 重置光标键模式
+        "\x1b[?7h" +    // 启用自动换行
+        "\x1b[0m" +     // 重置所有字符属性
+        "\x1b[!p"        // DECSTR (Soft Terminal Reset) — 重置其余模式，不触发 canvas 重绘
+      )
+      session.xterm.clear()
+    }
+
     const termId = await window.api.terminal.create({
       workDir: session.workDir || undefined,
       cols: session.xterm.cols,
       rows: session.xterm.rows,
       claudeModelId: session.claudeModelId
     })
+
     // #2 fix: 如果 await 期间 session 被关闭，dispose 新创建的 PTY
     if (!sessionsRef.current.has(session.id)) {
       window.api.terminal.dispose(termId).catch((e) => console.warn("[ClaudeCode] dispose orphan PTY failed:", e))
@@ -262,9 +279,11 @@ export function ClaudeCodePanel(): React.JSX.Element {
       // 首次收到数据时标记 hasContent，关闭 loading 遮罩
       if (!session.hasContent) {
         session.hasContent = true
-        session.restarting = false // loading 遮罩消失前保持 restarting，确保文案正确
+        session.restarting = false
         releaseCreatingState(session)
         setSessionIds((prev) => [...prev])
+        // 延迟 focus，此时 Claude Code 已初始化完毕能正确处理焦点报告，不会产生 ^[[I 乱码
+        if (session.id === activeSessionIdRef.current) session.xterm.focus()
       }
     })
     session.ptyCleanups.push(removeData)
@@ -448,8 +467,8 @@ export function ClaudeCodePanel(): React.JSX.Element {
           return
         }
         startPty(session).then(() => {
-          if (!cancelled) session.xterm.focus()
-          else releaseCreatingState(session) // P0 fix: cancelled 后兜底释放 creating 锁
+          // focus 在 onData 首次数据到达时触发，不在这里提前 focus（防 ^[[I 乱码）
+          if (cancelled) releaseCreatingState(session)
         }).catch((err) => {
           console.error("[ClaudeCode] PTY creation failed:", err)
           // await 期间 session 可能已被 closeSession 销毁
@@ -547,11 +566,10 @@ export function ClaudeCodePanel(): React.JSX.Element {
     activeSession.running = false
     setMountError(null)
     activeSession.hasContent = false
-    setSessionIds((prev) => [...prev]) // 显示 loading
+    setSessionIds((prev) => [...prev]) // 显示 loading 遮罩
     try {
-      activeSession.xterm.reset() // reset 而非 clear，彻底重置终端模式（焦点报告等），防乱码
       await startPty(activeSession)
-      if (sessionsRef.current.has(activeSession.id) && activeSession.id === activeSessionIdRef.current) activeSession.xterm.focus()
+      // focus 在 onData 首次数据到达时触发
     } catch (err) {
       // await 期间 session 可能已被 closeSession 销毁
       if (sessionsRef.current.has(activeSession.id)) {
@@ -588,47 +606,44 @@ export function ClaudeCodePanel(): React.JSX.Element {
     }
   }, [activeSession, cleanupPty, releaseCreatingState])
 
-  // 没有会话时显示欢迎页
-  if (sessionIds.length === 0) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-6">
-        <div className="flex flex-col items-center gap-3">
-          <div className="size-16 rounded-2xl bg-muted/60 flex items-center justify-center">
-            <TerminalIcon className="size-8 text-muted-foreground/60" />
-          </div>
-          <h3 className="text-lg font-semibold text-foreground/80">Claude Code</h3>
-          <p className="text-sm text-muted-foreground text-center leading-relaxed">
-            点击下方按钮选择项目目录，Claude Code 将在该目录下启动。<br />
-            你可以通过顶部 Tab 栏新建多个会话，每个会话对应不同的项目目录。
-          </p>
-        </div>
-        {isPackaged && models.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">模型：</span>
-            <select
-              value={selectedModelId}
-              onChange={(e) => setSelectedModelId(e.target.value)}
-              className="h-8 px-2 rounded-md border border-border bg-background text-sm"
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-        <Button onClick={() => { setMountError(null); createSessionWithDir() }} className="gap-2" disabled={creating}>
-          {creating ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
-          {creating ? "正在启动..." : "选择工作目录并启动"}
-        </Button>
-        {mountError && (
-          <p className="text-xs text-destructive">{mountError}</p>
-        )}
-      </div>
-    )
-  }
-
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className="relative flex flex-1 flex-col overflow-hidden">
+      {/* 没有会话时显示欢迎页（覆盖在终端视图上，避免 DOM 树切换导致高度闪动） */}
+      {sessionIds.length === 0 && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 bg-background">
+          <div className="flex flex-col items-center gap-3">
+            <div className="size-16 rounded-2xl bg-muted/60 flex items-center justify-center">
+              <TerminalIcon className="size-8 text-muted-foreground/60" />
+            </div>
+            <h3 className="text-lg font-semibold text-foreground/80">Claude Code</h3>
+            <p className="text-sm text-muted-foreground text-center leading-relaxed">
+              点击下方按钮选择项目目录，Claude Code 将在该目录下启动。<br />
+              你可以通过顶部 Tab 栏新建多个会话，每个会话对应不同的项目目录。
+            </p>
+          </div>
+          {isPackaged && models.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">模型：</span>
+              <select
+                value={selectedModelId}
+                onChange={(e) => setSelectedModelId(e.target.value)}
+                className="h-8 px-2 rounded-md border border-border bg-background text-sm"
+              >
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <Button onClick={() => { setMountError(null); createSessionWithDir() }} className="gap-2" disabled={creating}>
+            {creating ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
+            {creating ? "正在启动..." : "选择工作目录并启动"}
+          </Button>
+          {mountError && (
+            <p className="text-xs text-destructive">{mountError}</p>
+          )}
+        </div>
+      )}
       {/* 顶部工具栏 */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border">
         <div className="flex items-center gap-2">
