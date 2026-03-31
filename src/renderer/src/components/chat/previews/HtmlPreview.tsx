@@ -49,7 +49,8 @@ export function HtmlPreview({
         HTML Preview{path ? ` · ${getFileName(path)}` : ""}
       </div>
       <div
-        className={`w-full overflow-x-auto ${fillHeight ? "flex-1 min-h-0 overflow-y-hidden" : "overflow-y-hidden"}`}
+        className={`w-full overflow-auto ${fillHeight ? "flex-1 min-h-0" : ""}`}
+        style={fillHeight ? undefined : { maxHeight: "80vh" }}
       >
         <iframe
           ref={iframeRef}
