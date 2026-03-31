@@ -8,7 +8,6 @@ const TOOL_LABELS: Record<string, string> = {
   grep: "搜索内容",
   write_todos: "更新任务",
   task: "子任务执行",
-  git_workflow: "Git 代码批量提交（点击展开）",
   git_push: "Git 推送",
   browser_playwright: "Playwright 浏览器操作",
   mcp_call: "调用 MCP 工具",

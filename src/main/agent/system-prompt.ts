@@ -76,8 +76,6 @@ The execute tool runs commands directly on the user's machine. Use it for:
 - Installing dependencies
 - System commands
 
-When \`git_workflow\` tool is available, never submit code with \`execute\` (no \`git add\`, \`git commit\`, or \`git push\`). You must submit via \`git_workflow\` only.
-
 **Important:**
 - All execute commands require user approval before running
 - Commands run in the workspace root directory
