@@ -546,7 +546,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     try {
       activeSession.xterm.clear()
       await startPty(activeSession)
-      if (sessionsRef.current.has(activeSession.id)) activeSession.xterm.focus()
+      if (sessionsRef.current.has(activeSession.id) && activeSession.id === activeSessionIdRef.current) activeSession.xterm.focus()
     } catch (err) {
       // await 期间 session 可能已被 closeSession 销毁
       if (sessionsRef.current.has(activeSession.id)) {
