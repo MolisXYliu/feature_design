@@ -70,6 +70,7 @@ goto WAIT_EXIT
 
 :TIMEOUT
 echo [Updater] Timeout waiting for app to exit, aborting
+pause
 exit /b 1
 
 :APP_EXITED
@@ -84,6 +85,7 @@ goto DO_REPLACE
 
 :BACKUP_FAILED
 echo [Updater] Backup failed
+pause
 exit /b 1
 
 :SKIP_BACKUP
@@ -100,6 +102,7 @@ goto WRITE_MARKER
 echo [Updater] Replace failed, rolling back...
 copy /Y "${backupPath}" "${appAsarPath}" >nul
 echo [Updater] Rolled back to previous version
+pause
 exit /b 1
 
 :WRITE_MARKER
@@ -112,6 +115,7 @@ del /Q "${newAsarPath}" >nul 2>&1
 :: Step 5: Restart application
 echo [Updater] Starting new version...
 start "" "${exePath}"
+pause
 exit /b 0
 `
 }
@@ -182,7 +186,7 @@ export function installAsarUpdate(newAsarPath: string, toVersion: string): void 
   console.log("[Updater] Generated update.bat at", batPath)
 
   // Spawn BAT script in detached mode so it survives app exit
-  const child = spawn("cmd", ["/c", batPath, "&&", "pause"], {
+  const child = spawn("cmd", ["/c", batPath], {
     detached: true,
     stdio: "ignore",
     windowsHide: false  // temporarily visible for debugging
