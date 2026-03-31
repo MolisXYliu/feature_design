@@ -218,51 +218,65 @@ function generateFullZipUpdateBat(
 
   return `@echo off
 chcp 65001 >nul
-echo [Updater] Waiting for application to exit...
+echo [FullUpdater] Waiting for application to exit...
+echo [FullUpdater] zip=${zipPath}
+echo [FullUpdater] appDir=${appDir}
+echo [FullUpdater] exePath=${exePath}
 
 set RETRY=0
 :WAIT_EXIT
 tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
-if %ERRORLEVEL%==0 (
-    if %RETRY% LSS 30 (
-        set /A RETRY+=1
-        timeout /t 1 /nobreak >nul
-        goto WAIT_EXIT
-    ) else (
-        echo [Updater] Timeout waiting for app to exit, aborting
-        exit /b 1
-    )
-)
+if not %ERRORLEVEL%==0 goto APP_EXITED
+if %RETRY% GEQ 30 goto TIMEOUT
+set /A RETRY+=1
+timeout /t 1 /nobreak >nul
+goto WAIT_EXIT
 
-echo [Updater] Application exited, starting full update...
+:TIMEOUT
+echo [FullUpdater] Timeout waiting for app to exit, aborting
+exit /b 1
+
+:APP_EXITED
+echo [FullUpdater] Application exited, starting full update...
 
 :: Step 1: Backup current installation
 if exist "${backupDir}" rmdir /s /q "${backupDir}"
 xcopy /e /i /h /y "${appDir}\\" "${backupDir}\\" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [Updater] Backup failed
-    exit /b 1
-)
-echo [Updater] Backup complete
+if not %ERRORLEVEL%==0 goto BACKUP_FAILED
+echo [FullUpdater] Backup complete: ${backupDir}
+goto EXTRACT
 
+:BACKUP_FAILED
+echo [FullUpdater] Backup failed
+exit /b 1
+
+:EXTRACT
 :: Step 2: Extract zip to temp dir
 if exist "${tempDir}" rmdir /s /q "${tempDir}"
+echo [FullUpdater] Extracting ${zipPath} to ${tempDir}...
 powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${tempDir}' -Force"
-if %ERRORLEVEL% NEQ 0 (
-    echo [Updater] Extraction failed
-    exit /b 1
-)
-echo [Updater] Extraction complete
+if not %ERRORLEVEL%==0 goto EXTRACT_FAILED
+echo [FullUpdater] Extraction complete
+goto COPY_FILES
 
+:EXTRACT_FAILED
+echo [FullUpdater] Extraction failed
+exit /b 1
+
+:COPY_FILES
 :: Step 3: Copy new files over app directory
+echo [FullUpdater] Copying files to ${appDir}...
 xcopy /e /i /h /y "${tempDir}\\*" "${appDir}\\" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [Updater] Copy failed, rolling back from backup...
-    xcopy /e /i /h /y "${backupDir}\\" "${appDir}\\" >nul
-    exit /b 1
-)
-echo [Updater] Copy complete
+if not %ERRORLEVEL%==0 goto COPY_FAILED
+echo [FullUpdater] Copy complete
+goto WRITE_MARKER
 
+:COPY_FAILED
+echo [FullUpdater] Copy failed, rolling back from backup...
+xcopy /e /i /h /y "${backupDir}\\" "${appDir}\\" >nul
+exit /b 1
+
+:WRITE_MARKER
 :: Step 4: Write update marker for startup self-check
 echo {"fromVersion":"${fromVersion}","toVersion":"${toVersion}","updatedAt":"%date% %time%","updateType":"full"} > "${markerPath}"
 
@@ -271,11 +285,9 @@ rmdir /s /q "${tempDir}"
 del /Q "${zipPath}" >nul 2>&1
 
 :: Step 6: Restart application
-echo [Updater] Starting new version...
+echo [FullUpdater] Starting new version...
 start "" "${exePath}"
-
-:: Self-delete
-(goto) 2>nul & del "%~f0"
+exit /b 0
 `
 }
 
@@ -291,6 +303,11 @@ export function installFullUpdate(filePath: string, toVersion: string): void {
     const exePath = getExePath()
     const appDir = dirname(exePath)
     const fromVersion = app.getVersion()
+    console.log(`[Updater] Installing full zip update: ${fromVersion} → ${toVersion}`)
+    console.log("[Updater] zip path:", filePath)
+    console.log("[Updater] app dir:", appDir)
+    console.log("[Updater] exe path:", exePath)
+
     const batContent = generateFullZipUpdateBat(filePath, appDir, exePath, fromVersion, toVersion)
     const batPath = join(getUpdatesDir(), "full-update.bat")
 
