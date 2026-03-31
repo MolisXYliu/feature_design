@@ -184,6 +184,7 @@ interface CustomAPI {
     getGitPanelState: (threadId: string) => Promise<{
       success: boolean
       isWorktree: boolean
+      isGitRepo?: boolean
       taskId: string
       files: Array<{ path: string; diff: string; additions: number; deletions: number }>
       totals: { additions: number; deletions: number; fileCount: number }
@@ -197,6 +198,7 @@ interface CustomAPI {
     getGitPanelSummary: (threadId: string) => Promise<{
       success: boolean
       isWorktree: boolean
+      isGitRepo?: boolean
       hasPendingDiff: boolean
       changedFiles: number
     }>

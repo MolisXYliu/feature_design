@@ -345,6 +345,7 @@ const api = {
     getGitPanelState: (threadId: string): Promise<{
       success: boolean
       isWorktree: boolean
+      isGitRepo?: boolean
       taskId: string
       files: Array<{ path: string; diff: string; additions: number; deletions: number }>
       totals: { additions: number; deletions: number; fileCount: number }
@@ -358,6 +359,7 @@ const api = {
       return ipcRenderer.invoke("workspace:getGitPanelState", { threadId }) as Promise<{
         success: boolean
         isWorktree: boolean
+        isGitRepo?: boolean
         taskId: string
         files: Array<{ path: string; diff: string; additions: number; deletions: number }>
         totals: { additions: number; deletions: number; fileCount: number }
@@ -372,12 +374,14 @@ const api = {
     getGitPanelSummary: (threadId: string): Promise<{
       success: boolean
       isWorktree: boolean
+      isGitRepo?: boolean
       hasPendingDiff: boolean
       changedFiles: number
     }> => {
       return ipcRenderer.invoke("workspace:getGitPanelSummary", { threadId }) as Promise<{
         success: boolean
         isWorktree: boolean
+        isGitRepo?: boolean
         hasPendingDiff: boolean
         changedFiles: number
       }>

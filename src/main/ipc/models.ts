@@ -1,6 +1,7 @@
 import { IpcMain, dialog, app, BrowserWindow } from "electron"
 import Store from "electron-store"
 import * as fs from "fs/promises"
+import { existsSync } from "fs"
 import * as path from "path"
 import { execFile } from "child_process"
 import { promisify } from "util"
@@ -78,6 +79,16 @@ function isAbsoluteLikePath(input: string): boolean {
   return path.isAbsolute(input) || /^[a-zA-Z]:[\\/]/.test(input)
 }
 
+function findGitRootByFs(startPath: string): string | null {
+  let current = path.resolve(startPath)
+  while (true) {
+    if (existsSync(path.join(current, ".git"))) return current
+    const parent = path.dirname(current)
+    if (parent === current) return null
+    current = parent
+  }
+}
+
 function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[] {
   const result = new Set<string>()
   const trimmed = normalizeTrackedPath(rawPath)
@@ -104,6 +115,26 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
   const rel = path.relative(worktreeAbs, candidateAbs)
   if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
     result.add(toPosixRelative(rel))
+  }
+
+  // Also accept paths that are relative to git root (not workspace root),
+  // then map them back to workspace-relative paths when workspacePath is a subdirectory.
+  if (!isAbsoluteLikePath(trimmed)) {
+    const gitRoot = findGitRootByFs(worktreeAbs)
+    if (gitRoot && gitRoot !== worktreeAbs) {
+      const workspaceFromGitRootRaw = path.relative(gitRoot, worktreeAbs)
+      const workspaceFromGitRoot = toPosixRelative(workspaceFromGitRootRaw)
+      const rawAsGitRelative = toPosixRelative(trimmed)
+      if (
+        workspaceFromGitRoot &&
+        rawAsGitRelative &&
+        (rawAsGitRelative === workspaceFromGitRoot ||
+          rawAsGitRelative.startsWith(`${workspaceFromGitRoot}/`))
+      ) {
+        const mapped = rawAsGitRelative.slice(workspaceFromGitRoot.length).replace(/^\/+/, "")
+        if (mapped) result.add(mapped)
+      }
+    }
   }
 
   return Array.from(result).filter(Boolean)
@@ -299,6 +330,7 @@ async function resolveThreadWorkspaceContext(threadId: string): Promise<{
   metadata: Record<string, unknown>
   workspacePath: string | null
   isWorktree: boolean
+  isGitRepo: boolean
   worktreeBaseCommit: string | null
   worktreeBranch: string | null
 }> {
@@ -311,6 +343,7 @@ async function resolveThreadWorkspaceContext(threadId: string): Promise<{
     metadata = {}
   }
   const workspacePath = typeof metadata.workspacePath === "string" ? metadata.workspacePath : null
+  const isGitRepo = workspacePath ? Boolean(await getGitRoot(workspacePath)) : false
   const metadataMarkedWorktree = Boolean(metadata.isWorktree)
   const detectedWorktree = workspacePath ? await detectIsWorktreePath(workspacePath) : false
   const isWorktree = metadataMarkedWorktree || detectedWorktree
@@ -318,7 +351,7 @@ async function resolveThreadWorkspaceContext(threadId: string): Promise<{
     typeof metadata.worktreeBaseCommit === "string" ? metadata.worktreeBaseCommit : null
   const worktreeBranch =
     typeof metadata.worktreeBranch === "string" ? metadata.worktreeBranch : null
-  return { metadata, workspacePath, isWorktree, worktreeBaseCommit, worktreeBranch }
+  return { metadata, workspacePath, isWorktree, isGitRepo, worktreeBaseCommit, worktreeBranch }
 }
 
 function getFileHistoryMap(metadata: Record<string, unknown>): Record<string, FileHistorySnapshot[]> {
@@ -393,13 +426,14 @@ function getRecentlyRevertedFiles(metadata: Record<string, unknown>): string[] {
 async function buildGitPanelState(
   worktreePath: string,
   trackedFiles: string[],
-  options?: { silent?: boolean }
+  options?: { silent?: boolean; includeAllWhenNoTracked?: boolean }
 ): Promise<{
   files: GitPanelFileDiff[]
   changedFiles: string[]
   totals: { additions: number; deletions: number; fileCount: number }
 }> {
   const silent = Boolean(options?.silent)
+  const includeAllWhenNoTracked = Boolean(options?.includeAllWhenNoTracked)
   const trackedSet = new Set<string>()
   for (const tracked of trackedFiles) {
     for (const rel of toWorktreeRelativePath(worktreePath, tracked)) {
@@ -408,14 +442,40 @@ async function buildGitPanelState(
   }
   const normalizedTrackedFiles = Array.from(trackedSet)
 
-  if (normalizedTrackedFiles.length === 0) {
+  const parseChangedFromStatus = (statusOutput: string): string[] => {
+    const parsed = parsePorcelainPaths(statusOutput)
+    const changedSet = new Set<string>()
+    for (const raw of parsed) {
+      const candidates = toWorktreeRelativePath(worktreePath, raw)
+      if (candidates.length === 0) continue
+      if (normalizedTrackedFiles.length > 0) {
+        const matched = candidates.find((c) => trackedSet.has(c))
+        if (matched) changedSet.add(matched)
+        continue
+      }
+      const best = candidates.find((c) => c && !c.startsWith("../") && !path.isAbsolute(c))
+      if (best) changedSet.add(best)
+    }
+    return Array.from(changedSet)
+  }
+
+  if (normalizedTrackedFiles.length === 0 && !includeAllWhenNoTracked) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
-  const statusOut = await runGit(worktreePath, ["status", "--porcelain", "--", ...normalizedTrackedFiles], { silent })
-  const changedFiles = Array.from(new Set(parsePorcelainPaths(statusOut))).filter((p) =>
-    trackedSet.has(p)
-  )
+  const statusArgs = normalizedTrackedFiles.length > 0
+    ? ["status", "--porcelain", "--", ...normalizedTrackedFiles]
+    : ["status", "--porcelain", "--", "."]
+  const statusOut = await runGit(worktreePath, statusArgs, { silent })
+  let changedFiles = parseChangedFromStatus(statusOut)
+
+  // If tracked files exist but none matches current workspace changes,
+  // fallback to workspace-wide scan to avoid stale-tracked false negatives.
+  if (changedFiles.length === 0 && includeAllWhenNoTracked && normalizedTrackedFiles.length > 0) {
+    const fallbackStatusOut = await runGit(worktreePath, ["status", "--porcelain", "--", "."], { silent })
+    changedFiles = parseChangedFromStatus(fallbackStatusOut)
+  }
+
   if (changedFiles.length === 0) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
@@ -1149,6 +1209,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         return {
           success: false,
           isWorktree: false,
+          isGitRepo: false,
           taskId: threadId,
           files: [],
           totals: { additions: 0, deletions: 0, fileCount: 0 },
@@ -1157,21 +1218,25 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           error: "未配置工作区"
         }
       }
-      if (!context.isWorktree) {
+      if (!context.isGitRepo) {
         return {
           success: false,
           isWorktree: false,
+          isGitRepo: false,
           taskId: threadId,
           files: [],
           totals: { additions: 0, deletions: 0, fileCount: 0 },
           hasPendingDiff: false,
           hasPushableCommit: false,
-          error: "当前任务未使用 worktree，无法打开 Git Panel"
+          error: "当前任务未关联 Git 仓库，无法打开 Git Panel"
         }
       }
 
       const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked, { silent: true })
+      const state = await buildGitPanelState(context.workspacePath, tracked, {
+        silent: true,
+        includeAllWhenNoTracked: true
+      })
       let worktreeBranch = context.worktreeBranch
       if (!worktreeBranch) {
         try {
@@ -1185,7 +1250,8 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         : false
       return {
         success: true,
-        isWorktree: true,
+        isWorktree: context.isWorktree,
+        isGitRepo: true,
         taskId: threadId,
         files: state.files,
         totals: state.totals,
@@ -1202,6 +1268,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       return {
         success: false,
         isWorktree: false,
+        isGitRepo: false,
         taskId: threadId,
         files: [],
         totals: { additions: 0, deletions: 0, fileCount: 0 },
@@ -1215,23 +1282,27 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
   ipcMain.handle("workspace:getGitPanelSummary", async (_event, { threadId }: { threadId: string }) => {
     try {
       const context = await resolveThreadWorkspaceContext(threadId)
-      if (!context.workspacePath || !context.isWorktree) {
-        return { success: true, isWorktree: false, hasPendingDiff: false, changedFiles: 0 }
+      if (!context.workspacePath || !context.isGitRepo) {
+        return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
       }
       const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked, { silent: true })
+      const state = await buildGitPanelState(context.workspacePath, tracked, {
+        silent: true,
+        includeAllWhenNoTracked: true
+      })
       return {
         success: true,
-        isWorktree: true,
+        isWorktree: context.isWorktree,
+        isGitRepo: true,
         hasPendingDiff: state.files.length > 0,
         changedFiles: state.files.length
       }
     } catch {
-      return { success: true, isWorktree: false, hasPendingDiff: false, changedFiles: 0 }
+      return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
     }
   })
 
-  // Commit only LLM-tracked files in a worktree with a user-provided message.
+  // Commit workspace changes in Git repo with a user-provided message.
   ipcMain.handle(
     "workspace:commitWorktree",
     async (
@@ -1242,16 +1313,12 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         logGitStep(threadId, "commit", "开始提交")
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
-        if (!worktreePath || !context.isWorktree) {
-          logGitStep(threadId, "commit", "失败：当前任务不在 worktree 中")
-          return { success: false, error: "当前任务不在 worktree 中" }
+        if (!worktreePath || !context.isGitRepo) {
+          logGitStep(threadId, "commit", "失败：当前任务不在 Git 仓库中")
+          return { success: false, error: "当前任务不在 Git 仓库中" }
         }
         const tracked = getTrackedLlmFiles(context.metadata)
-        if (tracked.length === 0) {
-          logGitStep(threadId, "commit", "失败：没有可提交的 LLM 改动文件")
-          return { success: false, error: "没有可提交的 LLM 改动文件" }
-        }
-        const state = await buildGitPanelState(worktreePath, tracked)
+        const state = await buildGitPanelState(worktreePath, tracked, { includeAllWhenNoTracked: true })
         if (state.changedFiles.length === 0) {
           logGitStep(threadId, "commit", "失败：没有需要提交的改动")
           return { success: false, error: "没有需要提交的改动" }
@@ -1291,10 +1358,10 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       try {
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
-        if (!worktreePath || !context.isWorktree) {
-          logGitStep(threadId, "push", "失败：当前任务不在 worktree 中")
-          steps.push({ step: "final", status: "failed", detail: "当前任务不在 worktree 中" })
-          return { success: false, error: "当前任务不在 worktree 中", steps }
+        if (!worktreePath || !context.isGitRepo) {
+          logGitStep(threadId, "push", "失败：当前任务不在 Git 仓库中")
+          steps.push({ step: "final", status: "failed", detail: "当前任务不在 Git 仓库中" })
+          return { success: false, error: "当前任务不在 Git 仓库中", steps }
         }
 
         const rollbackAutoCommit = async (): Promise<void> => {
@@ -1312,33 +1379,29 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         const branch =
           context.worktreeBranch || (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
 
-        // Step 1: Auto-commit pending tracked changes first.
+        // Step 1: Auto-commit pending workspace changes first.
         // This prevents `pull --rebase --autostash` style stash replay conflicts
         // that can inject conflict markers into files.
         const tracked = getTrackedLlmFiles(context.metadata)
-        if (tracked.length > 0) {
-          const pending = await buildGitPanelState(worktreePath, tracked)
-          if (pending.changedFiles.length > 0) {
-            const commitMessage = (message || "").trim() ||
-              `chore(task:${threadId.slice(0, 8)}): auto commit before push`
-            try {
-              logGitStep(threadId, "push", `自动提交 message: ${commitMessage}`)
-              await runGit(worktreePath, ["add", "--", ...pending.changedFiles])
-              await runGit(worktreePath, ["commit", "-m", commitMessage])
-              autoCommitted = true
-              autoCommitHead = (await runGit(worktreePath, ["rev-parse", "HEAD"])).trim()
-              steps.push({ step: "commit", status: "ok", detail: `自动提交成功：${commitMessage}` })
-            } catch (commitError) {
-              const detail = getExecErrorText(commitError)
-              steps.push({ step: "commit", status: "failed", detail: detail || "自动提交失败" })
-              steps.push({ step: "final", status: "failed", detail: "流程中断：commit 失败" })
-              return { success: false, error: detail || "自动提交失败", steps }
-            }
-          } else {
-            steps.push({ step: "commit", status: "skipped", detail: "无待提交改动，跳过自动提交" })
+        const pending = await buildGitPanelState(worktreePath, tracked, { includeAllWhenNoTracked: true })
+        if (pending.changedFiles.length > 0) {
+          const commitMessage = (message || "").trim() ||
+            `chore(task:${threadId.slice(0, 8)}): auto commit before push`
+          try {
+            logGitStep(threadId, "push", `自动提交 message: ${commitMessage}`)
+            await runGit(worktreePath, ["add", "--", ...pending.changedFiles])
+            await runGit(worktreePath, ["commit", "-m", commitMessage])
+            autoCommitted = true
+            autoCommitHead = (await runGit(worktreePath, ["rev-parse", "HEAD"])).trim()
+            steps.push({ step: "commit", status: "ok", detail: `自动提交成功：${commitMessage}` })
+          } catch (commitError) {
+            const detail = getExecErrorText(commitError)
+            steps.push({ step: "commit", status: "failed", detail: detail || "自动提交失败" })
+            steps.push({ step: "final", status: "failed", detail: "流程中断：commit 失败" })
+            return { success: false, error: detail || "自动提交失败", steps }
           }
         } else {
-          steps.push({ step: "commit", status: "skipped", detail: "无 LLM 追踪文件，跳过自动提交" })
+          steps.push({ step: "commit", status: "skipped", detail: "无待提交改动，跳过自动提交" })
         }
 
         // Step 2: Pull before push (clean working tree, no autostash).
@@ -1483,17 +1546,24 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       logGitStep(threadId, "reject_all", "开始全部回退")
       const context = await resolveThreadWorkspaceContext(threadId)
       const worktreePath = context.workspacePath
-      if (!worktreePath || !context.isWorktree) {
-        logGitStep(threadId, "reject_all", "失败：当前任务不在 worktree 中")
-        return { success: false, error: "当前任务不在 worktree 中" }
+      if (!worktreePath || !context.isGitRepo) {
+        logGitStep(threadId, "reject_all", "失败：当前任务不在 Git 仓库中")
+        return { success: false, error: "当前任务不在 Git 仓库中" }
       }
       const tracked = getTrackedLlmFiles(context.metadata)
       const historyMap = getFileHistoryMap(context.metadata)
 
       const targetPathSet = new Set<string>()
-      for (const item of tracked) {
-        for (const rel of toWorktreeRelativePath(worktreePath, item)) {
-          targetPathSet.add(rel)
+      if (tracked.length > 0) {
+        for (const item of tracked) {
+          for (const rel of toWorktreeRelativePath(worktreePath, item)) {
+            targetPathSet.add(rel)
+          }
+        }
+      } else {
+        const pendingState = await buildGitPanelState(worktreePath, tracked, { includeAllWhenNoTracked: true })
+        for (const file of pendingState.changedFiles) {
+          targetPathSet.add(file)
         }
       }
       const targetPaths = Array.from(targetPathSet)
@@ -1518,7 +1588,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         await runGit(worktreePath, ["clean", "-f", "--", targetPath]).catch(() => {})
       }
 
-      const postState = await buildGitPanelState(worktreePath, tracked)
+      const postState = await buildGitPanelState(worktreePath, tracked, { includeAllWhenNoTracked: true })
 
       const { getThread, updateThread } = await import("../db")
       const thread = getThread(threadId)
@@ -1548,9 +1618,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         logGitStep(threadId, "reject_file", `开始回退文件：${filePath}`)
         const context = await resolveThreadWorkspaceContext(threadId)
         const worktreePath = context.workspacePath
-        if (!worktreePath || !context.isWorktree) {
-          logGitStep(threadId, "reject_file", "失败：当前任务不在 worktree 中")
-          return { success: false, error: "当前任务不在 worktree 中" }
+        if (!worktreePath || !context.isGitRepo) {
+          logGitStep(threadId, "reject_file", "失败：当前任务不在 Git 仓库中")
+          return { success: false, error: "当前任务不在 Git 仓库中" }
         }
 
         const tracked = getTrackedLlmFiles(context.metadata)
@@ -1585,7 +1655,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
           await runGit(worktreePath, ["clean", "-f", "--", targetPath]).catch(() => {})
         }
 
-        const postState = await buildGitPanelState(worktreePath, tracked)
+        const postState = await buildGitPanelState(worktreePath, tracked, { includeAllWhenNoTracked: true })
         const { getThread, updateThread } = await import("../db")
         const thread = getThread(threadId)
         if (thread) {
