@@ -5,7 +5,8 @@ import {
   AlertCircle,
   RotateCcw,
   GitBranch,
-  FolderOpen
+  FolderOpen,
+  CheckCircle2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
@@ -270,8 +271,16 @@ export function GitPanelView({
         {!loading && state?.isWorktree && (
           <>
             {state.files.length === 0 ? (
-              <div className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
-                当前没有待审批的 LLM 改动。
+              <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-8">
+                <div className="mx-auto max-w-[340px] text-center">
+                  <div className="mx-auto mb-3 flex size-9 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10">
+                    <CheckCircle2 className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div className="text-sm font-medium text-foreground">没有待审批改动</div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    当前工作区已是最新状态。后续产生文件变更时，这里会自动显示最新 diff。
+                  </p>
+                </div>
               </div>
             ) : (
               <>
