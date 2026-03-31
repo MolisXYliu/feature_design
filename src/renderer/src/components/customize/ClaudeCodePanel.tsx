@@ -330,7 +330,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
     const session = sessionsRef.current.get(id)
     if (session) {
       requestAnimationFrame(() => {
-        if (!sessionsRef.current.has(id)) return // RAF 前 session 可能已被关闭
+        if (!sessionsRef.current.has(id) || id !== activeSessionIdRef.current) return
         fitTerminal(session)
         session.xterm.focus()
       })
