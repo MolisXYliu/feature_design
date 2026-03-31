@@ -262,6 +262,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       // 首次收到数据时标记 hasContent，关闭 loading 遮罩
       if (!session.hasContent) {
         session.hasContent = true
+        session.restarting = false // loading 遮罩消失前保持 restarting，确保文案正确
         releaseCreatingState(session)
         setSessionIds((prev) => [...prev])
       }
@@ -272,6 +273,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
       if (!sessionsRef.current.has(session.id)) return
       session.xterm.write(`\r\n\x1b[90m[进程已退出，代码: ${code}]\x1b[0m\r\n`)
       session.running = false
+      session.restarting = false
       session.termId = null // 进程已退出，清零防止重启时多余 dispose
       if (!session.hasContent) {
         session.hasContent = true
@@ -301,6 +303,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
         if (!session.hasContent) {
           session.xterm.write("\r\n\x1b[31m[启动超时，请检查环境或重启]\x1b[0m\r\n")
           session.hasContent = true
+          session.restarting = false
           setSessionIds((prev) => [...prev])
         }
       } catch (e) {
@@ -552,12 +555,13 @@ export function ClaudeCodePanel(): React.JSX.Element {
       // await 期间 session 可能已被 closeSession 销毁
       if (sessionsRef.current.has(activeSession.id)) {
         activeSession.running = false
+        activeSession.restarting = false
         activeSession.hasContent = true
         activeSession.xterm.write(`\r\n\x1b[31m[重启失败: ${err instanceof Error ? err.message : err}]\x1b[0m\r\n`)
         setSessionIds((prev) => [...prev])
+      } else {
+        activeSession.restarting = false // session 已销毁，仅清标志
       }
-    } finally {
-      activeSession.restarting = false
     }
   }, [activeSession, startPty])
 
