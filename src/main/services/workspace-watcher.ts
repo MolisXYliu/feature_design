@@ -33,10 +33,13 @@ export function startWatching(threadId: string, workspacePath: string): void {
   try {
     // Use recursive watching (supported on macOS and Windows)
     const watcher = fs.watch(workspacePath, { recursive: true }, (eventType, filename) => {
-      // Skip hidden files and common non-project files
+      // Keep ignoring hidden paths, except .gitignore which should refresh Git Panel in real time.
       if (filename) {
-        const parts = filename.split(path.sep)
-        if (parts.some((p) => p.startsWith(".") || p === "node_modules")) {
+        const parts = filename.split(/[\\/]/).filter(Boolean)
+        const leaf = parts[parts.length - 1] || ""
+        const hasHiddenPart = parts.some((p) => p.startsWith("."))
+        const isGitIgnore = leaf === ".gitignore"
+        if ((hasHiddenPart && !isGitIgnore) || parts.some((p) => p === "node_modules")) {
           return
         }
       }

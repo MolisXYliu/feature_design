@@ -1,14 +1,8 @@
 import { CheckCircle2, Loader2, Upload } from "lucide-react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle
-} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { cn } from "@/lib/utils"
 
 type GitSubmitAction = "commit" | "push"
 
@@ -46,124 +40,156 @@ export function GitSubmitDialog({
   onSubmit
 }: GitSubmitDialogProps): React.JSX.Element {
   const formId = "git-submit-form"
+  const cardValue = cardNumber.trim()
+  const messageValue = commitMessage.trim()
+  const finalMessagePreview = cardValue
+    ? `${cardValue} #comment fix:${messageValue || "<message>"} #CMBDevClaw`
+    : ""
+  const cardMissing = requiresCommitMetadata && !cardValue
+  const messageMissing = requiresCommitMetadata && !messageValue
+  const commitRunning = running === "commit"
+  const pushRunning = running === "push"
+  const anyRunning = running !== null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md border-0 bg-transparent p-0 shadow-none">
-        <Card className="w-full">
-          <CardHeader>
-            <CardTitle className="text-2xl">Git 提交</CardTitle>
-          </CardHeader>
+      <DialogContent className="sm:max-w-lg rounded-2xl border border-border bg-background p-0 shadow-xl">
+        <div className="px-5 py-4 border-b border-border/70">
+          <div className="text-[16px] font-semibold">Git 提交</div>
+          <div className="mt-1 text-xs text-muted-foreground">审核改动后选择提交或推送</div>
+        </div>
 
-          <CardContent>
-            <form
-              id={formId}
-              onSubmit={(e) => {
-                e.preventDefault()
-              }}
-            >
-              <div className="flex flex-col gap-5">
-                <div className="grid gap-2">
-                  <div className="text-xs text-muted-foreground">分支</div>
-                  <div className="text-sm font-medium break-all">{branch || "-"}</div>
+        <form
+          id={formId}
+          className="px-5 py-4 space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+          }}
+        >
+          <div className="rounded-xl border border-border/70 bg-muted/25 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-muted-foreground">分支</span>
+              <span
+                className="font-mono text-foreground truncate max-w-[300px]"
+                title={branch || "-"}
+              >
+                {branch || "-"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-muted-foreground">变更</span>
+              <span className="font-medium">
+                <span>{fileCount} 文件</span>
+                <span className="ml-2 text-emerald-600 dark:text-emerald-400">+{additions}</span>
+                <span className="ml-1 text-rose-600 dark:text-rose-400">-{deletions}</span>
+              </span>
+            </div>
+          </div>
+
+          {requiresCommitMetadata ? (
+            <>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <label htmlFor="git-card-number" className="font-medium text-foreground">
+                    卡片编号
+                  </label>
+                  <span
+                    className={cn(
+                      "text-[11px]",
+                      cardMissing ? "text-destructive" : "text-muted-foreground"
+                    )}
+                  >
+                    必填
+                  </span>
                 </div>
-
-                <div className="grid gap-2">
-                  <div className="text-xs text-muted-foreground">更改</div>
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <span>{fileCount} 个文件</span>
-                    <span className="text-emerald-600 dark:text-emerald-400">+{additions}</span>
-                    <span className="text-rose-600 dark:text-rose-400">-{deletions}</span>
-                  </div>
-                </div>
-
-                {requiresCommitMetadata ? (
-                  <>
-                    <div className="grid gap-2">
-                      <div className="text-sm font-medium">卡片编号</div>
-                      <Input
-                        id="git-card-number"
-                        value={cardNumber}
-                        onChange={(e) => onCardNumberChange(e.target.value)}
-                        placeholder="输入卡片编号 cardNumber（必填）"
-                        required
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <div className="text-sm font-medium">提交消息</div>
-                      <textarea
-                        id="git-message"
-                        value={commitMessage}
-                        onChange={(e) => onCommitMessageChange(e.target.value)}
-                        placeholder="请输入提交信息"
-                        rows={4}
-                        className="flex min-h-[96px] w-full rounded-sm border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y"
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-sm text-muted-foreground">
-                    当前没有文件改动，将直接推送已有提交。
-                  </div>
-                )}
-
-                <div className="text-sm font-medium">后续步骤</div>
+                <Input
+                  id="git-card-number"
+                  value={cardNumber}
+                  onChange={(e) => onCardNumberChange(e.target.value)}
+                  placeholder="例如：CMP-1024"
+                  required
+                  className={cn(
+                    cardMissing && "border-destructive/50 focus-visible:ring-destructive/40"
+                  )}
+                />
               </div>
-            </form>
-          </CardContent>
 
-          <CardFooter className="flex-col gap-2">
-            {requiresCommitMetadata ? (
-              <>
-                <Button
-                  type="button"
-                  className="w-full"
-                  variant={action === "push" ? "outline" : "default"}
-                  disabled={running !== null}
-                  onClick={() => onSubmit("commit")}
-                >
-                  {running === "commit" ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      提交中...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="size-4" />
-                      提交 Commit
-                    </>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <label htmlFor="git-message" className="font-medium text-foreground">
+                    提交消息
+                  </label>
+                  <span
+                    className={cn(
+                      "text-[11px]",
+                      messageMissing ? "text-destructive" : "text-muted-foreground"
+                    )}
+                  >
+                    必填
+                  </span>
+                </div>
+                <textarea
+                  id="git-message"
+                  value={commitMessage}
+                  onChange={(e) => onCommitMessageChange(e.target.value)}
+                  placeholder="请输入本次修改说明"
+                  rows={4}
+                  className={cn(
+                    "flex min-h-[96px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-y",
+                    messageMissing && "border-destructive/50 focus-visible:ring-destructive/40"
                   )}
-                </Button>
+                />
+              </div>
 
-                <Button
-                  type="button"
-                  className="w-full"
-                  variant={action === "push" ? "default" : "outline"}
-                  disabled={running !== null}
-                  onClick={() => onSubmit("push")}
-                >
-                  {running === "push" ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      推送中...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="size-4" />
-                      提交并推送 Commit & Push
-                    </>
-                  )}
-                </Button>
-              </>
-            ) : (
+              {cardValue && (
+                <div className="rounded-lg border border-border/70 bg-background-secondary p-2.5">
+                  <div className="text-[11px] text-muted-foreground mb-1">
+                    最终 commit message 预览
+                  </div>
+                  <code className="block text-[11px] leading-5 break-all text-foreground">
+                    {finalMessagePreview}
+                  </code>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5 text-sm text-muted-foreground">
+              当前没有文件改动，将直接推送已有提交。
+            </div>
+          )}
+        </form>
+
+        <div className="px-5 pb-5 pt-2 flex flex-col gap-2">
+          {requiresCommitMetadata ? (
+            <>
               <Button
                 type="button"
-                className="w-full"
-                disabled={running !== null}
+                className="w-full h-9"
+                variant={action === "push" ? "outline" : "default"}
+                disabled={anyRunning || cardMissing || messageMissing}
+                onClick={() => onSubmit("commit")}
+              >
+                {commitRunning ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    提交中...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="size-4" />
+                    Commit 提交
+                  </>
+                )}
+              </Button>
+
+              <Button
+                type="button"
+                className="w-full h-9"
+                variant={action === "push" ? "default" : "outline"}
+                disabled={anyRunning || cardMissing || messageMissing}
                 onClick={() => onSubmit("push")}
               >
-                {running === "push" ? (
+                {pushRunning ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
                     推送中...
@@ -171,17 +197,41 @@ export function GitSubmitDialog({
                 ) : (
                   <>
                     <Upload className="size-4" />
-                    Push
+                    Commit 并 Push 推送
                   </>
                 )}
               </Button>
-            )}
-
-            <Button type="button" variant="ghost" className="w-full" onClick={() => onOpenChange(false)}>
-              取消
+            </>
+          ) : (
+            <Button
+              type="button"
+              className="w-full h-9"
+              disabled={anyRunning}
+              onClick={() => onSubmit("push")}
+            >
+              {pushRunning ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  推送中...
+                </>
+              ) : (
+                <>
+                  <Upload className="size-4" />
+                  Push 推送
+                </>
+              )}
             </Button>
-          </CardFooter>
-        </Card>
+          )}
+
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full h-9"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   )

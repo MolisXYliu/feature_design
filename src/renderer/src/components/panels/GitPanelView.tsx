@@ -4,7 +4,9 @@ import {
   ChevronDown,
   AlertCircle,
   RotateCcw,
-  GitBranch
+  GitBranch,
+  FolderOpen,
+  CheckCircle2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
@@ -14,10 +16,12 @@ import { GitSubmitDialog } from "./GitSubmitDialog"
 
 export function GitPanelView({
   threadId,
-  workspacePath
+  workspacePath,
+  onOpenFileFolder
 }: {
   threadId: string
   workspacePath: string | null
+  onOpenFileFolder?: (filePath: string) => void
 }): React.JSX.Element {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<"commit" | "push" | "reject" | null>(null)
@@ -140,11 +144,12 @@ export function GitPanelView({
         return
       }
 
-      const customMessage = commitMessage.trim()
-      const fallbackMessage =
-        (state?.suggestedCommitMessage || "").trim() || `chore(task:${threadId.slice(0, 8)}): update llm changes`
-      const coreMessage = customMessage || fallbackMessage
-      const finalMessage = `${cardNumber.trim()} #comment fix:${coreMessage} #CMBDevClaw`
+      if ((action === "commit" || hasPendingChanges) && !commitMessage.trim()) {
+        showToast("commitMessage 不能为空", "error")
+        return
+      }
+
+      const finalMessage = `${cardNumber.trim()} #comment fix:${commitMessage.trim()} #CMBDevClaw`
 
       setRunning(action)
       setError(null)
@@ -172,7 +177,7 @@ export function GitPanelView({
         setRunning(null)
       }
     },
-    [threadId, cardNumber, commitMessage, state?.hasPendingDiff, state?.suggestedCommitMessage, refresh, showToast]
+    [threadId, cardNumber, commitMessage, state?.hasPendingDiff, refresh, showToast]
   )
 
   const handleRevertFile = useCallback(
@@ -213,7 +218,10 @@ export function GitPanelView({
           <div className="text-[12px] font-semibold truncate">Git 操作</div>
           <div className="flex items-center gap-1 min-w-0">
             <div className="text-[10px] text-muted-foreground truncate">{headerMeta}</div>
-            <Badge variant="outline" className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1">
+            <Badge
+              variant="outline"
+              className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1"
+            >
               <GitBranch className="size-2.5" />
               <span className="max-w-[140px] truncate" title={branchName}>
                 {branchName}
@@ -263,8 +271,16 @@ export function GitPanelView({
         {!loading && state?.isWorktree && (
           <>
             {state.files.length === 0 ? (
-              <div className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
-                当前没有待审批的 LLM 改动。
+              <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-8">
+                <div className="mx-auto max-w-[340px] text-center">
+                  <div className="mx-auto mb-3 flex size-9 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10">
+                    <CheckCircle2 className="size-4.5 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                  <div className="text-sm font-medium text-foreground">没有待审批改动</div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    当前工作区已是最新状态。后续产生文件变更时，这里会自动显示最新 diff。
+                  </p>
+                </div>
               </div>
             ) : (
               <>
@@ -281,14 +297,42 @@ export function GitPanelView({
                         ) : (
                           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="font-mono font-semibold truncate text-left" title={file.path}>{file.path}</span>
+                        <span
+                          className="font-mono font-semibold truncate text-left"
+                          title={file.path}
+                        >
+                          {file.path}
+                        </span>
                         <span className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold">
-                          <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            +{file.additions}
+                          </span>
                           <span className="text-muted-foreground">/</span>
-                          <span className="text-rose-600 dark:text-rose-400">-{file.deletions}</span>
+                          <span className="text-rose-600 dark:text-rose-400">
+                            -{file.deletions}
+                          </span>
                         </span>
                       </span>
                       <span className="flex items-center gap-2 shrink-0">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenFileFolder?.(file.path)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onOpenFileFolder?.(file.path)
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+                        >
+                          <FolderOpen className="size-3" />
+                          打开文件夹
+                        </span>
                         <span
                           role="button"
                           tabIndex={0}
@@ -309,7 +353,12 @@ export function GitPanelView({
                             revertingFilePath === file.path && "opacity-80"
                           )}
                         >
-                          <RotateCcw className={cn("size-3", revertingFilePath === file.path && "animate-spin")} />
+                          <RotateCcw
+                            className={cn(
+                              "size-3",
+                              revertingFilePath === file.path && "animate-spin"
+                            )}
+                          />
                           {revertingFilePath === file.path ? "回退中..." : "回退"}
                         </span>
                       </span>
@@ -347,7 +396,6 @@ export function GitPanelView({
           void runSubmit(action)
         }}
       />
-
     </div>
   )
 }

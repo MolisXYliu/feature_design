@@ -55,7 +55,6 @@ import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
-import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { createPlaywrightTool } from "./tools/playwright-tool"
 import {
   McpToolRegistry,
@@ -873,8 +872,6 @@ ${subagentShellGuidance}
 - edit_file: edit a file in the filesystem
 - glob: find files matching a pattern (e.g., "**/*.py")
 - grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
-- git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
-- When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
 - Browser strategy: for browser tasks, first follow any matching enabled skill; only if no relevant skill is available, use browser_playwright.
 - browser_playwright: built-in browser automation and page interaction tool powered by project-local Playwright (fallback when no matching browser skill exists).
 
@@ -1068,7 +1065,6 @@ The workspace root is: ${workspacePath}`
     extraTools.push(createSkillEvolutionTool({ threadId: options.threadId }))
   }
 
-  extraTools.push(createGitWorkflowTool(workspacePath))
   extraTools.push(createPlaywrightTool(workspacePath))
 
   // Add tool search tools if there are lazy-loaded MCP tools
@@ -1086,8 +1082,7 @@ The workspace root is: ${workspacePath}`
   console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", triggerTokens, "→ keep:", keepTokens, "→ tool evict limit:", toolEvictLimit, "→ trim for summary:", trimForSummary, "→ max output bytes:", maxOutputBytes)
 
   const finalTools = [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools]
-  const hasGitWorkflowTool = finalTools.some((t) => (t as { name?: string }).name === "git_workflow")
-  backend.setGitWorkflowCommitOnly(hasGitWorkflowTool)
+  backend.setGitWorkflowCommitOnly(false)
   console.log("[Runtime] Final tool list:", finalTools.map((t) => (t as { name?: string }).name ?? "(unnamed)"))
 
   const agent = createDeepAgent({

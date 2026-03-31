@@ -29,7 +29,6 @@ import { cn } from "@/lib/utils"
 import { getToolLabel } from "@/lib/tool-labels"
 import type { ToolCall, Todo } from "@/types"
 import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued"
-import { GitPush } from "@/components/chat/GitPush/GitPush"
 
 interface ToolCallRendererProps {
   toolCall: ToolCall
@@ -60,7 +59,6 @@ const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   write_todos: ListTodo,
   task: GitBranch,
   git_push: GitBranch,
-  git_workflow: GitBranch,
   browser_playwright: Terminal
 }
 
@@ -343,7 +341,13 @@ function TaskDisplay({
 }
 
 // Render git diff nicely
-export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
+interface DiffDisplayProps {
+  diff?: string
+  oldValue?: string
+  newValue?: string
+}
+
+export const DiffDisplay = memo(({ diff, oldValue, newValue }: DiffDisplayProps) => {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [renderMode, setRenderMode] = useState<"preview" | "full">("preview")
 
@@ -457,7 +461,7 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
       styles={{
         variables: {
           light: {
-            diffViewerBackground: "transparent",
+            diffViewerBackground: "#ffffff",
             diffViewerColor: "#292524",
             addedBackground: "#dcfce7",
             addedColor: "#166534",
@@ -562,7 +566,7 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
 
       {/* Diff content */}
       <div
-        className="relative font-mono bg-background overflow-auto w-full"
+        className="relative font-mono bg-white overflow-auto w-full"
         style={{ maxHeight: "22rem", minHeight: "5rem" }}
       >
         {makeDiffViewer(false)}
@@ -632,7 +636,7 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
 
           {/* Modal content */}
           <div className="flex-1 overflow-hidden p-4">
-            <div className="h-full rounded-md border border-border overflow-auto bg-background font-mono text-xs">
+            <div className="h-full rounded-md border border-border overflow-auto bg-white font-mono text-xs">
               {makeDiffViewer(true)}
             </div>
           </div>
@@ -641,6 +645,8 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: any) => {
     </>
   )
 })
+
+DiffDisplay.displayName = "DiffDisplay"
 
 export function ToolCallRenderer({
   toolCall,
@@ -655,7 +661,7 @@ export function ToolCallRenderer({
   isStreaming = true
 }: ToolCallRendererProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const [skippedGitPrompts, setSkippedGitPrompts] = useState<Set<string>>(new Set())
+  void threadId
 
   // Defensive: ensure args is always an object
   const args = toolCall?.args || {}
@@ -877,36 +883,6 @@ export function ToolCallRenderer({
 
       case "write_file":
       case "edit_file": {
-        const path = (args.path || args.file_path) as string
-        const content = args.content as string | undefined
-        const oldString = (args.old_string as string) || (args.old_str as string) || ""
-        const newString = (args.new_string as string) || (args.new_str as string) || ""
-
-        // Check if this operation might need Git commit (any file operation)
-        // 编辑文件导致的git提交
-        // todo 暂时放开，等后续批量git完善之后，再根据实际情况调整哪些操作需要展示git提交
-        if (!isExpanded && path && !skippedGitPrompts.has(toolCall.id)) {
-          return (
-            <div className="space-y-2">
-              <div className="text-xs text-status-nominal flex items-center gap-1.5">
-                <CheckCircle2 className="size-3" />
-                <span>
-                  File {toolCall.name === "edit_file" ? "edited" : "created"}: {getFileName(path)}
-                </span>
-              </div>
-              <GitPush
-                operation={toolCall.name}
-                operationId={toolCall.id}
-                threadId={threadId}
-                filePath={path}
-                oldValue={oldString}
-                newValue={newString || content || ""}
-                onSkip={() => setSkippedGitPrompts((prev) => new Set(prev).add(toolCall.id))}
-              />
-            </div>
-          )
-        }
-
         // Show confirmation message for file operations
         if (typeof result === "string" && result.trim()) {
           return (
@@ -944,62 +920,6 @@ export function ToolCallRenderer({
           <div className="text-xs text-status-nominal flex items-center gap-1.5">
             <CheckCircle2 className="size-3" />
             <span>Task completed</span>
-          </div>
-        )
-      }
-
-      case "git_workflow": {
-        // Git workflow operation with GitPush for display
-        if (!result || typeof result !== "string") {
-          return (
-            <div className="text-xs text-status-critical flex items-center gap-1.5">
-              <XCircle className="size-3" />
-              <span>Git workflow error: Invalid result</span>
-            </div>
-          )
-        }
-
-        let gitResult: any
-        try {
-          gitResult = JSON.parse(result as string)
-        } catch (error) {
-          console.error("Failed to parse git result:", error)
-          return (
-            <div className="text-xs text-status-critical flex items-center gap-1.5">
-              <XCircle className="size-3" />
-              <span>Git workflow error: Invalid JSON result</span>
-            </div>
-          )
-        }
-
-        const branch = (gitResult.branch as string) || ""
-        const remoteUrl = (gitResult.remoteUrl as string) || ""
-        const commitMessage = (gitResult.commitMessage as string) || ""
-        const changedFiles = gitResult.changedFiles || []
-        const workspacePath = gitResult.workspacePath || ""
-
-        // if (error && message?.includes('Not a git repository')){
-        //   return <div className="text-sm text-status-critical space-y-3 my-4">
-        //     <div>当前工作台地址为：{workspacePath}</div>
-        //     <div>你需要：选择要git提交的仓库文件夹作为工作台地址</div>
-        //   </div>
-        // }
-
-        // console.log('Git workflow - changedFiles:', changedFiles.length, 'files')
-
-        return (
-          <div className="space-y-2">
-            <GitPush
-              workspacePath={workspacePath}
-              remoteUrl={remoteUrl}
-              branch={branch}
-              commitmessage={commitMessage}
-              changedFiles={changedFiles}
-              operation="git_workflow"
-              operationId={toolCall.id}
-              threadId={threadId}
-              onSkip={() => setSkippedGitPrompts((prev) => new Set(prev).add(toolCall.id))}
-            />
           </div>
         )
       }

@@ -817,6 +817,17 @@ export function RightPanel({
             <GitPanelView
               threadId={currentThreadId ?? ""}
               workspacePath={threadState?.workspacePath ?? null}
+              onOpenFileFolder={async (filePath) => {
+                try {
+                  const resolved = resolvePreviewPaths(filePath, threadState?.workspacePath ?? null)
+                  const platform = await window.electron.ipcRenderer.invoke("get-platform")
+                  const normalizedPath =
+                    platform === "win32" ? resolved.fullPath.replace(/\//g, "\\") : resolved.fullPath
+                  await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+                } catch (error) {
+                  console.error("[GitPanel] Failed to show item in folder:", error)
+                }
+              }}
             />
           </div>
         </div>

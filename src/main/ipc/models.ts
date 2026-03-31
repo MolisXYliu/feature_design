@@ -145,26 +145,42 @@ function isDubiousOwnershipError(error: unknown): boolean {
   return getExecErrorText(error).toLowerCase().includes("detected dubious ownership")
 }
 
+function quoteArg(value: string): string {
+  if (/^[A-Za-z0-9_./:-]+$/.test(value)) return value
+  return `"${value.replace(/"/g, '\\"')}"`
+}
+
+function formatGitCommand(worktreePath: string, args: string[]): string {
+  return `git -C ${quoteArg(worktreePath)} ${args.map((arg) => quoteArg(arg)).join(" ")}`
+}
+
 async function addSafeDirectory(worktreePath: string): Promise<void> {
+  console.log(`[GitPanel][exec] git config --global --add safe.directory ${quoteArg(worktreePath)}`)
   await execFileAsync("git", ["config", "--global", "--add", "safe.directory", worktreePath])
 }
 
 async function runGit(worktreePath: string, args: string[]): Promise<string> {
   const baseArgs = ["-C", worktreePath, ...args]
+  const command = formatGitCommand(worktreePath, args)
+  console.log(`[GitPanel][exec] ${command}`)
   try {
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
+    console.log(`[GitPanel][exec][ok] ${command}`)
     return stdout
   } catch (error) {
     if (!isDubiousOwnershipError(error)) {
+      console.error(`[GitPanel][exec][fail] ${command}\n${getExecErrorText(error)}`)
       throw error
     }
+    console.warn(`[GitPanel][exec][retry-safe-directory] ${command}`)
     // Auto-heal ownership trust issue for this specific worktree, then retry once.
     await addSafeDirectory(worktreePath)
     const { stdout } = await execFileAsync("git", baseArgs, {
       env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" }
     })
+    console.log(`[GitPanel][exec][ok-after-retry] ${command}`)
     return stdout
   }
 }
@@ -176,7 +192,7 @@ function isGitDirWorktree(gitDir: string): boolean {
 
 async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--git-dir"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"])
     return isGitDirWorktree(stdout)
   } catch {
     return false
@@ -456,7 +472,7 @@ async function buildGitPanelState(worktreePath: string, trackedFiles: string[]):
 
 async function getGitRoot(folderPath: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", folderPath, "rev-parse", "--show-toplevel"])
+    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"])
     return stdout.trim()
   } catch {
     return null
@@ -464,7 +480,7 @@ async function getGitRoot(folderPath: string): Promise<string | null> {
 }
 
 async function listWorktrees(gitRoot: string): Promise<WorktreeInfo[]> {
-  const { stdout } = await execFileAsync("git", ["-C", gitRoot, "worktree", "list", "--porcelain"])
+  const stdout = await runGit(gitRoot, ["worktree", "list", "--porcelain"])
   const worktrees: WorktreeInfo[] = []
   const blocks = stdout.trim().split(/\n\n+/)
 
@@ -941,6 +957,23 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     }
   })
 
+  // Remove a worktree path from a git repo.
+  ipcMain.handle(
+    "workspace:removeWorktree",
+    async (_event, { gitRoot, worktreePath }: { gitRoot: string; worktreePath: string }) => {
+      try {
+        await runGit(gitRoot, ["worktree", "remove", "--force", worktreePath])
+        await runGit(gitRoot, ["worktree", "prune"]).catch(() => "")
+        return { success: true }
+      } catch (e) {
+        return {
+          success: false,
+          error: e instanceof Error ? e.message : "删除 Worktree 失败"
+        }
+      }
+    }
+  )
+
   // Create a new worktree; enforces MAX_WORKTREES limit
   ipcMain.handle(
     "workspace:createWorktree",
@@ -988,15 +1021,13 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         let baseBranch = "main"
         let baseCommit = ""
         try {
-          const r = await execFileAsync("git", ["-C", gitRoot, "rev-parse", "--abbrev-ref", "HEAD"])
-          baseBranch = r.stdout.trim() || "main"
+          baseBranch = (await runGit(gitRoot, ["rev-parse", "--abbrev-ref", "HEAD"])).trim() || "main"
         } catch { /* ignore */ }
         try {
-          const r = await execFileAsync("git", ["-C", gitRoot, "rev-parse", "HEAD"])
-          baseCommit = r.stdout.trim()
+          baseCommit = (await runGit(gitRoot, ["rev-parse", "HEAD"])).trim()
         } catch { /* ignore */ }
 
-        await execFileAsync("git", ["-C", gitRoot, "worktree", "add", "-b", safeBranch, worktreePath])
+        await runGit(gitRoot, ["worktree", "add", "-b", safeBranch, worktreePath])
         return { success: true, path: worktreePath, branch: safeBranch, baseBranch, baseCommit }
       } catch (e) {
         return {
