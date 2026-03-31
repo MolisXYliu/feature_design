@@ -6,7 +6,8 @@ import {
   RotateCcw,
   GitBranch,
   FolderOpen,
-  CheckCircle2
+  CheckCircle2,
+  RefreshCw
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
@@ -215,15 +216,14 @@ export function GitPanelView({
     <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
       <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
         <div className="min-w-0">
-          <div className="text-[12px] font-semibold truncate">Git 操作</div>
-          <div className="flex items-center gap-1 min-w-0">
+          <div className="flex flex-col gap-1 min-w-0">
             <div className="text-[10px] text-muted-foreground truncate">{headerMeta}</div>
             <Badge
               variant="outline"
-              className="h-4 px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1"
+              className="h-4 w-fit px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1"
             >
               <GitBranch className="size-2.5" />
-              <span className="max-w-[140px] truncate" title={branchName}>
+              <span className="max-w-[200px] truncate" title={branchName}>
                 {branchName}
               </span>
             </Badge>
@@ -231,6 +231,18 @@ export function GitPanelView({
         </div>
         {canShowSubmit && (
           <div className="flex items-center gap-2">
+            {hasPending && (
+              <button
+                onClick={() => {
+                  void refresh()
+                }}
+                disabled={loading}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
+              >
+                <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+                刷新
+              </button>
+            )}
             <button
               onClick={() => setSubmitAction(hasPending ? "commit" : "push")}
               disabled={running !== null}

@@ -768,9 +768,9 @@ export function RightPanel({
       )}
     >
       {moduleMode === "preview" && (
-        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-background">
           <div
-            className="bg-white p-2 h-full min-h-0"
+            className="bg-background p-2 h-full min-h-0"
             style={{ height: PREVIEW_MAX_HEIGHT }}
           >
             {previewPath ? (
