@@ -5,6 +5,8 @@ import {
   AlertCircle,
   RotateCcw,
   GitBranch,
+  ShieldCheck,
+  TriangleAlert,
   FolderOpen,
   CheckCircle2,
   RefreshCw
@@ -35,6 +37,7 @@ export function GitPanelView({
   const [state, setState] = useState<{
     success: boolean
     isWorktree: boolean
+    isGitRepo?: boolean
     taskId: string
     files: Array<{ path: string; diff: string; additions: number; deletions: number }>
     totals: { additions: number; deletions: number; fileCount: number }
@@ -204,8 +207,9 @@ export function GitPanelView({
 
   const hasPending = Boolean(state?.hasPendingDiff)
   const hasPushableCommit = Boolean(state?.hasPushableCommit)
-  const hasWorktree = Boolean(state?.isWorktree)
-  const canShowSubmit = hasWorktree && (hasPending || hasPushableCommit)
+  const hasGitRepo = Boolean(state?.isGitRepo ?? state?.isWorktree)
+  const isWorktreePath = Boolean(state?.isWorktree)
+  const canShowSubmit = hasGitRepo && (hasPending || hasPushableCommit)
   const workspaceName = workspacePath
     ? workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath
     : "未关联路径"
@@ -214,59 +218,85 @@ export function GitPanelView({
 
   return (
     <div className="rounded-xl border border-border/70 overflow-hidden bg-background flex flex-col min-h-0 h-full">
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-3 py-2 border-b border-border/70 bg-background-elevated/70 shrink-0">
-        <div className="min-w-0">
-          <div className="flex flex-col gap-1 min-w-0">
-            <div className="text-[10px] text-muted-foreground truncate">{headerMeta}</div>
+      <div className="sticky top-0 z-10 px-3 py-2 border-b border-border/70 bg-background-elevated/80 backdrop-blur shrink-0">
+        <div className="rounded-lg border border-border/70 bg-background/90 px-2.5 py-2">
+          <div className="text-[11px] text-muted-foreground truncate">{headerMeta}</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <Badge
               variant="outline"
-              className="h-4 w-fit px-1.5 text-[10px] normal-case tracking-normal shrink-0 gap-1"
+              className="h-5 px-2 text-[10px] normal-case tracking-normal shrink-0 gap-1"
             >
               <GitBranch className="size-2.5" />
               <span className="max-w-[200px] truncate" title={branchName}>
-                {branchName}
+                分支 {branchName}
               </span>
             </Badge>
+            {hasGitRepo && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "h-5 px-2 text-[10px] tracking-normal gap-1",
+                  isWorktreePath
+                    ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300"
+                    : "border-amber-500/45 text-amber-700 dark:text-amber-300"
+                )}
+              >
+                {isWorktreePath ? (
+                  <ShieldCheck className="size-2.5" />
+                ) : (
+                  <TriangleAlert className="size-2.5" />
+                )}
+                {isWorktreePath ? "Worktree" : "主仓库目录"}
+              </Badge>
+            )}
           </div>
-        </div>
-        {canShowSubmit && (
-          <div className="flex items-center gap-2">
-            {hasPending && (
+          {hasGitRepo && (
+            <p className="mt-1.5 text-xs text-muted-foreground leading-5">
+              {isWorktreePath
+                ? "当前目录是独立 worktree，可直接执行提交与推送。建议保持一个任务一个 worktree。"
+                : "当前目录是 Git 仓库主目录。建议切换到独立 worktree 后再执行任务，更安全。"}
+            </p>
+          )}
+          {hasGitRepo && (
+            <div className="mt-2 pt-2 border-t border-border/60 flex flex-wrap items-center gap-2">
+              {canShowSubmit && (
+                <button
+                  onClick={() => setSubmitAction(hasPending ? "commit" : "push")}
+                  disabled={running !== null}
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
+                >
+                  <GitBranch className="size-3.5" />
+                  Git提交
+                </button>
+              )}
               <button
                 onClick={() => {
                   void refresh()
                 }}
                 disabled={loading}
+                title="刷新"
+                aria-label="刷新"
                 className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
               >
                 <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
                 刷新
               </button>
-            )}
-            <button
-              onClick={() => setSubmitAction(hasPending ? "commit" : "push")}
-              disabled={running !== null}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-background-interactive transition-colors"
-            >
-              <GitBranch className="size-3.5" />
-              Git提交
-            </button>
-            {hasPending && (
-              <button
-                onClick={() => {
-                  void runReject()
-                }}
-                disabled={running !== null}
-                className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
-              >
-                <RotateCcw className="size-3.5" />
-                {running === "reject" ? "全部回退中..." : "全部回退"}
-              </button>
-            )}
-          </div>
-        )}
+              {hasPending && (
+                <button
+                  onClick={() => {
+                    void runReject()
+                  }}
+                  disabled={running !== null}
+                  className="inline-flex items-center gap-1 rounded-md border border-destructive/50 text-destructive px-2 py-1 text-[11px] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-destructive/10 transition-colors"
+                >
+                  <RotateCcw className="size-3.5" />
+                  {running === "reject" ? "全部回退中..." : "全部回退"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-
       <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0 p-3 space-y-3">
         {loading && <div className="text-xs text-muted-foreground">正在加载 Git diff...</div>}
         {!loading && (error || state?.error) && (
@@ -275,12 +305,12 @@ export function GitPanelView({
             <span>{error || state?.error}</span>
           </div>
         )}
-        {!loading && state && !state.isWorktree && (
+        {!loading && state && !hasGitRepo && (
           <div className="rounded-md border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">
-            当前任务未绑定 worktree。请先在工作区选择器创建并切换到 worktree。
+            当前任务未关联 Git 仓库。请先在工作区选择器绑定 Git 仓库路径。
           </div>
         )}
-        {!loading && state?.isWorktree && (
+        {!loading && hasGitRepo && (
           <>
             {state.files.length === 0 ? (
               <div className="rounded-xl border border-border/70 bg-muted/20 px-4 py-8">
@@ -329,6 +359,8 @@ export function GitPanelView({
                         <span
                           role="button"
                           tabIndex={0}
+                          title="打开文件夹"
+                          aria-label="打开文件夹"
                           onClick={(e) => {
                             e.stopPropagation()
                             onOpenFileFolder?.(file.path)
@@ -340,14 +372,15 @@ export function GitPanelView({
                               onOpenFileFolder?.(file.path)
                             }
                           }}
-                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+                          className="inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive"
                         >
                           <FolderOpen className="size-3" />
-                          打开文件夹
                         </span>
                         <span
                           role="button"
                           tabIndex={0}
+                          title={revertingFilePath === file.path ? "回退中..." : "回退"}
+                          aria-label={revertingFilePath === file.path ? "回退中..." : "回退"}
                           onClick={(e) => {
                             e.stopPropagation()
                             if (!revertingFilePath) void handleRevertFile(file.path)
@@ -360,7 +393,7 @@ export function GitPanelView({
                             }
                           }}
                           className={cn(
-                            "inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive",
+                            "inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive",
                             revertingFilePath && revertingFilePath !== file.path && "opacity-60",
                             revertingFilePath === file.path && "opacity-80"
                           )}
@@ -371,7 +404,6 @@ export function GitPanelView({
                               revertingFilePath === file.path && "animate-spin"
                             )}
                           />
-                          {revertingFilePath === file.path ? "回退中..." : "回退"}
                         </span>
                       </span>
                     </button>
