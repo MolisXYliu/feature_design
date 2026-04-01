@@ -176,7 +176,36 @@ git show :.env | head -n 1
 
 ---
 
-## 6. GitHub Actions 配置（必须）
+## 6. 如何把已拉下来的密文 `.env` 解密为明文（本地）
+
+当你发现本地 `.env` 是 `CMBENV1:...` 密文时，按下面步骤操作：
+
+1. 先确认密钥可用（环境变量或 key 文件二选一）
+
+```bash
+echo $ENV_ENCRYPTION_KEY
+# 或
+ls -l ~/.cmbdevclaw/env.key
+```
+
+2. 触发一次 checkout 解密
+
+```bash
+git checkout -- .env
+```
+
+3. 如果第 2 步后仍是密文，使用强制刷新（推荐）
+
+```bash
+rm -f .env
+git checkout -- .env
+```
+
+说明：第 3 步会删除工作区 `.env`，再从 Git 索引检出并触发 `smudge` 自动解密。
+
+---
+
+## 7. GitHub Actions 配置（必须）
 
 本项目工作流会在打包前执行：
 
@@ -199,7 +228,7 @@ node scripts/env-crypt.mjs decrypt-file .env
 
 ---
 
-## 7. 如何确认“远端一定是密文”
+## 8. 如何确认“远端一定是密文”
 
 方法一：看 PR 的 `.env` diff，不应出现明文键值对。  
 方法二：拉取到一个没有密钥的新环境中，仓库里的原始 `.env` 应是 `CMBENV1:...` 格式。  
@@ -211,7 +240,7 @@ git show :.env | head -n 1
 
 ---
 
-## 8. 常见问题排查
+## 9. 常见问题排查
 
 ### 8.1 报错：`Missing encryption key...`
 
@@ -250,6 +279,13 @@ git show :.env | head -n 1
 git checkout -- .env
 ```
 
+如果仍然是密文，再执行：
+
+```bash
+rm -f .env
+git checkout -- .env
+```
+
 ---
 
 ### 8.4 CI 里接口地址变成 `undefined/...`
@@ -263,7 +299,7 @@ git checkout -- .env
 
 ---
 
-## 9. 安全注意事项（务必遵守）
+## 10. 安全注意事项（务必遵守）
 
 1. 不要把密钥提交到仓库
 2. 不要把密钥写到公开文档/截图/日志
@@ -272,7 +308,7 @@ git checkout -- .env
 
 ---
 
-## 10. 关键命令速查
+## 11. 关键命令速查
 
 ```bash
 # 1) 配置 git filter（一次性）
@@ -286,4 +322,8 @@ git add --renormalize .env
 
 # 4) 查看索引中的 .env 是否已加密
 git show :.env | head -n 1
+
+# 5) 本地把密文 .env 重新解密到工作区
+rm -f .env
+git checkout -- .env
 ```
