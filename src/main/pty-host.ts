@@ -4,7 +4,7 @@
  * 通过 process.send / process.on("message") 与主进程通信。
  */
 import { spawn as ptySpawn, IPty } from "node-pty"
-import { platform } from "os"
+import { platform, homedir } from "os"
 
 const activePtys = new Map<string, IPty>()
 
@@ -78,8 +78,6 @@ function send(msg: Record<string, unknown>): void {
 
 function handleCreate(msg: CreateMsg): void {
   try {
-  const shell = getShell()
-
   const isWin = platform() === "win32"
   const escapeArg = (arg: string): string => {
     if (isWin) {
@@ -91,18 +89,56 @@ function handleCreate(msg: CreateMsg): void {
   // 构建 claude 启动命令和环境变量
   const isJsFile = msg.claudePath.endsWith(".js")
   const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
+
+  // Windows + .js 文件：直接用 ptySpawn 启动 electron+cli.js，不走 PowerShell 包装
+  // 原因：PowerShell -Command 模式下子进程的 stdin 不是 TTY，Claude Code 会误判为 --print 模式
+  if (isJsFile && isWin) {
+    env.ELECTRON_RUN_AS_NODE = "1"
+    const pty = ptySpawn(msg.electronPath, [msg.claudePath, ...msg.args], {
+      name: "xterm-256color",
+      cols: msg.cols,
+      rows: msg.rows,
+      cwd: msg.workDir || homedir() || process.cwd(),
+      env
+    })
+
+    activePtys.set(msg.id, pty)
+    pendingBytes.set(msg.id, 0)
+    paused.set(msg.id, false)
+
+    pty.onData((data) => {
+      const current = (pendingBytes.get(msg.id) || 0) + Buffer.byteLength(data)
+      pendingBytes.set(msg.id, current)
+      if (current > HIGH_WATER_MARK && !paused.get(msg.id)) {
+        pty.pause()
+        paused.set(msg.id, true)
+      }
+      send({ type: "data", id: msg.id, data })
+    })
+
+    pty.onExit(({ exitCode }) => {
+      send({ type: "exit", id: msg.id, exitCode })
+      activePtys.delete(msg.id)
+      pendingBytes.delete(msg.id)
+      paused.delete(msg.id)
+    })
+
+    send({ type: "created", id: msg.id })
+    return
+  }
+
+  const shell = getShell()
   let claudeCmd: string
 
   if (isJsFile) {
-    if (isWin) {
-      claudeCmd = `& ${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
-    } else {
-      claudeCmd = `${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
-    }
-    // 环境变量放到 env 里，不拼在命令前面
+    claudeCmd = `${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
     env.ELECTRON_RUN_AS_NODE = "1"
   } else {
-    claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+    if (isWin) {
+      claudeCmd = `& ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
+    } else {
+      claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+    }
   }
 
   // 用 shell -c 直接执行命令（不回显），Claude Code 退出后清除敏感变量再回到交互式 shell
@@ -126,7 +162,7 @@ function handleCreate(msg: CreateMsg): void {
     name: "xterm-256color",
     cols: msg.cols,
     rows: msg.rows,
-    cwd: msg.workDir || process.env.HOME || process.cwd(),
+    cwd: msg.workDir || homedir() || process.cwd(),
     env
   })
 
