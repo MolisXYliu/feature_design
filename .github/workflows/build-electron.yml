@@ -39,8 +39,27 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (Windows with optional deps fallback)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install --include=optional
+          if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
+            Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
+            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+            Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+            npm install --include=optional
+          }
+
+      - name: Install dependencies (Linux with optional deps fallback)
+        if: runner.os == 'Linux'
+        run: |
+          npm install --include=optional
+          if [ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]; then
+            echo "Missing @rollup/rollup-linux-x64-gnu, retry with clean install..."
+            rm -rf node_modules package-lock.json
+            npm install --include=optional
+          fi
 
       - name: Build
         run: npm run build
