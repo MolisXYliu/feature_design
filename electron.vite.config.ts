@@ -78,7 +78,10 @@ export default defineConfig({
     // Bundle all dependencies into the main process
     build: {
       lib: {
-        entry: "src/main/index.ts",
+        entry: {
+          index: "src/main/index.ts",
+          "code-exec-helper": "src/main/code-exec/helper-entry.ts"
+        },
         formats: ["cjs"]
       },
       rollupOptions: {

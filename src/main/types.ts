@@ -330,9 +330,14 @@ export type ExecSafetyLevel = "safe" | "needs_approval" | "forbidden"
 export interface ApprovalRequest extends HITLRequest {
   safety_level: ExecSafetyLevel
   /** Operation type: "execute" for shell commands, "write_file"/"edit_file" for file operations */
-  operation?: "execute" | "write_file" | "edit_file"
+  operation?: "execute" | "write_file" | "edit_file" | "code_exec" | "save_code_exec_tool"
   command?: string           // shell command (for execute operations)
   filePath?: string          // target file path (for write_file/edit_file operations)
+  code?: string              // code_exec script preview
+  params?: unknown           // code_exec params preview
+  timeoutMs?: number         // code_exec timeout preview
+  savedToolId?: string       // proposed saved tool ID
+  savedToolDescription?: string // proposed saved tool description
   cwd: string
   reason?: string           // why approval is needed
   retry_reason?: string     // sandbox-failure retry context
@@ -378,4 +383,3 @@ export interface SkillMetadata {
   metadata?: Record<string, string>
   allowedTools?: string[]
 }
-

@@ -50,7 +50,6 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
-import DisplayDiffTest from "./DisplayDiffTest"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -631,7 +630,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       if (!pendingApproval || !stream) return
 
       // Check if this is an orchestrator-sourced approval (has requestId)
-      const approvalAny = pendingApproval as Record<string, unknown>
+      const approvalAny = pendingApproval as unknown as Record<string, unknown>
       if (approvalAny._orchestratorRequestId) {
         // Send decision to main process via the orchestrator's IPC channel
         window.api.sandbox.sendApprovalDecision({
@@ -870,7 +869,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     if (pendingApproval) {
       // P0 fix: notify main process to reject the pending approval instead of silently dropping it.
       // Otherwise the orchestrator's Promise hangs until the 5-minute timeout.
-      const approvalAny = pendingApproval as Record<string, unknown>
+      const approvalAny = pendingApproval as unknown as Record<string, unknown>
       if (approvalAny._orchestratorRequestId) {
         window.api.sandbox.sendApprovalDecision({
           requestId: approvalAny._orchestratorRequestId as string,
@@ -993,14 +992,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   useEffect(() => {
-    let mounted = true
-
-
     void loadSkills()
-
-    return () => {
-      mounted = false
-    }
   }, [])
 
   // ── Skill creation human-confirmation listener ──────────
@@ -1937,46 +1929,105 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         </div>
       </ScrollArea>
       {/* Orchestrator approval bar — placed outside ScrollArea so it's always visible */}
-      {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
+      {pendingApproval && (pendingApproval as unknown as Record<string, unknown>)._orchestratorRequestId && (
         <div className="px-4 pb-2">
+          {(() => {
+            const approval = pendingApproval as unknown as Record<string, unknown>
+            const operation = approval.operation
+            const isFileApproval = operation === "write_file" || operation === "edit_file"
+            const isCodeExecApproval = operation === "code_exec"
+            const isSaveCodeExecToolApproval = operation === "save_code_exec_tool"
+            const approvalTypes = Array.isArray(approval._approvalTypes)
+              ? approval._approvalTypes as Array<"approve" | "approve_session" | "approve_permanent" | "reject">
+              : ["approve", "approve_session", "approve_permanent", "reject"]
+
+            return (
           <div className={`max-w-3xl mx-auto rounded-lg border-2 p-4 space-y-3 ${
-            (pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+            isFileApproval
               ? "border-blue-500/50 bg-blue-500/5"
-              : "border-amber-500/50 bg-amber-500/5"
+              : isCodeExecApproval || isSaveCodeExecToolApproval
+                ? "border-emerald-500/50 bg-emerald-500/5"
+                : "border-amber-500/50 bg-amber-500/5"
           }`}>
             <div className="flex items-center gap-2">
-              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+              {isFileApproval
                 ? <FilePenLine className="size-4 text-blue-500" />
+                : isCodeExecApproval
+                  ? <Code2 className="size-4 text-emerald-500" />
+                : isSaveCodeExecToolApproval
+                  ? <Wrench className="size-4 text-emerald-500" />
                 : <ShieldCheck className="size-4 text-amber-500" />}
               <span className="text-sm font-medium">
-                {(pendingApproval as Record<string, unknown>).operation === "write_file"
+                {operation === "write_file"
                   ? "写入文件需要审批"
-                  : (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                  : operation === "edit_file"
                     ? "编辑文件需要审批"
+                    : isCodeExecApproval
+                      ? "执行 MCP 脚本需要审批"
+                    : isSaveCodeExecToolApproval
+                      ? "保存脚本工具需要确认"
                     : "命令需要审批"}
               </span>
             </div>
-            <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm break-all overflow-hidden">
-              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
-                : (pendingApproval as Record<string, unknown>).command
-                  ? String((pendingApproval as Record<string, unknown>).command)
-                  : pendingApproval.tool_call?.args?.command
-                    ? String(pendingApproval.tool_call.args.command)
-                    : "unknown command"}
-            </div>
-            {(pendingApproval as Record<string, unknown>)._retryReason && (
-              <div className="text-xs text-amber-600 dark:text-amber-400">
-                {String((pendingApproval as Record<string, unknown>)._retryReason)}
+            {isCodeExecApproval || isSaveCodeExecToolApproval ? (
+              <>
+                {isSaveCodeExecToolApproval && (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">tool_id</div>
+                      <div className="font-mono break-all">
+                        {String(approval.savedToolId || pendingApproval.tool_call?.args?.toolId || "")}
+                      </div>
+                    </div>
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">description</div>
+                      <div className="whitespace-pre-wrap break-all">
+                        {String(approval.savedToolDescription || "")}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-all overflow-auto max-h-64">
+                  {String(approval.code || pendingApproval.tool_call?.args?.code || "")}
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                    <div className="mb-1 text-[11px] font-medium text-muted-foreground">params</div>
+                    <pre className="whitespace-pre-wrap break-all font-mono">
+                      {JSON.stringify(approval.params ?? pendingApproval.tool_call?.args?.params ?? {}, null, 2)}
+                    </pre>
+                  </div>
+                  <div className="rounded-md bg-muted/30 px-3 py-2 text-xs">
+                    <div className="mb-1 text-[11px] font-medium text-muted-foreground">timeout</div>
+                    <div className="font-mono">
+                      {String(approval.timeoutMs ?? pendingApproval.tool_call?.args?.timeoutMs ?? "default")} ms
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm break-all overflow-hidden">
+                {isFileApproval
+                  ? `${operation === "write_file" ? "写入" : "编辑"}: ${String(approval.filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
+                  : approval.command
+                    ? String(approval.command)
+                    : pendingApproval.tool_call?.args?.command
+                      ? String(pendingApproval.tool_call.args.command)
+                      : "unknown command"}
               </div>
             )}
-            {(pendingApproval as Record<string, unknown>).reason && (
+            {Boolean(approval._retryReason) && (
+              <div className="text-xs text-amber-600 dark:text-amber-400">
+                {String(approval._retryReason)}
+              </div>
+            )}
+            {Boolean(approval.reason) && (
               <div className="text-xs text-muted-foreground">
-                原因：{String((pendingApproval as Record<string, unknown>).reason)}
+                原因：{String(approval.reason)}
               </div>
             )}
             <div className="flex items-center gap-2">
-              {(pendingApproval as Record<string, unknown>)._retryReason ? (
+              {approval._retryReason ? (
                 <>
                   <button
                     className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
@@ -1993,34 +2044,44 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 </>
               ) : (
                 <>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                    onClick={() => handleApprovalDecision("approve")}
-                  >
-                    {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file" ? "允许" : "运行"}
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                    onClick={() => handleApprovalDecision("approve_session")}
-                  >
-                    本会话允许
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-                    onClick={() => handleApprovalDecision("approve_permanent")}
-                  >
-                    始终允许
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                    onClick={() => handleApprovalDecision("reject")}
-                  >
-                    拒绝
-                  </button>
+                  {approvalTypes.includes("approve") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                      onClick={() => handleApprovalDecision("approve")}
+                    >
+                      {isFileApproval ? "允许" : isCodeExecApproval ? "执行脚本" : isSaveCodeExecToolApproval ? "保存为工具" : "运行"}
+                    </button>
+                  )}
+                  {approvalTypes.includes("approve_session") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                      onClick={() => handleApprovalDecision("approve_session")}
+                    >
+                      本会话允许
+                    </button>
+                  )}
+                  {approvalTypes.includes("approve_permanent") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                      onClick={() => handleApprovalDecision("approve_permanent")}
+                    >
+                      始终允许
+                    </button>
+                  )}
+                  {approvalTypes.includes("reject") && (
+                    <button
+                      className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                      onClick={() => handleApprovalDecision("reject")}
+                    >
+                      拒绝
+                    </button>
+                  )}
                 </>
               )}
             </div>
           </div>
+            )
+          })()}
         </div>
       )}
       {/* Input */}

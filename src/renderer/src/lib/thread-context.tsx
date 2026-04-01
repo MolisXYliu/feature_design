@@ -973,6 +973,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             reason: req.reason,
             operation: req.operation,
             filePath: req.filePath,
+            code: req.code,
+            params: req.params,
+            timeoutMs: req.timeoutMs,
             _orchestratorRequestId: req.id,
             _retryReason: req.retry_reason,
             _approvalTypes: req.allowed_approval_types

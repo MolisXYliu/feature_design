@@ -11,6 +11,7 @@ const TOOL_LABELS: Record<string, string> = {
   git_workflow: "Git 代码批量提交（点击展开）",
   git_push: "Git 推送",
   browser_playwright: "Playwright 浏览器操作",
+  code_exec: "执行JS脚本",
   mcp_call: "调用 MCP 工具",
   search_tool: "搜索 MCP 工具",
   load_tool: "加载 MCP 工具"

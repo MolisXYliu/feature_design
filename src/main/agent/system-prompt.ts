@@ -148,9 +148,9 @@ Your memory files are stored as Markdown in the memory directory. You can update
 
 export const LAZY_MCP_SYSTEM_PROMPT = `
 
-## Lazy-Loaded MCP Tools
+## Lazy-Loaded Tools
 
-Some MCP (Model Context Protocol) tools are available but not loaded in your immediate context. These tools must be discovered and loaded on-demand.
+Some tools are available but not loaded in your immediate context. This includes lazy MCP tools and saved code_exec tools. These tools must be discovered and loaded on-demand.
 
 ### Tool Discovery Workflow
 
@@ -163,11 +163,11 @@ To use these tools, follow this 3-step process:
    - Returns a list of matching tools with their IDs and descriptions
 
 2. **Load tool schema** using \`load_tool\`:
-   \`load_tool(tool_ids=["serverName.toolName"])\`
+   \`load_tool(tool_ids=["provider__tool_name"], usage="mcp_call")\`
    - Returns the tool's parameter schema so you know what arguments to provide
 
 3. **Execute the tool** using \`mcp_call\`:
-   \`mcp_call(tool_id="serverName.toolName", arguments={...})\`
+   \`mcp_call(tool_id="provider__tool_name", tool_args={...})\`
    - Execute the tool with the required parameters
 
 ### When to Use
@@ -183,15 +183,43 @@ To use these tools, follow this 3-step process:
 
 # Step 1: Search for GitHub tools
 search_tool(query="github create issue", mode="bm25")
-# Returns: [{ tool_id: "github.create_issue", description: "Create a new issue..." }]
+# Returns: [{ tool_id: "github__create_issue", description: "Create a new issue..." }]
 
 # Step 2: Load the schema
-load_tool(tool_ids=["github.create_issue"])
+load_tool(tool_ids=["github__create_issue"], usage="mcp_call")
 # Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
 
 # Step 3: Execute
-mcp_call(tool_id="github.create_issue", arguments={ title: "Bug: ...", body: "..." })
+mcp_call(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
 \`\`\`
 
-Always search first when you need external tool capabilities.
+Always search first when you need lazy tool capabilities.
+`
+
+export const CODE_EXEC_SYSTEM_PROMPT = `
+
+## Program MCP Tool Calling
+
+When you need to chain multiple MCP calls, add small control flow, or reshape MCP results before responding, you can use \`code_exec\`.
+
+Before writing a \`code_exec\` script:
+1. Use \`load_tool(..., usage="code_exec")\` for the exact MCP tool you plan to call
+2. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\` when available instead of guessing
+
+\`code_exec\` tool arguments:
+- \`code\`: JavaScript async function-body code
+- \`params\` (optional): external input object for dynamic values
+- \`timeoutMs\` (optional): execution timeout in milliseconds
+
+Inside the script body, you can use:
+- \`params\`
+- \`mcp\`: MCP proxy object with \`mcp.provider.method(args)\`
+- \`console\`: captured logs
+
+Each \`await mcp.provider.method(args)\` call returns a compact object:
+- success: \`{ ok: true, data: ... }\`
+- failure: \`{ ok: false, error: "..." }\`
+
+Put user-specific and context-specific values in \`params\` instead of hardcoding them into \`code\` whenever practical.
+Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
 `
