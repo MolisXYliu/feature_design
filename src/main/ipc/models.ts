@@ -277,6 +277,30 @@ function isPathspecNoMatchError(error: unknown): boolean {
   return getExecErrorText(error).toLowerCase().includes("pathspec")
 }
 
+function isGitRestoreUnsupportedError(error: unknown): boolean {
+  const text = getExecErrorText(error).toLowerCase()
+  return text.includes("not a git command") && text.includes("restore")
+}
+
+async function restorePathToHeadCompat(worktreePath: string, targetPath: string): Promise<void> {
+  try {
+    await runGit(worktreePath, ["restore", "--source", "HEAD", "--staged", "--worktree", "--", targetPath])
+    return
+  } catch (error) {
+    if (!isGitRestoreUnsupportedError(error)) {
+      throw error
+    }
+  }
+
+  // Fallback for old Git versions without `git restore`.
+  await runGit(worktreePath, ["reset", "HEAD", "--", targetPath]).catch(() => {})
+  await runGit(worktreePath, ["checkout", "--", targetPath]).catch((error) => {
+    if (!isPathspecNoMatchError(error)) {
+      throw error
+    }
+  })
+}
+
 function isRebaseConflictError(error: unknown): boolean {
   const text = getExecErrorText(error).toLowerCase()
   return text.includes("could not apply") ||
@@ -1579,7 +1603,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         }
 
         try {
-          await runGit(worktreePath, ["restore", "--source", "HEAD", "--staged", "--worktree", "--", targetPath])
+          await restorePathToHeadCompat(worktreePath, targetPath)
         } catch (error) {
           if (!isPathspecNoMatchError(error)) {
             throw error
@@ -1643,9 +1667,8 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         } else {
           // No in-memory edit history: fallback to current committed version on this branch.
           // This should be HEAD (latest local commit), not the original worktree base commit.
-          const target = "HEAD"
           try {
-            await runGit(worktreePath, ["restore", "--source", target, "--staged", "--worktree", "--", targetPath])
+            await restorePathToHeadCompat(worktreePath, targetPath)
           } catch (error) {
             if (!isPathspecNoMatchError(error)) {
               throw error
