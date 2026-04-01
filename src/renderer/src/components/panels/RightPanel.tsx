@@ -331,7 +331,7 @@ export function RightPanel({
         try {
           if (!currentThreadId) return
           const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
-          if (summary.isWorktree && summary.hasPendingDiff) {
+          if (summary.isGitRepo ?? summary.isWorktree) {
             onRequestGitMode?.()
             return
           }
@@ -380,16 +380,18 @@ export function RightPanel({
       }
       if (data.threadId === currentThreadId) {
         window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
-          if (summary.isWorktree && summary.hasPendingDiff) {
+          if (summary.isGitRepo ?? summary.isWorktree) {
             onRequestGitMode?.()
+            return
           }
+          onRequestPreviewMode?.()
         }).catch(() => {
           // ignore summary refresh errors
         })
       }
     })
     return cleanup
-  }, [currentThreadId, previewPath, onRequestGitMode])
+  }, [currentThreadId, previewPath, onRequestGitMode, onRequestPreviewMode])
 
   useEffect(() => {
     const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
@@ -1395,27 +1397,27 @@ function ResourcePreview({
         <div className="flex items-center gap-1">
           <button
             onClick={toggleFullscreen}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title={isFullscreen ? "缩小全屏" : "全屏预览"}
+            aria-label={isFullscreen ? "缩小全屏" : "全屏预览"}
           >
             {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-            {isFullscreen ? "缩小" : "全屏"}
           </button>
           <button
             onClick={handleHidePreview}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="隐藏预览并切换到工作目录"
+            aria-label="隐藏预览并切换到工作目录"
           >
             <EyeOff className="size-3.5" />
-            隐藏
           </button>
           <button
             onClick={openInFolder}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="打开文件所在文件夹"
+            aria-label="打开文件所在文件夹"
           >
             <FolderOpen className="size-3.5" />
-            文件夹
           </button>
         </div>
       </div>

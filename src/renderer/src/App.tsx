@@ -198,7 +198,8 @@ function App(): React.JSX.Element {
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
         if (cancelled) return
 
-        if (summary.isWorktree) {
+        const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
+        if (isGitWorkspace) {
           autoOpenedGitForThreadRef.current = currentThreadId
           setRightModule("git")
           handlePreviewExpand()
@@ -232,8 +233,9 @@ function App(): React.JSX.Element {
       try {
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
         if (!cancelled) {
-          setHasPendingGitDiff(Boolean(summary.isWorktree && summary.hasPendingDiff))
-          if (summary.isWorktree && autoOpenedGitForThreadRef.current !== currentThreadId) {
+          const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
+          setHasPendingGitDiff(Boolean(isGitWorkspace && summary.hasPendingDiff))
+          if (isGitWorkspace && autoOpenedGitForThreadRef.current !== currentThreadId) {
             autoOpenedGitForThreadRef.current = currentThreadId
             setRightModule("git")
             handlePreviewExpand()
@@ -355,17 +357,16 @@ function App(): React.JSX.Element {
                 {sidebarCollapsed ? (
                   <PanelLeftOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelLeftClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{sidebarToggleText}</span>
               </button>
             )}
           </div>
@@ -473,17 +474,16 @@ function App(): React.JSX.Element {
                 {rightPanelCollapsed ? (
                   <PanelRightOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelRightClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{rightPanelToggleText}</span>
               </button>
             )}
           </div>

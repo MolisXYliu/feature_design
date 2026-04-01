@@ -545,11 +545,11 @@ export const DiffDisplay = memo(({ diff, oldValue, newValue }: DiffDisplayProps)
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => setIsFullscreen(true)}
-            className="inline-flex items-center gap-1 text-[10px] font-medium cursor-pointer px-2 py-1 rounded bg-background hover:bg-accent/20 border border-border text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center justify-center text-[10px] font-medium cursor-pointer px-1.5 py-1 rounded bg-background hover:bg-accent/20 border border-border text-muted-foreground hover:text-foreground transition-colors"
             title="全屏查看"
+            aria-label="全屏查看"
           >
             <Maximize2 className="size-2.5" />
-            全屏
           </button>
         </div>
       </div>

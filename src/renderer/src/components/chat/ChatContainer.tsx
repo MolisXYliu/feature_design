@@ -864,16 +864,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       return
     }
 
-    try {
-      const gitInfo = await window.api.workspace.isGit(workspacePath)
-      if (gitInfo.isGit && !gitInfo.isWorktreePath) {
-        setError("当前目录是 Git 仓库主目录。请先创建并切换到独立 worktree 后再执行任务。")
-        return
-      }
-    } catch {
-      // Ignore git detection failure and continue with existing flow.
-    }
-
     if (threadError) {
       clearError()
     }
