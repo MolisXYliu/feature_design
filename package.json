@@ -2,6 +2,10 @@
   "name": "CMBDevClaw",
   "version": "0.1.11",
   "description": "CMBDevClaw description",
+  "author": {
+    "name": "CMBDevClaw",
+    "email": "dev@cmbdevclaw.com"
+  },
   "main": "./out/main/index.js",
   "files": [
     "out/",
