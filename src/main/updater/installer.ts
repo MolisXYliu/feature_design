@@ -93,14 +93,30 @@ exit /b 1
 echo [Updater] No existing asar to backup
 
 :DO_REPLACE
-:: Step 2: Replace app.asar
-copy /Y "${newAsarPath}" "${appAsarPath}" >nul
-if not %ERRORLEVEL%==0 goto REPLACE_FAILED
+:: Step 2: Check source file exists
+if exist "${newAsarPath}" (
+    echo [Updater] Source file OK: ${newAsarPath}
+) else (
+    echo [Updater] ERROR: source file not found: ${newAsarPath}
+    exit /b 1
+)
+
+:: Step 2: Replace app.asar, retry up to 5 times
+set COPY_RETRY=0
+:COPY_RETRY
+copy /Y "${newAsarPath}" "${appAsarPath}"
+if not %ERRORLEVEL%==0 (
+    set /A COPY_RETRY+=1
+    echo [Updater] Copy attempt %COPY_RETRY% failed, retrying in 2s...
+    if %COPY_RETRY% GEQ 5 goto REPLACE_FAILED
+    timeout /t 2 /nobreak >nul
+    goto COPY_RETRY
+)
 echo [Updater] Replace successful
 goto WRITE_MARKER
 
 :REPLACE_FAILED
-echo [Updater] Replace failed, rolling back...
+echo [Updater] Replace failed after retries, rolling back...
 copy /Y "${backupPath}" "${appAsarPath}" >nul
 echo [Updater] Rolled back to previous version
 exit /b 1
