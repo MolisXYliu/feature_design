@@ -39,6 +39,11 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      - name: Decrypt .env for build
+        run: node scripts/env-crypt.mjs decrypt-file .env
+        env:
+          ENV_ENCRYPTION_KEY: ${{ secrets.ENV_ENCRYPTION_KEY }}
+
       - name: Install dependencies (Windows with optional deps fallback)
         if: runner.os == 'Windows'
         shell: pwsh
