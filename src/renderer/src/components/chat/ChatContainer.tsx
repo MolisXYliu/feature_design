@@ -31,7 +31,6 @@ import {
   Loader2
 } from "lucide-react"
 import type { FileAttachment } from "@/types"
-import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -343,6 +342,26 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   // Get the stream data via subscription - reactive updates without re-rendering provider
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
+  const [savedToolNameInput, setSavedToolNameInput] = useState("")
+  const [savedToolDescriptionInput, setSavedToolDescriptionInput] = useState("")
+  const [saveToolMetadataLoading, setSaveToolMetadataLoading] = useState(false)
+
+  useEffect(() => {
+    const approval = pendingApproval as unknown as Record<string, unknown> | null
+    if (approval?.operation === "save_code_exec_tool") {
+      setSaveToolMetadataLoading(false)
+      setSavedToolNameInput(String(approval.savedToolName || ""))
+      setSavedToolDescriptionInput(String(approval.savedToolDescription || ""))
+      return
+    }
+
+    if (!pendingApproval || approval?.operation !== "prepare_save_code_exec_tool") {
+      setSaveToolMetadataLoading(false)
+    }
+
+    setSavedToolNameInput("")
+    setSavedToolDescriptionInput("")
+  }, [pendingApproval])
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
   // ── File attachments state ──
@@ -627,22 +646,42 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"): Promise<void> => {
-      if (!pendingApproval || !stream) return
+      if (!pendingApproval) return
 
       // Check if this is an orchestrator-sourced approval (has requestId)
       const approvalAny = pendingApproval as unknown as Record<string, unknown>
       if (approvalAny._orchestratorRequestId) {
+        const operation = approvalAny.operation as string | undefined
+        if (operation === "prepare_save_code_exec_tool" && decision === "approve") {
+          setSaveToolMetadataLoading(true)
+        } else {
+          setSaveToolMetadataLoading(false)
+        }
+
         // Send decision to main process via the orchestrator's IPC channel
         window.api.sandbox.sendApprovalDecision({
           requestId: approvalAny._orchestratorRequestId as string,
           type: decision === "edit" ? "reject" : decision,
-          tool_call_id: pendingApproval.tool_call?.id || ""
+          tool_call_id: pendingApproval.tool_call?.id || "",
+          ...(approvalAny.operation === "save_code_exec_tool" && decision === "approve"
+            ? { savedToolName: savedToolNameInput }
+            : {}),
+          ...(approvalAny.operation === "save_code_exec_tool" && decision === "approve"
+            ? { savedToolDescription: savedToolDescriptionInput }
+            : {})
         })
-        setPendingApproval(null)
+
+        if (!(operation === "prepare_save_code_exec_tool" && decision === "approve")) {
+          setPendingApproval(null)
+        }
         return
       }
 
       // Legacy HITL approval path (non-execute tools)
+      if (!stream) {
+        setPendingApproval(null)
+        return
+      }
       setPendingApproval(null)
 
       try {
@@ -655,7 +694,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         console.error("[ChatContainer] Resume command failed:", err)
       }
     },
-    [pendingApproval, setPendingApproval, stream, threadId, currentModel]
+    [currentModel, pendingApproval, savedToolDescriptionInput, savedToolNameInput, setPendingApproval, stream, threadId]
   )
 
   const agentValues = stream?.values as AgentStreamValues | undefined
@@ -1936,7 +1975,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             const operation = approval.operation
             const isFileApproval = operation === "write_file" || operation === "edit_file"
             const isCodeExecApproval = operation === "code_exec"
+            const isPrepareSaveCodeExecToolApproval = operation === "prepare_save_code_exec_tool"
             const isSaveCodeExecToolApproval = operation === "save_code_exec_tool"
+            const isManualSaveCodeExecToolApproval = isSaveCodeExecToolApproval && Boolean(approval.savedToolMetadataError)
+            const isSaveToolApprovalInvalid =
+              isSaveCodeExecToolApproval &&
+              (
+                !savedToolDescriptionInput.trim() ||
+                (isManualSaveCodeExecToolApproval && !savedToolNameInput.trim())
+              )
             const approvalTypes = Array.isArray(approval._approvalTypes)
               ? approval._approvalTypes as Array<"approve" | "approve_session" | "approve_permanent" | "reject">
               : ["approve", "approve_session", "approve_permanent", "reject"]
@@ -1945,7 +1992,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           <div className={`max-w-3xl mx-auto rounded-lg border-2 p-4 space-y-3 ${
             isFileApproval
               ? "border-blue-500/50 bg-blue-500/5"
-              : isCodeExecApproval || isSaveCodeExecToolApproval
+              : isCodeExecApproval || isPrepareSaveCodeExecToolApproval || isSaveCodeExecToolApproval
                 ? "border-emerald-500/50 bg-emerald-500/5"
                 : "border-amber-500/50 bg-amber-500/5"
           }`}>
@@ -1954,6 +2001,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 ? <FilePenLine className="size-4 text-blue-500" />
                 : isCodeExecApproval
                   ? <Code2 className="size-4 text-emerald-500" />
+                : isPrepareSaveCodeExecToolApproval
+                  ? <Wrench className="size-4 text-emerald-500" />
                 : isSaveCodeExecToolApproval
                   ? <Wrench className="size-4 text-emerald-500" />
                 : <ShieldCheck className="size-4 text-amber-500" />}
@@ -1964,27 +2013,52 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     ? "编辑文件需要审批"
                     : isCodeExecApproval
                       ? "执行 MCP 脚本需要审批"
+                    : isPrepareSaveCodeExecToolApproval
+                      ? "是否将脚本注册为工具，便于后续复用"
                     : isSaveCodeExecToolApproval
                       ? "保存脚本工具需要确认"
                     : "命令需要审批"}
               </span>
             </div>
-            {isCodeExecApproval || isSaveCodeExecToolApproval ? (
+            {isCodeExecApproval || isPrepareSaveCodeExecToolApproval || isSaveCodeExecToolApproval ? (
               <>
                 {isSaveCodeExecToolApproval && (
                   <div className="grid gap-2 md:grid-cols-2">
                     <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
-                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">tool_id</div>
-                      <div className="font-mono break-all">
-                        {String(approval.savedToolId || pendingApproval.tool_call?.args?.toolId || "")}
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+                        {isManualSaveCodeExecToolApproval ? "tool_name" : "tool_id"}
                       </div>
+                      {isManualSaveCodeExecToolApproval ? (
+                        <>
+                          <input
+                            className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                            value={savedToolNameInput}
+                            onChange={(event) => setSavedToolNameInput(event.target.value)}
+                            placeholder="例如：list_github_issues"
+                          />
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            最终 tool_id 会基于 tool_name 规范化生成。
+                          </div>
+                        </>
+                      ) : (
+                        <div className="font-mono break-all">
+                          {String(approval.savedToolId || pendingApproval.tool_call?.args?.toolId || "")}
+                        </div>
+                      )}
                     </div>
                     <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
                       <div className="mb-1 text-[11px] font-medium text-muted-foreground">description</div>
-                      <div className="whitespace-pre-wrap break-all">
-                        {String(approval.savedToolDescription || "")}
-                      </div>
+                      <textarea
+                        className="min-h-20 w-full resize-y rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                        value={savedToolDescriptionInput}
+                        onChange={(event) => setSavedToolDescriptionInput(event.target.value)}
+                      />
                     </div>
+                  </div>
+                )}
+                {isManualSaveCodeExecToolApproval && (
+                  <div className="text-xs text-amber-600 dark:text-amber-400">
+                    {String(approval.savedToolMetadataError)}
                   </div>
                 )}
                 <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-all overflow-auto max-h-64">
@@ -2044,12 +2118,33 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 </>
               ) : (
                 <>
+                  {isPrepareSaveCodeExecToolApproval && saveToolMetadataLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      正在生成工具信息，请稍候...
+                    </div>
+                  ) : (
+                    <>
                   {approvalTypes.includes("approve") && (
                     <button
-                      className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-md transition-colors",
+                        isSaveToolApprovalInvalid
+                          ? "bg-primary/50 text-primary-foreground/80 cursor-not-allowed"
+                          : "bg-primary text-primary-foreground hover:bg-primary/90"
+                      )}
                       onClick={() => handleApprovalDecision("approve")}
+                      disabled={isSaveToolApprovalInvalid}
                     >
-                      {isFileApproval ? "允许" : isCodeExecApproval ? "执行脚本" : isSaveCodeExecToolApproval ? "保存为工具" : "运行"}
+                      {isFileApproval
+                        ? "允许"
+                        : isCodeExecApproval
+                          ? "执行脚本"
+                        : isPrepareSaveCodeExecToolApproval
+                          ? "允许注册为工具"
+                        : isSaveCodeExecToolApproval
+                          ? "保存为工具"
+                          : "运行"}
                     </button>
                   )}
                   {approvalTypes.includes("approve_session") && (
@@ -2075,6 +2170,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     >
                       拒绝
                     </button>
+                  )}
+                    </>
                   )}
                 </>
               )}

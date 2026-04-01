@@ -309,7 +309,13 @@ interface CustomAPI {
     completeNux: (mode: "elevated" | "unelevated" | "none") => Promise<void>
     getApprovalRules: () => Promise<Array<{ pattern: string; decision: string }>>
     deleteApprovalRule: (pattern: string) => Promise<void>
-    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
+    sendApprovalDecision: (decision: {
+      requestId: string
+      type: string
+      tool_call_id: string
+      savedToolName?: string
+      savedToolDescription?: string
+    }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onApprovalTimeout: (threadId: string, callback: (data: { requestId: string }) => void) => () => void
     onChanged: (callback: () => void) => () => void

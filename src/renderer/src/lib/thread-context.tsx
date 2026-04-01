@@ -976,6 +976,10 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             code: req.code,
             params: req.params,
             timeoutMs: req.timeoutMs,
+            savedToolName: req.savedToolName,
+            savedToolId: req.savedToolId,
+            savedToolDescription: req.savedToolDescription,
+            savedToolMetadataError: req.savedToolMetadataError,
             _orchestratorRequestId: req.id,
             _retryReason: req.retry_reason,
             _approvalTypes: req.allowed_approval_types

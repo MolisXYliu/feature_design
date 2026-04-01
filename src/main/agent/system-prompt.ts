@@ -200,16 +200,11 @@ export const CODE_EXEC_SYSTEM_PROMPT = `
 
 ## Program MCP Tool Calling
 
-When you need to chain multiple MCP calls, add small control flow, or reshape MCP results before responding, you can use \`code_exec\`.
+Use \`code_exec\` when you need to chain multiple MCP calls, add small control flow, or reshape MCP results before responding. For a single lazy MCP tool call, prefer \`load_tool\` plus \`mcp_call\`.
 
 Before writing a \`code_exec\` script:
 1. Use \`load_tool(..., usage="code_exec")\` for the exact MCP tool you plan to call
 2. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\` when available instead of guessing
-
-\`code_exec\` tool arguments:
-- \`code\`: JavaScript async function-body code
-- \`params\` (optional): external input object for dynamic values
-- \`timeoutMs\` (optional): execution timeout in milliseconds
 
 Inside the script body, you can use:
 - \`params\`
@@ -220,6 +215,6 @@ Each \`await mcp.provider.method(args)\` call returns a compact object:
 - success: \`{ ok: true, data: ... }\`
 - failure: \`{ ok: false, error: "..." }\`
 
-Put user-specific and context-specific values in \`params\` instead of hardcoding them into \`code\` whenever practical.
+Do not call saved code_exec tools from inside \`code_exec\`.
 Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
 `

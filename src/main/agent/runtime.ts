@@ -909,6 +909,7 @@ The workspace root is: ${workspacePath}`
     extraTools.push(createCodeExecTool({
       workspacePath,
       threadId: options.threadId,
+      modelId: options.modelId,
       yoloMode,
       capabilityService,
       approvalStore,

@@ -155,6 +155,13 @@ export function createLoadTool(service: McpCapabilityService) {
       const loadedTools = await Promise.all(input.tool_ids.map(async (idOrAlias) => {
         const savedTool = getSavedCodeExecTool(idOrAlias)
         if (savedTool) {
+          if (input.usage === "code_exec") {
+            return {
+              tool_id: savedTool.toolId,
+              error: "Saved code_exec tools cannot be called from code_exec. Load the underlying MCP tool instead."
+            }
+          }
+
           return {
             tool_id: savedTool.toolId,
             schema: savedTool.inputSchema,

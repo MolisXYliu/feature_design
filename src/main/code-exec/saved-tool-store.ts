@@ -48,6 +48,11 @@ interface SavedCodeExecToolsFile {
   entries: SavedCodeExecTool[]
 }
 
+interface SavedCodeExecToolIdOptions {
+  toolName: string
+  codeHash: string
+}
+
 function getSavedCodeExecToolsPath(): string {
   return join(getOpenworkDir(), "code-exec-tools.json")
 }
@@ -97,6 +102,15 @@ function loadStore(): SavedCodeExecToolsFile {
 function saveStore(store: SavedCodeExecToolsFile): void {
   store.version = SAVED_CODE_EXEC_TOOLS_VERSION
   writeFileSync(getSavedCodeExecToolsPath(), `${JSON.stringify(store, null, 2)}\n`)
+}
+
+export function computeSavedCodeExecToolHash(code: string, timeoutMs?: number): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      code,
+      timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS
+    }))
+    .digest("hex")
 }
 
 function splitIntoTokens(value: string): string[] {
@@ -240,7 +254,11 @@ function inferSchema(value: unknown, depth = 0): Record<string, unknown> {
   }
 }
 
-function parseCodeExecDependencies(code: string): string[] {
+export function inferSavedCodeExecSchema(value: unknown): Record<string, unknown> {
+  return inferSchema(value)
+}
+
+export function parseCodeExecDependencies(code: string): string[] {
   const matches = new Set<string>()
   const pattern = /mcp\.([A-Za-z_$][A-Za-z0-9_$]*)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g
   let match: RegExpExecArray | null
@@ -250,19 +268,6 @@ function parseCodeExecDependencies(code: string): string[] {
   }
 
   return Array.from(matches)
-}
-
-function buildBaseToolSlug(code: string, dependencies: string[]): string {
-  if (dependencies.length > 0) {
-    return toSnakeCase(dependencies[0].replace(".", "_"), "workflow")
-  }
-
-  const callMatches = code.match(/await\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\(/g)
-  if (callMatches && callMatches.length > 0) {
-    return toSnakeCase(callMatches[0], "workflow")
-  }
-
-  return "workflow"
 }
 
 function ensureUniqueToolId(baseSlug: string, store: SavedCodeExecToolsFile, codeHash: string): string {
@@ -279,17 +284,6 @@ function ensureUniqueToolId(baseSlug: string, store: SavedCodeExecToolsFile, cod
   }
 
   return candidate
-}
-
-function buildDescription(dependencies: string[], params: Record<string, unknown> | undefined): string {
-  const dependencyText = dependencies.length > 0
-    ? `封装 ${dependencies.join(", ")} 的保存 code_exec 工具。`
-    : "保存的 code_exec 工具。"
-  const paramKeys = Object.keys(params ?? {})
-  const paramText = paramKeys.length > 0
-    ? ` 参数: ${paramKeys.join(", ")}。`
-    : ""
-  return `${dependencyText}${paramText}`
 }
 
 function scoreKeyword(text: string, query: string, toolId: string): number {
@@ -375,77 +369,74 @@ export function parseCodeExecOutputValue(output: string): unknown {
   }
 }
 
+export function buildSavedCodeExecResultExample(data: unknown): unknown {
+  return {
+    ok: true,
+    data: sanitizeValue(data, { depth: 0, key: "data" })
+  }
+}
+
+function buildSavedCodeExecToolId(
+  store: SavedCodeExecToolsFile,
+  input: SavedCodeExecToolIdOptions
+): string {
+  const normalizedToolName = input.toolName.replace(/^saved__?/i, "")
+  const baseSlug = toSnakeCase(normalizedToolName, "workflow")
+  return ensureUniqueToolId(baseSlug, store, input.codeHash)
+}
+
 export function buildSavedCodeExecToolDraft(input: {
+  toolName: string
+  description: string
+  inputSchema: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
   code: string
-  params?: Record<string, unknown>
   timeoutMs?: number
-  output: string
+  dependencies: string[]
+  resultExample?: unknown
 }): SavedCodeExecToolDraft {
   const store = loadStore()
-  const codeHash = createHash("sha256")
-    .update(JSON.stringify({
-      code: input.code,
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS
-    }))
-    .digest("hex")
-
-  const dependencies = parseCodeExecDependencies(input.code)
-  const baseSlug = buildBaseToolSlug(input.code, dependencies)
-  const data = parseCodeExecOutputValue(input.output)
+  const codeHash = computeSavedCodeExecToolHash(input.code, input.timeoutMs)
 
   return {
-    toolId: ensureUniqueToolId(baseSlug, store, codeHash),
-    description: buildDescription(dependencies, input.params),
-    inputSchema: inferSchema(input.params ?? {}),
-    outputSchema: inferSchema(data),
+    toolId: buildSavedCodeExecToolId(store, {
+      toolName: input.toolName,
+      codeHash
+    }),
+    description: input.description,
+    inputSchema: input.inputSchema,
+    outputSchema: input.outputSchema,
     code: input.code,
     timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     codeHash,
-    dependencies,
-    resultExample: {
-      ok: true,
-      data: sanitizeValue(data, { depth: 0, key: "data" })
-    }
+    dependencies: input.dependencies,
+    resultExample: input.resultExample
   }
 }
 
 export function persistSavedCodeExecTool(draft: SavedCodeExecToolDraft): SavedCodeExecTool {
   const store = loadStore()
-  const existingIndex = store.entries.findIndex((entry) => entry.codeHash === draft.codeHash || entry.toolId === draft.toolId)
-  const now = new Date().toISOString()
-  const nextEntry: SavedCodeExecTool = existingIndex >= 0
-    ? {
-        ...store.entries[existingIndex],
-        toolId: store.entries[existingIndex].toolId,
-        description: draft.description,
-        inputSchema: draft.inputSchema,
-        outputSchema: draft.outputSchema,
-        code: draft.code,
-        timeoutMs: draft.timeoutMs,
-        updatedAt: now,
-        codeHash: draft.codeHash,
-        dependencies: draft.dependencies,
-        resultExample: draft.resultExample
-      }
-    : {
-        toolId: draft.toolId,
-        description: draft.description,
-        inputSchema: draft.inputSchema,
-        outputSchema: draft.outputSchema,
-        code: draft.code,
-        timeoutMs: draft.timeoutMs,
-        createdAt: now,
-        updatedAt: now,
-        codeHash: draft.codeHash,
-        dependencies: draft.dependencies,
-        resultExample: draft.resultExample
-      }
-
-  if (existingIndex >= 0) {
-    store.entries[existingIndex] = nextEntry
-  } else {
-    store.entries.push(nextEntry)
+  const existingByHash = store.entries.find((entry) => entry.codeHash === draft.codeHash)
+  if (existingByHash) {
+    return existingByHash
   }
+
+  const now = new Date().toISOString()
+  const nextEntry: SavedCodeExecTool = {
+    toolId: draft.toolId,
+    description: draft.description,
+    inputSchema: draft.inputSchema,
+    outputSchema: draft.outputSchema,
+    code: draft.code,
+    timeoutMs: draft.timeoutMs,
+    createdAt: now,
+    updatedAt: now,
+    codeHash: draft.codeHash,
+    dependencies: draft.dependencies,
+    resultExample: draft.resultExample
+  }
+
+  store.entries.push(nextEntry)
 
   saveStore(store)
   return nextEntry
@@ -461,13 +452,13 @@ export function getSavedCodeExecTool(idOrAlias: string): SavedCodeExecTool | nul
   return loadStore().entries.find((entry) => entry.toolId === normalized) ?? null
 }
 
+export function getSavedCodeExecToolForCode(code: string, timeoutMs?: number): SavedCodeExecTool | null {
+  const codeHash = computeSavedCodeExecToolHash(code, timeoutMs)
+  return loadStore().entries.find((entry) => entry.codeHash === codeHash) ?? null
+}
+
 export function hasSavedCodeExecToolForCode(code: string, timeoutMs?: number): boolean {
-  const codeHash = createHash("sha256")
-    .update(JSON.stringify({
-      code,
-      timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS
-    }))
-    .digest("hex")
+  const codeHash = computeSavedCodeExecToolHash(code, timeoutMs)
 
   return loadStore().entries.some((entry) => entry.codeHash === codeHash)
 }

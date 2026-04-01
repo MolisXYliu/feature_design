@@ -677,7 +677,13 @@ const api = {
     deleteApprovalRule: (pattern: string): Promise<void> =>
       ipcRenderer.invoke("sandbox:deleteApprovalRule", pattern) as Promise<void>,
     // Approval decision from renderer → main
-    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }): void => {
+    sendApprovalDecision: (decision: {
+      requestId: string
+      type: string
+      tool_call_id: string
+      savedToolName?: string
+      savedToolDescription?: string
+    }): void => {
       ipcRenderer.send("sandbox:approvalDecision", decision)
     },
     // Listen for approval requests from main → renderer
