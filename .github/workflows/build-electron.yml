@@ -39,27 +39,14 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Install dependencies (Linux)
-        if: runner.os != 'Windows'
+      - name: Install dependencies
         run: npm ci
-
-      - name: Install dependencies (Windows with optional deps fallback)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          npm install --include=optional
-          if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
-            Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
-            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-            Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
-            npm install --include=optional
-          }
 
       - name: Build
         run: npm run build
 
       - name: Package
-        run: npm run ${{ matrix.script }}
+        run: npx electron-builder --${{ matrix.platform }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
