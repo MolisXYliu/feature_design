@@ -1,0 +1,102 @@
+name: Build Electron App
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - feature/gitaction
+  workflow_dispatch: # 支持手动触发
+
+concurrency:
+  group: build-electron-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            script: dist:mac
+          - os: windows-latest
+            platform: win
+            script: dist:win
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies (macOS)
+        if: runner.os != 'Windows'
+        run: npm ci
+
+      - name: Install dependencies (Windows with optional deps fallback)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install --include=optional
+          if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
+            Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
+            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+            Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+            npm install --include=optional
+          }
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npm run ${{ matrix.script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-${{ matrix.platform }}-installer
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.msi
+          if-no-files-found: warn
+
+      - name: Upload unpacked (Windows)
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-win-unpacked
+          path: dist/win-unpacked/
+
+      - name: Upload unpacked (macOS)
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-mac-unpacked
+          path: dist/mac/
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.msi
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
