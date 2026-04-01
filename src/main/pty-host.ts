@@ -106,12 +106,12 @@ function send(msg: Record<string, unknown>): void {
 function handleCreate(msg: CreateMsg): void {
   try {
     const shell = getShell()
-    // Git Bash (Windows) 与 Unix shell 均为 POSIX 兼容，统一使用单引号转义
     const escapeArg = (arg: string): string => `'${arg.replace(/'/g, "'\\''")}'`
 
     const isJsFile = msg.claudePath.endsWith(".js")
     const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
 
+    // 构建启动命令
     let claudeCmd: string
     if (isJsFile) {
       claudeCmd = [escapeArg(msg.electronPath), escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
@@ -120,7 +120,7 @@ function handleCreate(msg: CreateMsg): void {
       claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
     }
 
-    // Claude Code 退出后清除敏感变量，再 exec 回交互式 shell
+    // Claude Code 退出后清除敏感环境变量
     const varsToUnset: string[] = []
     if (msg.extraEnv) {
       varsToUnset.push(...Object.keys(msg.extraEnv))
@@ -128,12 +128,13 @@ function handleCreate(msg: CreateMsg): void {
     if (isJsFile) {
       varsToUnset.push("ELECTRON_RUN_AS_NODE")
     }
+    const cleanupCmd = varsToUnset.length > 0
+      ? ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}`
+      : ""
 
-    const shellCmd = varsToUnset.length > 0
-      ? claudeCmd + ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}; exec ${escapeArg(shell)} -l`
-      : claudeCmd + ` ; exec ${escapeArg(shell)} -l`
-
-    const pty = ptySpawn(shell, ["-c", shellCmd], {
+    // VS Code 模式：交互式启动 shell，通过 pty.write() 写入命令
+    // 不使用 -c，确保 Windows ConPTY 在交互式 console session 中正确传递 TTY 句柄
+    const pty = ptySpawn(shell, [], {
       name: "xterm-256color",
       cols: msg.cols,
       rows: msg.rows,
@@ -161,6 +162,10 @@ function handleCreate(msg: CreateMsg): void {
       pendingBytes.delete(msg.id)
       paused.delete(msg.id)
     })
+
+    // printf 禁用旧会话残留的焦点报告模式（避免 ^[[I 乱码），clear 清除提示符和命令回显
+    // Claude Code 退出后自动回到 shell 提示符
+    pty.write("printf '\\e[?1004l' && clear && " + claudeCmd + cleanupCmd + "\r")
 
     send({ type: "created", id: msg.id })
   } catch (err) {
