@@ -66,8 +66,9 @@ set RETRY=0
 :WAIT_EXIT
 tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
 find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+set FOUND=%ERRORLEVEL%
 del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %ERRORLEVEL%==0 goto APP_EXITED
+if not %FOUND%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
 timeout /t 2 /nobreak >nul
@@ -157,8 +158,9 @@ set RETRY=0
 :WAIT_EXIT
 tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
 find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+set FOUND=%ERRORLEVEL%
 del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %ERRORLEVEL%==0 goto DO_ROLLBACK
+if not %FOUND%==0 goto DO_ROLLBACK
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
 timeout /t 2 /nobreak >nul
@@ -255,8 +257,9 @@ set RETRY=0
 :WAIT_EXIT
 tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
 find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+set FOUND=%ERRORLEVEL%
 del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %ERRORLEVEL%==0 goto APP_EXITED
+if not %FOUND%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
 timeout /t 2 /nobreak >nul
