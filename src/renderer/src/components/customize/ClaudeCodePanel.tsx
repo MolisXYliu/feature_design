@@ -612,17 +612,36 @@ export function ClaudeCodePanel(): React.JSX.Element {
       {sessionIds.length === 0 && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 bg-background">
           <div className="flex flex-col items-center gap-3">
-            <div className="size-16 rounded-2xl bg-muted/60 flex items-center justify-center">
-              <TerminalIcon className="size-8 text-muted-foreground/60" />
-            </div>
+            <svg viewBox="0 0 9 8" width="64" height="64" xmlns="http://www.w3.org/2000/svg" shapeRendering="crispEdges" style={{ imageRendering: "pixelated", display: "block" }}>
+              <rect x="1" y="0" width="7" height="1" fill="#E8907A"/>
+              <rect x="0" y="1" width="9" height="1" fill="#E8907A"/>
+              <rect x="0" y="2" width="9" height="1" fill="#E8907A"/>
+              <rect x="2" y="2" width="1" height="1" fill="#5C2315"/>
+              <rect x="6" y="2" width="1" height="1" fill="#5C2315"/>
+              <rect x="0" y="3" width="9" height="1" fill="#E8907A"/>
+              <rect x="0" y="4" width="9" height="1" fill="#D4786A"/>
+              <rect x="0" y="5" width="9" height="1" fill="#D4786A"/>
+              <rect x="1" y="6" width="3" height="1" fill="#C06858"/>
+              <rect x="5" y="6" width="3" height="1" fill="#C06858"/>
+              <rect x="1" y="7" width="3" height="1" fill="#B05848"/>
+              <rect x="5" y="7" width="3" height="1" fill="#B05848"/>
+            </svg>
             <h3 className="text-lg font-semibold text-foreground/80">Claude Code</h3>
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               点击下方按钮选择项目目录，Claude Code 将在该目录下启动。<br />
               你可以通过顶部 Tab 栏新建多个会话，每个会话对应不同的项目目录。
             </p>
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-amber-50 border border-amber-200">
-              <TriangleAlert className="size-4 text-amber-500 shrink-0" />
-              <span className="text-xs text-amber-700">当前会话仅在本次运行期间有效，关闭或重启应用后需要重新创建</span>
+            <div className="rounded-xl border border-border/60 divide-y divide-border/60 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 px-4 py-2">
+                <TriangleAlert className="size-3.5 shrink-0 text-amber-400" />
+                <span>会话仅在本次运行期间有效，重启应用后需重新创建</span>
+              </div>
+              {window.electron.process.platform === "win32" && (
+                <div className="flex items-center gap-2 px-4 py-2">
+                  <TriangleAlert className="size-3.5 shrink-0 text-amber-400" />
+                  <span>Windows 用户必须安装 Git Bash 和 Node.js (≥ 18)</span>
+                </div>
+              )}
             </div>
           </div>
           {isPackaged && models.length > 0 && (
