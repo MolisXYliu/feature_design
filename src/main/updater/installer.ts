@@ -54,25 +54,17 @@ function generateUpdateBat(
   const markerPath = getMarkerPath()
   const exePath = getExePath()
   const exeName = EXE_NAME
+  const exeBaseName = EXE_NAME.replace(".exe", "")
 
   return `@echo off
 chcp 65001 >nul
 echo [Updater] Waiting for application to exit...
 
-:: Initial wait to give app.quit() time to start shutting down
-timeout /t 5 /nobreak >nul
-
-set RETRY=0
-:WAIT_EXIT
-tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
-find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-set FOUND=%ERRORLEVEL%
-del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %FOUND%==0 goto APP_EXITED
-if %RETRY% GEQ 30 goto TIMEOUT
-set /A RETRY+=1
-timeout /t 2 /nobreak >nul
-goto WAIT_EXIT
+:: Wait for process to exit using PowerShell (no extra windows)
+powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if not %ERRORLEVEL%==0 goto TIMEOUT
+goto APP_EXITED
 
 :TIMEOUT
 echo [Updater] Timeout waiting for app to exit, aborting
@@ -147,24 +139,17 @@ export function generateRollbackBat(backupAsarPath: string): string {
   const markerPath = getMarkerPath()
   const exePath = getExePath()
   const exeName = EXE_NAME
+  const exeBaseName = EXE_NAME.replace(".exe", "")
 
   return `@echo off
 chcp 65001 >nul
 echo [Updater] Rolling back...
 
-timeout /t 5 /nobreak >nul
-
-set RETRY=0
-:WAIT_EXIT
-tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
-find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-set FOUND=%ERRORLEVEL%
-del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %FOUND%==0 goto DO_ROLLBACK
-if %RETRY% GEQ 30 goto TIMEOUT
-set /A RETRY+=1
-timeout /t 2 /nobreak >nul
-goto WAIT_EXIT
+:: Wait for process to exit using PowerShell (no extra windows)
+powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if not %ERRORLEVEL%==0 goto TIMEOUT
+goto DO_ROLLBACK
 
 :TIMEOUT
 echo [Updater] Timeout, aborting rollback
@@ -242,6 +227,7 @@ function generateFullZipUpdateBat(
   const tempDir = `%TEMP%\\cmbdevclaw_update_tmp`
   const markerPath = join(appDir, "update-marker.json")
   const exeName = EXE_NAME
+  const exeBaseName = EXE_NAME.replace(".exe", "")
 
   return `@echo off
 chcp 65001 >nul
@@ -250,20 +236,11 @@ echo [FullUpdater] zip=${zipPath}
 echo [FullUpdater] appDir=${appDir}
 echo [FullUpdater] exePath=${exePath}
 
-:: Initial wait to give app.quit() time to start shutting down
-timeout /t 5 /nobreak >nul
-
-set RETRY=0
-:WAIT_EXIT
-tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
-find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-set FOUND=%ERRORLEVEL%
-del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
-if not %FOUND%==0 goto APP_EXITED
-if %RETRY% GEQ 30 goto TIMEOUT
-set /A RETRY+=1
-timeout /t 2 /nobreak >nul
-goto WAIT_EXIT
+:: Wait for process to exit using PowerShell (no extra windows)
+powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if not %ERRORLEVEL%==0 goto TIMEOUT
+goto APP_EXITED
 
 :TIMEOUT
 echo [FullUpdater] Timeout waiting for app to exit, aborting
