@@ -61,8 +61,8 @@ chcp 65001 >nul
 echo [Updater] Waiting for application to exit...
 
 :: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
 if not %ERRORLEVEL%==0 goto TIMEOUT
 goto APP_EXITED
 
@@ -146,8 +146,8 @@ chcp 65001 >nul
 echo [Updater] Rolling back...
 
 :: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
 if not %ERRORLEVEL%==0 goto TIMEOUT
 goto DO_ROLLBACK
 
@@ -237,8 +237,8 @@ echo [FullUpdater] appDir=${appDir}
 echo [FullUpdater] exePath=${exePath}
 
 :: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
+powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
 if not %ERRORLEVEL%==0 goto TIMEOUT
 goto APP_EXITED
 
