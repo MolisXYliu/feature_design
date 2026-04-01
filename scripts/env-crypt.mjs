@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto"
+import { createCipheriv, createDecipheriv, createHmac } from "crypto"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -45,7 +45,7 @@ function getKey() {
 }
 
 function encrypt(plaintext, key) {
-  const iv = randomBytes(12)
+  const iv = createHmac("sha256", key).update(plaintext).digest().subarray(0, 12)
   const cipher = createCipheriv("aes-256-gcm", key, iv)
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()])
   const tag = cipher.getAuthTag()
