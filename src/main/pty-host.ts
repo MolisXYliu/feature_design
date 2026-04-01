@@ -57,6 +57,54 @@ function getShell(): string {
   return cachedShell
 }
 
+let cachedNodeExe: string | null = null
+function findNodeExe(): string {
+  if (cachedNodeExe) return cachedNodeExe
+  const candidates = [
+    join("C:\\", "Program Files", "nodejs", "node.exe"),
+    join("C:\\", "Program Files (x86)", "nodejs", "node.exe"),
+    join(homedir(), "scoop", "apps", "nodejs", "current", "node.exe"),
+    join(homedir(), ".volta", "bin", "node.exe"),
+  ]
+  // nvm-windows 的活跃版本 symlink 通常在 NVM_SYMLINK（默认 C:\Program Files\nodejs，已被上面覆盖）
+  const nvmSymlink = process.env.NVM_SYMLINK
+  if (nvmSymlink) candidates.push(join(nvmSymlink, "node.exe"))
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      checkNodeVersion(p)
+      cachedNodeExe = p
+      return cachedNodeExe
+    }
+  }
+  // 兜底：where.exe 查找
+  try {
+    const out = execSync("where node.exe", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    const found = out.trim().split(/\r?\n/)[0]
+    if (found) {
+      checkNodeVersion(found)
+      cachedNodeExe = found
+      return cachedNodeExe
+    }
+  } catch {}
+  throw new Error("Node.js not found. Please install Node.js: https://nodejs.org/")
+}
+
+function checkNodeVersion(nodePath: string): void {
+  try {
+    const ver = execSync(`"${nodePath}" -v`, { encoding: "utf8", timeout: 3000 }).trim()
+    const major = parseInt(ver.slice(1), 10)
+    if (major < 18) {
+      throw new Error(`Node.js ${ver} is too old, need >= 18. Please upgrade: https://nodejs.org/`)
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("too old")) throw err
+  }
+}
+
 interface CreateMsg {
   type: "create"
   id: string
@@ -112,29 +160,35 @@ function handleCreate(msg: CreateMsg): void {
     const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
 
     // 构建启动命令
+    const isWin = platform() === "win32"
     let claudeCmd: string
     if (isJsFile) {
-      claudeCmd = [escapeArg(msg.electronPath), escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
-      env.ELECTRON_RUN_AS_NODE = "1"
+      if (isWin) {
+        // Windows: 用 node.exe（CONSOLE 子系统）替代 electron.exe（GUI 子系统）
+        // electron.exe 在 ConPTY 下 process.stdout.isTTY 为 undefined，Claude Code 会误入 --print 模式
+        claudeCmd = [escapeArg(findNodeExe()), escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+      } else {
+        claudeCmd = [escapeArg(msg.electronPath), escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+        env.ELECTRON_RUN_AS_NODE = "1"
+      }
     } else {
       claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
     }
 
-    // Claude Code 退出后清除敏感环境变量
+    // Claude Code 退出后清除敏感环境变量，再 exec 回交互式 shell
     const varsToUnset: string[] = []
     if (msg.extraEnv) {
       varsToUnset.push(...Object.keys(msg.extraEnv))
     }
-    if (isJsFile) {
+    if (isJsFile && !isWin) {
       varsToUnset.push("ELECTRON_RUN_AS_NODE")
     }
-    const cleanupCmd = varsToUnset.length > 0
-      ? ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}`
-      : ""
 
-    // VS Code 模式：交互式启动 shell，通过 pty.write() 写入命令
-    // 不使用 -c，确保 Windows ConPTY 在交互式 console session 中正确传递 TTY 句柄
-    const pty = ptySpawn(shell, [], {
+    const shellCmd = varsToUnset.length > 0
+      ? claudeCmd + ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}; exec ${escapeArg(shell)} -l`
+      : claudeCmd + ` ; exec ${escapeArg(shell)} -l`
+
+    const pty = ptySpawn(shell, ["-c", shellCmd], {
       name: "xterm-256color",
       cols: msg.cols,
       rows: msg.rows,
@@ -162,10 +216,6 @@ function handleCreate(msg: CreateMsg): void {
       pendingBytes.delete(msg.id)
       paused.delete(msg.id)
     })
-
-    // printf 禁用旧会话残留的焦点报告模式（避免 ^[[I 乱码），clear 清除提示符和命令回显
-    // Claude Code 退出后自动回到 shell 提示符
-    pty.write("printf '\\e[?1004l' && clear && " + claudeCmd + cleanupCmd + "\r")
 
     send({ type: "created", id: msg.id })
   } catch (err) {
