@@ -70,7 +70,7 @@ jobs:
         run: npm run build
 
       - name: Package
-        run: npx electron-builder --${{ matrix.platform }}
+        run: npx electron-builder --${{ matrix.platform == 'linux' && 'linux deb AppImage' || matrix.platform }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
