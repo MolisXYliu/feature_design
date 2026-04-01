@@ -59,16 +59,18 @@ function generateUpdateBat(
 chcp 65001 >nul
 echo [Updater] Waiting for application to exit...
 
-:: Initial wait to give app.quit() time to fully exit
-timeout /t 3 /nobreak >nul
+:: Initial wait to give app.quit() time to start shutting down
+timeout /t 5 /nobreak >nul
 
 set RETRY=0
 :WAIT_EXIT
-tasklist 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
+find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
 if not %ERRORLEVEL%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 goto WAIT_EXIT
 
 :TIMEOUT
@@ -149,13 +151,17 @@ export function generateRollbackBat(backupAsarPath: string): string {
 chcp 65001 >nul
 echo [Updater] Rolling back...
 
+timeout /t 5 /nobreak >nul
+
 set RETRY=0
 :WAIT_EXIT
-tasklist 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
+find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
 if not %ERRORLEVEL%==0 goto DO_ROLLBACK
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 goto WAIT_EXIT
 
 :TIMEOUT
@@ -242,16 +248,18 @@ echo [FullUpdater] zip=${zipPath}
 echo [FullUpdater] appDir=${appDir}
 echo [FullUpdater] exePath=${exePath}
 
-:: Initial wait to give app.quit() time to fully exit
-timeout /t 3 /nobreak >nul
+:: Initial wait to give app.quit() time to start shutting down
+timeout /t 5 /nobreak >nul
 
 set RETRY=0
 :WAIT_EXIT
-tasklist 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul > "%TEMP%\\upd_proclist.tmp"
+find /I "${exeName}" "%TEMP%\\upd_proclist.tmp" >nul 2>nul
+del "%TEMP%\\upd_proclist.tmp" >nul 2>nul
 if not %ERRORLEVEL%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 goto WAIT_EXIT
 
 :TIMEOUT
