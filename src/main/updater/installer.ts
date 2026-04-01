@@ -64,7 +64,7 @@ timeout /t 3 /nobreak >nul
 
 set RETRY=0
 :WAIT_EXIT
-tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul | find /I "${exeName}" >nul
 if not %ERRORLEVEL%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
@@ -151,7 +151,7 @@ echo [Updater] Rolling back...
 
 set RETRY=0
 :WAIT_EXIT
-tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul | find /I "${exeName}" >nul
 if not %ERRORLEVEL%==0 goto DO_ROLLBACK
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
@@ -247,7 +247,7 @@ timeout /t 3 /nobreak >nul
 
 set RETRY=0
 :WAIT_EXIT
-tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul
+tasklist 2>nul | find /I "${exeName}" >nul
 if not %ERRORLEVEL%==0 goto APP_EXITED
 if %RETRY% GEQ 30 goto TIMEOUT
 set /A RETRY+=1
