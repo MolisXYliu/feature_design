@@ -5,6 +5,9 @@
  */
 import { spawn as ptySpawn, IPty } from "node-pty"
 import { platform, homedir } from "os"
+import { existsSync } from "fs"
+import { join } from "path"
+import { execSync } from "child_process"
 
 const activePtys = new Map<string, IPty>()
 
@@ -18,12 +21,36 @@ let cachedShell: string | null = null
 function getShell(): string {
   if (cachedShell) return cachedShell
   if (platform() === "win32") {
-    try {
-      require("child_process").execSync("pwsh --version", { stdio: "ignore" })
-      cachedShell = "pwsh.exe"
-    } catch {
-      cachedShell = "powershell.exe"
+    // Git Bash：POSIX 兼容，ConPTY 正常，子进程 stdin 是真 TTY
+    const candidates = [
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+      // per-user 安装路径
+      join(homedir(), "AppData", "Local", "Programs", "Git", "bin", "bash.exe"),
+    ]
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        cachedShell = p
+        return cachedShell
+      }
     }
+    // 兜底：where.exe 查找，过滤 System32\bash.exe（WSL 启动器）
+    try {
+      const out = execSync("where bash.exe", {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+      const found = out.trim().split(/\r?\n/).find(
+        (l) => !l.toLowerCase().includes("system32")
+      )
+      if (found) {
+        cachedShell = found
+        return cachedShell
+      }
+    } catch {}
+    throw new Error(
+      "Git Bash not found. Please install Git for Windows: https://git-scm.com/download/win"
+    )
   } else {
     cachedShell = process.env.SHELL || "/bin/zsh"
   }
@@ -78,23 +105,35 @@ function send(msg: Record<string, unknown>): void {
 
 function handleCreate(msg: CreateMsg): void {
   try {
-  const isWin = platform() === "win32"
-  const escapeArg = (arg: string): string => {
-    if (isWin) {
-      return `'${arg.replace(/'/g, "''")}'`
+    const shell = getShell()
+    // Git Bash (Windows) 与 Unix shell 均为 POSIX 兼容，统一使用单引号转义
+    const escapeArg = (arg: string): string => `'${arg.replace(/'/g, "'\\''")}'`
+
+    const isJsFile = msg.claudePath.endsWith(".js")
+    const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
+
+    let claudeCmd: string
+    if (isJsFile) {
+      claudeCmd = [escapeArg(msg.electronPath), escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
+      env.ELECTRON_RUN_AS_NODE = "1"
+    } else {
+      claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
     }
-    return `'${arg.replace(/'/g, "'\\''")}'`
-  }
 
-  // 构建 claude 启动命令和环境变量
-  const isJsFile = msg.claudePath.endsWith(".js")
-  const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
+    // Claude Code 退出后清除敏感变量，再 exec 回交互式 shell
+    const varsToUnset: string[] = []
+    if (msg.extraEnv) {
+      varsToUnset.push(...Object.keys(msg.extraEnv))
+    }
+    if (isJsFile) {
+      varsToUnset.push("ELECTRON_RUN_AS_NODE")
+    }
 
-  // Windows + .js 文件：直接用 ptySpawn 启动 electron+cli.js，不走 PowerShell 包装
-  // 原因：PowerShell -Command 模式下子进程的 stdin 不是 TTY，Claude Code 会误判为 --print 模式
-  if (isJsFile && isWin) {
-    env.ELECTRON_RUN_AS_NODE = "1"
-    const pty = ptySpawn(msg.electronPath, [msg.claudePath, ...msg.args], {
+    const shellCmd = varsToUnset.length > 0
+      ? claudeCmd + ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}; exec ${escapeArg(shell)} -l`
+      : claudeCmd + ` ; exec ${escapeArg(shell)} -l`
+
+    const pty = ptySpawn(shell, ["-c", shellCmd], {
       name: "xterm-256color",
       cols: msg.cols,
       rows: msg.rows,
@@ -124,74 +163,6 @@ function handleCreate(msg: CreateMsg): void {
     })
 
     send({ type: "created", id: msg.id })
-    return
-  }
-
-  const shell = getShell()
-  let claudeCmd: string
-
-  if (isJsFile) {
-    claudeCmd = `${escapeArg(msg.electronPath)} ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
-    env.ELECTRON_RUN_AS_NODE = "1"
-  } else {
-    if (isWin) {
-      claudeCmd = `& ${escapeArg(msg.claudePath)} ${msg.args.map(escapeArg).join(" ")}`
-    } else {
-      claudeCmd = [escapeArg(msg.claudePath), ...msg.args.map(escapeArg)].join(" ")
-    }
-  }
-
-  // 用 shell -c 直接执行命令（不回显），Claude Code 退出后清除敏感变量再回到交互式 shell
-  const varsToUnset: string[] = []
-  if (msg.extraEnv) {
-    varsToUnset.push(...Object.keys(msg.extraEnv))
-  }
-  if (isJsFile) {
-    varsToUnset.push("ELECTRON_RUN_AS_NODE")
-  }
-
-  const shellArgs = isWin
-    ? ["-NoExit", "-Command", varsToUnset.length > 0
-        ? `${claudeCmd}; ${varsToUnset.map((v) => `Remove-Item Env:\\${v} -ErrorAction SilentlyContinue`).join("; ")}`
-        : claudeCmd]
-    : ["-c", varsToUnset.length > 0
-        ? claudeCmd + ` ; ${varsToUnset.map((v) => `unset ${escapeArg(v)}`).join("; ")}; exec ${shell}`
-        : claudeCmd + ` ; exec ${shell}`]
-
-  const pty = ptySpawn(shell, shellArgs, {
-    name: "xterm-256color",
-    cols: msg.cols,
-    rows: msg.rows,
-    cwd: msg.workDir || homedir() || process.cwd(),
-    env
-  })
-
-  activePtys.set(msg.id, pty)
-
-  pendingBytes.set(msg.id, 0)
-  paused.set(msg.id, false)
-
-  pty.onData((data) => {
-
-    const current = (pendingBytes.get(msg.id) || 0) + Buffer.byteLength(data)
-    pendingBytes.set(msg.id, current)
-
-    if (current > HIGH_WATER_MARK && !paused.get(msg.id)) {
-      pty.pause()
-      paused.set(msg.id, true)
-    }
-
-    send({ type: "data", id: msg.id, data })
-  })
-
-  pty.onExit(({ exitCode }) => {
-    send({ type: "exit", id: msg.id, exitCode })
-    activePtys.delete(msg.id)
-    pendingBytes.delete(msg.id)
-    paused.delete(msg.id)
-  })
-
-  send({ type: "created", id: msg.id })
   } catch (err) {
     send({ type: "error", id: msg.id, error: err instanceof Error ? err.message : String(err) })
   }
