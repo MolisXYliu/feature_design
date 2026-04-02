@@ -59,7 +59,7 @@ function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
   return { xterm, fitAddon }
 }
 
-export function ClaudeCodePanel(): React.JSX.Element {
+export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const sessionsRef = useRef<Map<string, Session>>(new Map())
   const [sessionIds, setSessionIds] = useState<string[]>([])
@@ -71,7 +71,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const [mountError, setMountError] = useState<string | null>(null)
 
   // 加载模型列表（仅打包环境）
-  useEffect(() => {
+  const refreshModels = useCallback((resetSelection = false) => {
     if (!isPackaged) return
     window.api.models.getCustomConfigs().then((configs) => {
       const list = configs.map((c) => ({
@@ -80,9 +80,22 @@ export function ClaudeCodePanel(): React.JSX.Element {
         model: c.model
       }))
       setModels(list)
-      if (list.length > 0) setSelectedModelId(list[0].id)
+      if (list.length === 0) {
+        setSelectedModelId("")
+      } else if (resetSelection || !selectedModelId || !list.some((m) => m.id === selectedModelId)) {
+        setSelectedModelId(list[0].id)
+      }
     }).catch(console.error)
-  }, [])
+  }, [selectedModelId])
+
+  useEffect(() => {
+    refreshModels(true)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 切到 Claude Code 页面时刷新模型列表
+  useEffect(() => {
+    if (visible) refreshModels()
+  }, [visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const getSession = useCallback((id: string) => sessionsRef.current.get(id), [])
   const pendingResizeRef = useRef(false)

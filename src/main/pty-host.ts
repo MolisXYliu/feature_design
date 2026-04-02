@@ -38,7 +38,26 @@ function getShell(): string {
       }
     }
 
-    // 2. 从注册表查找（覆盖任意安装路径，但需要 fork 子进程）
+    // 2. where git 推导 bash 路径（git.exe 在 PATH 中的概率比 bash.exe 高）
+    try {
+      const gitOut = execSync("where.exe git", {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000
+      })
+      const gitExe = gitOut.trim().split(/\r?\n/).find(
+        (l) => !l.toLowerCase().includes("system32")
+      )
+      if (gitExe) {
+        const derivedBash = join(gitExe, "..", "..", "bin", "bash.exe")
+        if (existsSync(derivedBash)) {
+          cachedShell = derivedBash
+          return cachedShell
+        }
+      }
+    } catch {}
+
+    // 3. 注册表兜底（覆盖任意安装路径，git 不在 PATH 时仍可定位）
     const regKeys = [
       "HKLM\\SOFTWARE\\GitForWindows",
       "HKCU\\SOFTWARE\\GitForWindows"
@@ -61,22 +80,6 @@ function getShell(): string {
         }
       } catch { /* key not found */ }
     }
-
-    // 3. 兜底：where.exe 查找，过滤 System32\bash.exe（WSL 启动器）
-    try {
-      const out = execSync("where bash.exe", {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 3000
-      })
-      const found = out.trim().split(/\r?\n/).find(
-        (l) => !l.toLowerCase().includes("system32")
-      )
-      if (found) {
-        cachedShell = found
-        return cachedShell
-      }
-    } catch {}
     throw new Error(
       "Git Bash not found. Please install Git for Windows: https://git-scm.com/download/win"
     )
