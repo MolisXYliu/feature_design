@@ -2,6 +2,10 @@
   "name": "CMBDevClaw",
   "version": "0.1.12",
   "description": "CMBDevClaw description",
+  "author": {
+    "name": "CMBDevClaw",
+    "email": "dev@cmbdevclaw.com"
+  },
   "main": "./out/main/index.js",
   "files": [
     "out/",
@@ -43,7 +47,14 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
-    "server:cache": "cd D:\\my-projects\\CmbCowork\\openCode && http-server -p 4000"
+    "server:cache": "node scripts/server-cache.js",
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "env:filter:setup": "node scripts/setup-env-filter.mjs",
+    "env:encrypt": "node scripts/env-crypt.mjs encrypt-file .env",
+    "env:decrypt": "node scripts/env-crypt.mjs decrypt-file .env",
+    "env:encrypt:quick": "git add --renormalize .env && git show :.env | head -n 1",
+    "env:decrypt:quick": "rm -f .env && git checkout -- .env",
+    "env:filter:disable": "git config --local --unset filter.envcrypt.clean; git config --local --unset filter.envcrypt.smudge; git config --local --unset filter.envcrypt.required"
   },
   "build": {
     "appId": "com.cmbdevclaw.com",
@@ -55,6 +66,12 @@
       "out/",
       "node_modules/",
       "package.json"
+    ],
+    "asarUnpack": [
+      "out/main/pty-host.js",
+      "node_modules/.bin/claude*",
+      "node_modules/node-pty/**",
+      "node_modules/@anthropic-ai/claude-code/**"
     ],
     "mac": {
       "target": "dmg"
@@ -72,6 +89,7 @@
     "electronVersion": "39.8.0"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.86",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/rajdhani": "^5.2.7",
     "@langchain/anthropic": "^1.3.21",
@@ -96,6 +114,9 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
     "adm-zip": "^0.5.16",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -108,6 +129,7 @@
     "lucide-react": "^0.469.0",
     "mammoth": "1.12.0",
     "micromatch": "^4.0.8",
+    "node-pty": "^1.1.0",
     "playwright": "^1.58.2",
     "react-diff-viewer-continued": "^4.1.2",
     "react-markdown": "^10.1.0",

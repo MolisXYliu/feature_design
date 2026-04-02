@@ -316,6 +316,16 @@ interface CustomAPI {
     }>
     onChanged: (callback: () => void) => () => void
   }
+  terminal: {
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }) => Promise<string>
+    write: (id: string, data: string) => void
+    resize: (id: string, cols: number, rows: number) => void
+    dispose: (id: string) => Promise<void>
+    selectDir: () => Promise<string | null>
+    ack: (id: string, bytes: number) => void
+    onData: (id: string, callback: (data: string, bytes: number) => void) => () => void
+    onExit: (id: string, callback: (code: number) => void) => () => void
+  }
   keepAwake: {
     get: () => Promise<boolean>
     set: (enabled: boolean) => Promise<void>

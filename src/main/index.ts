@@ -74,9 +74,10 @@ import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
+import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
-import { S3TraceReporter } from "./agent/trace/s3-reporter"
+import { CloudTraceReporter } from "./agent/trace/cloud-reporter"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -87,6 +88,7 @@ import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "
 import { runStartupSelfCheck } from "./updater/rollback"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
 import  os from "os";
+import { getLocalIP } from "./net-utils"
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
@@ -134,25 +136,7 @@ function getDevMacDockIconPath(): string | undefined {
   return getBuildIconPath("icon.png") ?? getBuildIconPath("icon.ico")
 }
 
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  let localIP = '';
-
-  // 遍历所有网卡
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      // 过滤掉 IPv6、回环地址（127.0.0.1）、内部地址
-      if (iface.family === 'IPv4' && !iface.internal) {
-        localIP = iface.address;
-        // 如果你有多个网卡（比如同时连WiFi和网线），可以根据需求选择第一个/指定网卡的IP
-        break;
-      }
-    }
-    if (localIP) break;
-  }
-
-  return localIP || '127.0.0.1';
-}
+// getLocalIP moved to ./net-utils — imported above
 
 function createWindow(): void {
   const devWindowIcon = process.platform === "win32" && isDev ? getDevWindowsIconPath() : undefined
@@ -296,11 +280,11 @@ if (!gotTheLock) {
       })
     }
 
-    // Register S3 trace reporter if API base URL is configured
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined
-    if (apiBaseUrl) {
-      setTraceReporter(new S3TraceReporter(apiBaseUrl))
-      console.log("[Main] S3TraceReporter registered, uploading traces to:", apiBaseUrl)
+    // Register cloud trace reporter if trace base URL is configured
+    const traceBaseUrl = import.meta.env.VITE_API_TRACE_BASE_URL as string | undefined
+    if (traceBaseUrl) {
+      setTraceReporter(new CloudTraceReporter(traceBaseUrl))
+      console.log("[Main] CloudTraceReporter registered, uploading traces to:", traceBaseUrl)
     }
 
     // Initialize database
@@ -321,6 +305,7 @@ if (!gotTheLock) {
     registerOptimizerHandlers(ipcMain)
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
+    registerTerminalHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
     registerUpdaterHandlers()
 
@@ -434,6 +419,7 @@ if (!gotTheLock) {
 
   app.on("will-quit", () => {
     applyKeepAwake(false)
+    disposeAllTerminals()
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()

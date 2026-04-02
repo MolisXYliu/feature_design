@@ -78,11 +78,14 @@ export default defineConfig({
     // Bundle all dependencies into the main process
     build: {
       lib: {
-        entry: "src/main/index.ts",
+        entry: {
+          index: "src/main/index.ts",
+          "pty-host": "src/main/pty-host.ts"
+        },
         formats: ["cjs"]
       },
       rollupOptions: {
-        external: ["electron"],
+        external: ["electron", "node-pty"],
         plugins: [copyResources()]
       }
     }

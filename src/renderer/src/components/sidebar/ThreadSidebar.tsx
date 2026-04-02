@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio, Terminal } from "lucide-react"
 import type { ChatXRobotConfig } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -191,7 +191,9 @@ export function ThreadSidebar(): React.JSX.Element {
     showCustomizeView,
     setShowCustomizeView,
     showKanbanView,
-    setShowKanbanView
+    setShowKanbanView,
+    showClaudeCodeView,
+    setShowClaudeCodeView
   } = useAppStore()
 
   const { cleanupThread } = useThreadContext()
@@ -372,6 +374,20 @@ export function ThreadSidebar(): React.JSX.Element {
             <LayoutDashboard className="size-3" />
           </div>
           <span className="text-muted-foreground">看板视图</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full justify-start gap-2 text-sm font-semibold",
+            showClaudeCodeView && "bg-muted"
+          )}
+          onClick={() => setShowClaudeCodeView(!showClaudeCodeView)}
+        >
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <Terminal className="size-3" />
+          </div>
+          <span className="text-muted-foreground">Claude Code</span>
         </Button>
         {robots.length > 0 && (
           <div className="relative" ref={robotPickerRef}>

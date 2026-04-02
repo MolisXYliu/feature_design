@@ -8,6 +8,7 @@ out
 release
 resources/bin/win32/codex.exe
 .idea/
+src/renderer/.vite/
 .claude/
 .env
 .playwright-browsers/

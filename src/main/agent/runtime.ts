@@ -674,6 +674,8 @@ function getModelInstance(
   return new ChatOpenAI({
     model: resolvedModel,
     apiKey,
+    maxRetries: 1,
+    timeout: 60_000,
     configuration: {
       baseURL: customConfig.baseUrl
     }
@@ -1030,10 +1032,11 @@ The workspace root is: ${workspacePath}`
       const originalFunc = t.func
       t.func = async (...args: unknown[]) => {
         try {
-          return await originalFunc(...args)
+          return await originalFunc.apply(t, args)
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e)
-          console.warn(`[Runtime] MCP tool "${t.name}" error (non-fatal):`, msg)
+          const level = e instanceof TypeError || e instanceof ReferenceError ? "error" : "warn"
+          console[level](`[Runtime] MCP tool "${t.name}" error (non-fatal):`, msg)
           // MCP tools use responseFormat: "content_and_artifact", must return [content, artifact]
           return [`MCP tool error: ${msg}`, []]
         }
@@ -1067,12 +1070,35 @@ The workspace root is: ${workspacePath}`
 
   extraTools.push(createPlaywrightTool(workspacePath))
 
+  // Wrap extra tools so that errors are returned as strings instead of throwing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function wrapToolErrors(tools: any[]): void {
+    for (const t of tools) {
+      if (typeof t.func === "function") {
+        const originalFunc = t.func
+        t.func = async (...args: unknown[]) => {
+          try {
+            return await originalFunc.apply(t, args)
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            const level = e instanceof TypeError || e instanceof ReferenceError ? "error" : "warn"
+            console[level](`[Runtime] Tool "${t.name}" error (non-fatal):`, msg)
+            return msg
+          }
+        }
+      }
+    }
+  }
+  wrapToolErrors(extraTools)
+  wrapToolErrors(memoryTools as any[])
+
   // Add tool search tools if there are lazy-loaded MCP tools
   const toolSearchTools = registry.getToolCount() > 0 ? createToolSearchTools(registry) : []
   if (toolSearchTools.length > 0) {
     console.log("[Runtime] Added tool search tools for lazy MCP tools:", registry.getToolCount())
     // Add lazy MCP system prompt so LLM knows how to use search_tool
     systemPrompt += LAZY_MCP_SYSTEM_PROMPT
+    wrapToolErrors(toolSearchTools as any[])
   }
 
   const triggerTokens = Math.floor(maxTokens * 0.75)

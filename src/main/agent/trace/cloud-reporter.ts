@@ -1,16 +1,13 @@
 /**
- * S3TraceReporter
+ * CloudTraceReporter
  *
- * Uploads completed AgentTrace records to the remote S3-backed endpoint
- * (`POST /api/trajectories/threads/upload`) after each agent run.
+ * Uploads completed AgentTrace records to the remote cloud endpoint
+ * (`POST /api/traces/upload`) after each agent run.
  *
  * uniqueId format: `{YYYYMMDD}-{traceId}`
  *   - Date part (local timezone) allows cloud batch jobs to scan by day:
  *       list all unique_ids starting with "20260323-" → one day's traces
  *   - traceId part (UUID v4) ensures global uniqueness within a day
- *
- * S3 path produced by the server:
- *   threads/{YYYYMMDD}-{traceId}/trace-{traceId}.json
  *
  * Failures are logged as warnings and never re-thrown — upload errors
  * must not interrupt the agent's main execution flow.
@@ -57,10 +54,10 @@ function formatLocalDate(isoTimestamp: string): string | null {
 }
 
 // ─────────────────────────────────────────────────────────
-// S3TraceReporter
+// CloudTraceReporter
 // ─────────────────────────────────────────────────────────
 
-export class S3TraceReporter implements ITraceReporter {
+export class CloudTraceReporter implements ITraceReporter {
   private readonly baseUrl: string
 
   constructor(baseUrl: string) {
@@ -75,7 +72,7 @@ export class S3TraceReporter implements ITraceReporter {
     const datePart = formatLocalDate(trace.startedAt)
     if (!datePart) {
       console.warn(
-        `[S3Reporter] Skipping upload for trace ${trace.traceId}: ` +
+        `[CloudReporter] Skipping upload for trace ${trace.traceId}: ` +
         `invalid startedAt value "${trace.startedAt}"`
       )
       return
@@ -108,7 +105,7 @@ export class S3TraceReporter implements ITraceReporter {
       })
 
       const result = await Promise.race<Response | FetchTimeout>([
-        fetch(`${this.baseUrl}/api/trajectories/threads/upload`, {
+        fetch(`${this.baseUrl}/api/traces/upload`, {
           method: "POST",
           body:   formData
         }),
@@ -118,7 +115,7 @@ export class S3TraceReporter implements ITraceReporter {
       // Narrow away the timeout sentinel before accessing Response members
       if (result === FETCH_TIMEOUT || !("ok" in result)) {
         console.warn(
-          `[S3Reporter] Upload timed out for trace ${trace.traceId} ` +
+          `[CloudReporter] Upload timed out for trace ${trace.traceId} ` +
           `after ${REPORT_TIMEOUT_MS}ms`
         )
         return
@@ -126,15 +123,15 @@ export class S3TraceReporter implements ITraceReporter {
 
       if (!result.ok) {
         console.warn(
-          `[S3Reporter] Upload failed for trace ${trace.traceId}: ` +
+          `[CloudReporter] Upload failed for trace ${trace.traceId}: ` +
           `${result.status} ${result.statusText}`
         )
         return
       }
 
-      console.log(`[S3Reporter] Uploaded trace ${trace.traceId} (unique_id: ${uniqueId})`)
+      console.log(`[CloudReporter] Uploaded trace ${trace.traceId} (unique_id: ${uniqueId})`)
     } catch (e) {
-      console.warn(`[S3Reporter] Upload error for trace ${trace.traceId}:`, e)
+      console.warn(`[CloudReporter] Upload error for trace ${trace.traceId}:`, e)
     } finally {
       // Always clear the timer to prevent a dangling callback after the
       // report() promise has already settled.

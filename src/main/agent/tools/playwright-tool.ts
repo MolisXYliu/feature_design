@@ -14,7 +14,6 @@ const ACTIONS = [
   "press",
   "wait_for_selector",
   "text_content",
-  "screenshot",
   "rag_list",
   "rag_upsert",
   "rag_delete",
@@ -46,7 +45,7 @@ const DEFAULT_BROWSER_RAG_SEED: Record<string, string> = {
 
 const playwrightSchema = z.object({
   action: z.enum(ACTIONS).describe(
-    "Browser action: launch/goto/click/fill/type/press/wait_for_selector/text_content/screenshot/rag_list/rag_upsert/rag_delete/rag_resolve/set_active/list_sessions/close/close_all"
+    "Browser action: launch/goto/click/fill/type/press/wait_for_selector/text_content/rag_list/rag_upsert/rag_delete/rag_resolve/set_active/list_sessions/close/close_all"
   ),
   sessionId: z.string().optional().describe(
     "Playwright session ID. Optional: if omitted, uses active session."
@@ -73,10 +72,6 @@ const playwrightSchema = z.object({
   ),
   viewportWidth: z.number().int().min(200).max(8000).optional().describe("Browser viewport width."),
   viewportHeight: z.number().int().min(200).max(8000).optional().describe("Browser viewport height."),
-  screenshotPath: z.string().optional().describe(
-    "Screenshot output path. Relative paths are resolved from workspace root."
-  ),
-  fullPage: z.boolean().optional().describe("Whether screenshot captures full page. Defaults to true.")
 })
 
 function resolveSession(sessionId?: string): { id: string; session: PlaywrightSession } | null {
@@ -94,19 +89,6 @@ function buildError(message: string): string {
 
 function touchSession(session: PlaywrightSession): void {
   session.lastUsedAt = Date.now()
-}
-
-function getDefaultScreenshotPath(workspacePath: string): string {
-  const dir = path.join(workspacePath, ".cmbdevclaw", "playwright")
-  mkdirSync(dir, { recursive: true })
-  return path.join(dir, `screenshot-${Date.now()}.png`)
-}
-
-function resolveOutputPath(workspacePath: string, screenshotPath?: string): string {
-  if (!screenshotPath) return getDefaultScreenshotPath(workspacePath)
-  return path.isAbsolute(screenshotPath)
-    ? screenshotPath
-    : path.resolve(workspacePath, screenshotPath)
 }
 
 function resolveExecutablePath(workspacePath: string, executablePath?: string): string | undefined {
@@ -247,6 +229,10 @@ export function createPlaywrightTool(workspacePath: string) {
       const waitUntil = input.waitUntil ?? "domcontentloaded"
 
       try {
+        // Defense-in-depth: block screenshot even if a caller bypasses schema validation.
+        if ((input as { action?: string }).action === "screenshot") {
+          return buildError("Playwright screenshot is disabled by policy.")
+        }
         switch (input.action) {
           case "launch": {
             if (existsSync(localBrowsersPath)) {
@@ -441,23 +427,6 @@ export function createPlaywrightTool(workspacePath: string) {
             })
           }
 
-          case "screenshot": {
-            const target = resolveSession(input.sessionId)
-            if (!target) return buildError("No active session. Call action=launch first.")
-            const outPath = resolveOutputPath(workspacePath, input.screenshotPath)
-            mkdirSync(path.dirname(outPath), { recursive: true })
-            await target.session.page.screenshot({
-              path: outPath,
-              fullPage: input.fullPage ?? true
-            })
-            touchSession(target.session)
-            return JSON.stringify({
-              success: true,
-              sessionId: target.id,
-              path: outPath
-            })
-          }
-
           case "rag_list": {
             const ragFilePath = ensureBrowserRagFile(workspacePath)
             const ragMap = readBrowserRagMap(workspacePath)
@@ -587,7 +556,7 @@ export function createPlaywrightTool(workspacePath: string) {
     {
       name: "browser_playwright",
       description:
-        "Open and automate a real browser with Playwright. Supports launching browser sessions, navigation, clicking, typing, key presses, waiting for selectors, reading text content, screenshots, and URL RAG keyword mapping (e.g. natural language query -> URL).",
+        "Open and automate a real browser with Playwright. Supports launching browser sessions, navigation, clicking, typing, key presses, waiting for selectors, reading text content, and URL RAG keyword mapping (e.g. natural language query -> URL).",
       schema: playwrightSchema
     }
   )
