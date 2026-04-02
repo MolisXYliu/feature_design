@@ -47,7 +47,7 @@ function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
       blue: "#1565c0",
       magenta: "#7b1fa2",
       cyan: "#00838f",
-      white: "#faf9f6"
+      white: "#b8b4ac"
     },
     cursorBlink: true,
     scrollback: 5000,
