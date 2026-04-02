@@ -802,6 +802,7 @@ export function RightPanel({
                 workspacePath={threadState?.workspacePath ?? null}
                 threadId={currentThreadId ?? ""}
                 reloadToken={previewReloadToken}
+                onReload={() => setPreviewReloadToken((v) => v + 1)}
                 onFullscreenChange={onPreviewFullscreenChange}
                 onHidePreview={onRequestWorkMode}
               />
@@ -1323,6 +1324,7 @@ function ResourcePreview({
   workspacePath,
   threadId,
   reloadToken,
+  onReload,
   onFullscreenChange,
   onHidePreview
 }: {
@@ -1331,6 +1333,7 @@ function ResourcePreview({
   workspacePath: string | null
   threadId: string
   reloadToken: number
+  onReload?: () => void
   onFullscreenChange?: (isFullscreen: boolean) => void
   onHidePreview?: () => void
 }): React.JSX.Element {
@@ -1395,6 +1398,14 @@ function ResourcePreview({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={onReload}
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="刷新预览"
+            aria-label="刷新预览"
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
           <button
             onClick={toggleFullscreen}
             className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
