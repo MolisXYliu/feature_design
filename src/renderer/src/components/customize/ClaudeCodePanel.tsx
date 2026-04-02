@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
-import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2, TriangleAlert } from "lucide-react"
+import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2, TriangleAlert, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Terminal } from "@xterm/xterm"
@@ -658,17 +658,20 @@ export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.E
             </div>
           </div>
           {isPackaged && models.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">模型：</span>
-              <select
-                value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
-                className="h-8 px-2 rounded-md border border-border bg-background text-sm"
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
+            <div className="flex items-center gap-2.5">
+              <span className="text-sm text-muted-foreground/70">模型配置</span>
+              <div className="relative inline-flex items-center">
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  className="appearance-none h-10 pl-4 pr-9 rounded-xl border border-border/40 bg-muted/30 text-sm text-foreground/80 shadow-[0_1px_3px_rgba(0,0,0,0.04)] backdrop-blur-sm hover:bg-muted/50 hover:border-border/60 hover:shadow-[0_2px_8px_rgba(0,0,0,0.06)] active:scale-[0.97] focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-border/60 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}{m.model !== m.name ? `  ·  ${m.model}` : ""}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 size-3.5 text-muted-foreground/50" />
+              </div>
             </div>
           )}
           <Button onClick={() => { setMountError(null); createSessionWithDir() }} className="gap-2" disabled={creating}>
