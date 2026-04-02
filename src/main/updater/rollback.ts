@@ -1,8 +1,13 @@
 import { app } from "electron"
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs"
-import { spawn } from "child_process"
+import { existsSync, readFileSync, unlinkSync } from "fs"
 import { join } from "path"
-import { getBackupPath, getMarkerPath, generateRollbackBat } from "./installer"
+import {
+  getBackupPath,
+  getMarkerPath,
+  generateRollbackPs1,
+  launchDetachedPowerShellScript,
+  writePowerShellScript
+} from "./installer"
 import { getUpdatesDir, downloadUpdate } from "./downloader"
 import { fetchLatestJson } from "./checker"
 
@@ -18,15 +23,17 @@ interface UpdateMarker {
  *
  * If update-marker.json exists, it means the app just updated.
  * We verify the version is correct. If not, we auto-rollback.
- *
- * Note: Full self-check (window load within 15s) is handled separately
- * via a timeout after createWindow().
  */
-export async function runStartupSelfCheck(): Promise<void> {
+export interface StartupCheckResult {
+  updatedFrom?: string
+  updatedTo?: string
+}
+
+export async function runStartupSelfCheck(): Promise<StartupCheckResult> {
   const markerPath = getMarkerPath()
 
   if (!existsSync(markerPath)) {
-    return // Not a post-update boot, nothing to do
+    return {} // Not a post-update boot, nothing to do
   }
 
   console.log("[Updater] Post-update boot detected, running self-check...")
@@ -37,18 +44,15 @@ export async function runStartupSelfCheck(): Promise<void> {
   } catch {
     console.warn("[Updater] Failed to parse update-marker.json, removing it")
     unlinkSync(markerPath)
-    return
+    return {}
   }
 
   const currentVersion = app.getVersion()
 
-  // Check 1: version matches expected
   if (currentVersion === marker.toVersion) {
     console.log(`[Updater] Self-check passed: version ${currentVersion} matches expected ${marker.toVersion}`)
-    // Keep marker until window load check passes (handled in index.ts)
-    // For now, just delete it - the basic check passed
     unlinkSync(markerPath)
-    return
+    return { updatedFrom: marker.fromVersion, updatedTo: marker.toVersion }
   }
 
   // Version mismatch - the update didn't take effect, auto-rollback
@@ -60,29 +64,24 @@ export async function runStartupSelfCheck(): Promise<void> {
   if (!existsSync(backupPath)) {
     console.error("[Updater] No backup found at", backupPath, "- cannot rollback")
     unlinkSync(markerPath)
-    return
+    return {}
   }
 
-  // Use BAT script to rollback (same file-lock workaround)
-  executeRollbackViaBat(backupPath)
+  executeRollbackViaPs1(backupPath)
+  return {}
 }
 
 /**
- * Execute a rollback by spawning a BAT script and quitting.
+ * Execute a rollback by spawning a PowerShell script and quitting.
  */
-function executeRollbackViaBat(backupAsarPath: string): void {
-  const batContent = generateRollbackBat(backupAsarPath)
-  const batPath = join(getUpdatesDir(), "rollback.bat")
+function executeRollbackViaPs1(backupAsarPath: string): void {
+  const ps1Content = generateRollbackPs1(backupAsarPath)
+  const ps1Path = join(getUpdatesDir(), "rollback.ps1")
 
-  writeFileSync(batPath, batContent, "utf-8")
-  console.log("[Updater] Generated rollback.bat, executing...")
+  writePowerShellScript(ps1Path, ps1Content)
+  console.log("[Updater] Generated rollback.ps1, executing...")
 
-  const child = spawn("cmd", ["/c", batPath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
-  })
-  child.unref()
+  launchDetachedPowerShellScript(ps1Path)
 
   app.quit()
 }
@@ -94,10 +93,9 @@ function executeRollbackViaBat(backupAsarPath: string): void {
 export async function rollbackToPrevious(baseUrl: string): Promise<void> {
   const backupPath = getBackupPath()
 
-  // Try local backup first
   if (existsSync(backupPath)) {
     console.log("[Updater] Rolling back using local backup:", backupPath)
-    executeRollbackViaBat(backupPath)
+    executeRollbackViaPs1(backupPath)
     return
   }
 
@@ -114,10 +112,10 @@ export async function rollbackToPrevious(baseUrl: string): Promise<void> {
     baseUrl,
     latest.rollback.file,
     latest.rollback.sha256,
-    0 // size unknown for rollback, downloader handles it
+    0
   )
 
-  executeRollbackViaBat(downloadedPath)
+  executeRollbackViaPs1(downloadedPath)
 }
 
 /**

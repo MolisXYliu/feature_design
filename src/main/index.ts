@@ -399,7 +399,10 @@ if (!gotTheLock) {
     createWindow()
 
     // Run post-update self-check before anything else
-    await runStartupSelfCheck()
+    const selfCheckResult = await runStartupSelfCheck()
+
+    // Expose result to renderer — renderer polls this on mount to show update toast
+    ipcMain.handle("update:get-startup-result", () => selfCheckResult)
 
     // Start scheduled task scheduler and heartbeat service
     startScheduler()

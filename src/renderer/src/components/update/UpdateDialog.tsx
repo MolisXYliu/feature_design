@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { toast } from "sonner"
 import {
   Dialog,
   DialogContent,
@@ -9,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 
-type UpdateStage = "idle" | "available" | "downloading" | "downloaded" | "error"
+type UpdateStage = "idle" | "available" | "downloading" | "downloaded" | "installing" | "error"
 
 interface UpdateInfo {
   version: string
@@ -24,11 +25,29 @@ interface DownloadProgress {
   transferred: number
   total: number
   speed: string
+  phase: "downloading" | "verifying" | "extracting"
+  message: string
 }
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function getProgressTitle(progress: DownloadProgress | null, version?: string): string {
+  if (progress?.phase === "verifying") {
+    return version ? `正在校验 v${version}` : "正在校验更新..."
+  }
+  if (progress?.phase === "extracting") {
+    return version ? `正在解压 v${version}` : "正在解压更新..."
+  }
+  return version ? `正在下载 v${version}` : "正在下载更新..."
+}
+
+function getProgressDescription(progress: DownloadProgress | null): string {
+  if (progress?.phase === "verifying") return "下载已完成，正在校验文件完整性"
+  if (progress?.phase === "extracting") return "下载已完成，正在解压更新文件"
+  return "下载完成后将提示您重启应用"
 }
 
 export function UpdateDialog({
@@ -44,6 +63,18 @@ export function UpdateDialog({
   const [errorMsg, setErrorMsg] = useState("")
   const [checking, setChecking] = useState(false)
 
+  // Show post-update success toast once on first mount
+  const startupChecked = useRef(false)
+  useEffect(() => {
+    if (startupChecked.current) return
+    startupChecked.current = true
+    window.api.update.getStartupResult().then((r) => {
+      if (r.updatedTo) {
+        toast.success(`已成功更新到 v${r.updatedTo}`, { duration: 5000 })
+      }
+    }).catch(() => { /* ignore */ })
+  }, [])
+
   // Listen for main process push events
   useEffect(() => {
     const api = window.api.update
@@ -54,30 +85,59 @@ export function UpdateDialog({
         setUpdateInfo(s.update)
         setStage("available")
         onOpenChange(true)
+      } else if (s.status === "downloading" && s.update) {
+        // Background download already in progress — only show if dialog is manually opened
+        setUpdateInfo(s.update)
+        setProgress(s.progress)
+        setStage("downloading")
       } else if (s.status === "downloaded" && s.update) {
         setUpdateInfo(s.update)
+        setProgress(null)
         setStage("downloaded")
+        onOpenChange(true)
+      } else if (s.status === "error" && s.update) {
+        setUpdateInfo(s.update)
+        setProgress(null)
+        setErrorMsg(s.errorMessage ?? "更新失败")
+        setStage("error")
         onOpenChange(true)
       }
     }).catch(() => { /* ignore */ })
 
     const removeAvailable = api.onAvailable((info) => {
       setUpdateInfo(info)
-      setStage("available")
-      onOpenChange(true)
+      if ((info as UpdateInfo & { autoDownloading?: boolean }).autoDownloading) {
+        // Background download started automatically — don't interrupt user
+        setStage("downloading")
+      } else {
+        // Manual check — show available dialog
+        setStage("available")
+        onOpenChange(true)
+      }
     })
 
     const removeProgress = api.onProgress((p) => {
       setProgress(p)
     })
 
-    const removeDownloaded = api.onDownloaded(() => {
+    const removeDownloaded = api.onDownloaded((info) => {
+      setUpdateInfo((prev) => prev ? { ...prev, ...info } : {
+        version: info.version,
+        updateType: info.updateType,
+        releaseNotes: info.releaseNotes ?? "",
+        size: info.size ?? 0,
+        mandatory: info.mandatory ?? false
+      })
+      setProgress(null)
       setStage("downloaded")
+      onOpenChange(true) // always pop up when download completes
     })
 
     const removeError = api.onError((err) => {
+      setProgress(null)
       setErrorMsg(err.message)
       setStage("error")
+      onOpenChange(true)
     })
 
     return () => {
@@ -101,7 +161,23 @@ export function UpdateDialog({
           size: result.size,
           mandatory: result.mandatory
         })
-        setStage("available")
+        // Restore the correct stage based on what main process reports
+        const status = (result as { currentStatus?: string }).currentStatus
+        const currentProgress = (result as { currentProgress?: DownloadProgress | null }).currentProgress
+        const currentError = (result as { currentError?: string | null }).currentError
+        if (status === "downloading") {
+          setProgress(currentProgress ?? null)
+          setStage("downloading")
+        } else if (status === "downloaded") {
+          setProgress(null)
+          setStage("downloaded")
+        } else if (status === "error") {
+          setProgress(null)
+          setErrorMsg(currentError ?? "更新失败")
+          setStage("error")
+        } else {
+          setStage("available")
+        }
       } else {
         setUpdateInfo(null)
         setStage("idle")
@@ -115,8 +191,12 @@ export function UpdateDialog({
   }, [])
 
   const handleDownload = useCallback(async () => {
-    setStage("downloading")
-    setProgress(null)
+    setStage((prev) => {
+      // If already downloading in background, don't reset progress
+      if (prev === "downloading") return prev
+      setProgress(null)
+      return "downloading"
+    })
     try {
       await window.api.update.download()
     } catch {
@@ -125,6 +205,9 @@ export function UpdateDialog({
   }, [])
 
   const handleInstall = useCallback(async () => {
+    setStage("installing")
+    // Give renderer time to show the installing state before app quits
+    await new Promise((r) => setTimeout(r, 800))
     try {
       await window.api.update.install()
     } catch (e) {
@@ -141,6 +224,10 @@ export function UpdateDialog({
     onOpenChange(false)
   }, [onOpenChange])
 
+  const handleHideDownloading = useCallback(() => {
+    onOpenChange(false)
+  }, [onOpenChange])
+
   const handleRetry = useCallback(() => {
     setErrorMsg("")
     if (updateInfo) {
@@ -151,20 +238,28 @@ export function UpdateDialog({
     }
   }, [updateInfo, handleCheck])
 
-  // Auto-check when dialog opens from manual trigger
+  // Auto-check when dialog opens manually and nothing is happening
   useEffect(() => {
     if (open && stage === "idle" && !updateInfo) {
       handleCheck()
     }
   }, [open, stage, updateInfo, handleCheck])
 
+  const isMandatory = updateInfo?.mandatory ?? false
+
   return (
     <Dialog open={open} onOpenChange={(v) => {
-      if (!v && updateInfo?.mandatory && stage !== "downloaded") return
+      if (!v && stage === "installing") return
+      if (!v && stage === "downloading") {
+        handleHideDownloading()
+        return
+      }
+      if (!v && isMandatory && stage !== "downloaded") return
       if (!v) handleDismiss()
       else onOpenChange(v)
     }}>
       <DialogContent className="sm:max-w-md">
+
         {/* idle / checking */}
         {stage === "idle" && (
           <>
@@ -185,7 +280,7 @@ export function UpdateDialog({
           </>
         )}
 
-        {/* update available */}
+        {/* update available — only shown for manual check */}
         {stage === "available" && updateInfo && (
           <>
             <DialogHeader>
@@ -193,7 +288,7 @@ export function UpdateDialog({
               <DialogDescription>
                 {updateInfo.updateType === "asar"
                   ? "轻量更新（仅替换业务代码，无需重新安装）"
-                  : "完整更新（需要重新安装）"}
+                  : "完整更新（需要重新安装应用文件）"}
               </DialogDescription>
             </DialogHeader>
 
@@ -204,31 +299,37 @@ export function UpdateDialog({
                   {updateInfo.releaseNotes}
                 </div>
               </div>
-              <div className="text-xs text-muted-foreground">
-                下载大小：约 {formatSize(updateInfo.size)}
-              </div>
+              {updateInfo.size > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  下载大小：约 {formatSize(updateInfo.size)}
+                </div>
+              )}
             </div>
 
             <DialogFooter>
-              {!updateInfo.mandatory && (
+              {!isMandatory && (
                 <Button variant="outline" onClick={handleDismiss}>
                   稍后提醒
                 </Button>
               )}
-              <Button onClick={handleDownload}>立即更新</Button>
+              <Button onClick={handleDownload}>立即下载</Button>
             </DialogFooter>
           </>
         )}
 
-        {/* downloading */}
-        {stage === "downloading" && updateInfo && (
+        {/* downloading — background or manual */}
+        {stage === "downloading" && (
           <>
             <DialogHeader>
-              <DialogTitle>正在下载 v{updateInfo.version}</DialogTitle>
+              <DialogTitle>
+                {getProgressTitle(progress, updateInfo?.version)}
+              </DialogTitle>
+              <DialogDescription>
+                {getProgressDescription(progress)}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-3">
-              {/* progress bar */}
               <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
                 <div
                   className="bg-primary h-full rounded-full transition-all duration-300"
@@ -237,15 +338,27 @@ export function UpdateDialog({
               </div>
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>
-                  {progress
+                  {progress?.phase === "downloading" && progress
                     ? `${formatSize(progress.transferred)} / ${formatSize(progress.total)}`
-                    : "准备下载..."}
+                    : progress?.message ?? "准备下载..."}
                 </span>
                 <span>
-                  {progress ? `${progress.speed}  ${progress.percent}%` : ""}
+                  {progress
+                    ? progress.phase === "downloading"
+                      ? `${progress.speed}  ${progress.percent}%`
+                      : "处理中..."
+                    : ""}
                 </span>
               </div>
             </div>
+
+            {!isMandatory && (
+              <DialogFooter>
+                <Button variant="outline" onClick={handleHideDownloading}>
+                  后台下载
+                </Button>
+              </DialogFooter>
+            )}
           </>
         )}
 
@@ -253,19 +366,34 @@ export function UpdateDialog({
         {stage === "downloaded" && updateInfo && (
           <>
             <DialogHeader>
-              <DialogTitle>v{updateInfo.version} 下载完成</DialogTitle>
+              <DialogTitle>v{updateInfo.version} 已就绪</DialogTitle>
               <DialogDescription>
-                更新已就绪，需要重启应用以完成安装。请先保存当前工作。
+                新版本已下载完成，重启应用即可完成更新。请先保存当前工作。
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              {!updateInfo.mandatory && (
+              {!isMandatory && (
                 <Button variant="outline" onClick={handleDismiss}>
                   稍后重启
                 </Button>
               )}
               <Button onClick={handleInstall}>立即重启</Button>
             </DialogFooter>
+          </>
+        )}
+
+        {/* installing */}
+        {stage === "installing" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>正在安装更新</DialogTitle>
+              <DialogDescription>
+                请稍候，应用即将自动重启...
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center justify-center py-4">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            </div>
           </>
         )}
 
@@ -284,6 +412,7 @@ export function UpdateDialog({
             </DialogFooter>
           </>
         )}
+
       </DialogContent>
     </Dialog>
   )

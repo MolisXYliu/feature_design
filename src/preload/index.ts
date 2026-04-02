@@ -1233,6 +1233,16 @@ const api = {
           releaseNotes: string
           size: number
           mandatory: boolean
+          currentStatus?: string
+          currentProgress?: {
+            percent: number
+            transferred: number
+            total: number
+            speed: string
+            phase: "downloading" | "verifying" | "extracting"
+            message: string
+          } | null
+          currentError?: string | null
         }
     > => ipcRenderer.invoke("update:check"),
     download: (): Promise<{ success: boolean }> => ipcRenderer.invoke("update:download"),
@@ -1241,9 +1251,20 @@ const api = {
     rollback: (): Promise<void> => ipcRenderer.invoke("update:rollback"),
     getStatus: (): Promise<{
       status: string
-      update: { version: string; updateType: string; releaseNotes: string; size: number } | null
+      update: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean } | null
+      progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      } | null
+      errorMessage: string | null
       canRollback: boolean
     }> => ipcRenderer.invoke("update:get-status"),
+    getStartupResult: (): Promise<{ updatedFrom?: string; updatedTo?: string }> =>
+      ipcRenderer.invoke("update:get-startup-result"),
     onAvailable: (
       callback: (info: {
         version: string
@@ -1251,6 +1272,7 @@ const api = {
         releaseNotes: string
         size: number
         mandatory: boolean
+        autoDownloading?: boolean
       }) => void
     ) => {
       const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void =>
@@ -1264,6 +1286,8 @@ const api = {
         transferred: number
         total: number
         speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
       }) => void
     ) => {
       const wrapper = (_event: unknown, progress: Parameters<typeof callback>[0]): void =>
@@ -1271,13 +1295,13 @@ const api = {
       ipcRenderer.on("update:progress", wrapper)
       return () => ipcRenderer.removeListener("update:progress", wrapper)
     },
-    onDownloaded: (callback: (info: { version: string; updateType: string }) => void) => {
+    onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => {
       const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void =>
         callback(info)
       ipcRenderer.on("update:downloaded", wrapper)
       return () => ipcRenderer.removeListener("update:downloaded", wrapper)
     },
-    onError: (callback: (err: { message: string }) => void) => {
+    onError: (callback: (err: { message: string; silent?: boolean }) => void) => {
       const wrapper = (_event: unknown, err: Parameters<typeof callback>[0]): void => callback(err)
       ipcRenderer.on("update:error", wrapper)
       return () => ipcRenderer.removeListener("update:error", wrapper)

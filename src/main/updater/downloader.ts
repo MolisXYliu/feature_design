@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, unlinkSync, createReadStream, existsSync, statSync } from "fs"
+import { createWriteStream, mkdirSync, unlinkSync, createReadStream, statSync } from "fs"
 import { createHash } from "crypto"
 import { createGunzip } from "zlib"
 import { pipeline } from "stream/promises"
@@ -7,11 +7,15 @@ import http from "http"
 import https from "https"
 import { getOpenworkDir } from "../storage"
 
+export type DownloadPhase = "downloading" | "verifying" | "extracting"
+
 export interface DownloadProgress {
   percent: number
   transferred: number
   total: number
   speed: string
+  phase: DownloadPhase
+  message: string
 }
 
 function getUpdatesDir(): string {
@@ -57,11 +61,15 @@ function downloadFile(
           const elapsed = (now - lastTime) / 1000
           const bytesPerSec = (transferred - lastTransferred) / elapsed
           const speedMB = (bytesPerSec / 1024 / 1024).toFixed(1)
+          // Clamp percent to 99 max — 100 is only sent on finish
+          const percent = total > 0 ? Math.min(99, Math.round((transferred / total) * 100)) : 0
           onProgress?.({
-            percent: total > 0 ? Math.round((transferred / total) * 100) : 0,
+            percent,
             transferred,
-            total,
-            speed: `${speedMB} MB/s`
+            total: Math.max(total, transferred), // prevent total < transferred
+            speed: `${speedMB} MB/s`,
+            phase: "downloading",
+            message: "正在下载更新包..."
           })
           lastTime = now
           lastTransferred = transferred
@@ -71,7 +79,14 @@ function downloadFile(
       res.pipe(file)
 
       file.on("finish", () => {
-        onProgress?.({ percent: 100, transferred: total, total, speed: "0 MB/s" })
+        onProgress?.({
+          percent: 100,
+          transferred,
+          total: Math.max(total, transferred),
+          speed: "0 MB/s",
+          phase: "downloading",
+          message: "下载完成，正在准备后续处理..."
+        })
         file.close(() => resolve())
       })
 
@@ -135,6 +150,15 @@ export async function downloadUpdate(
   console.log(`[Updater] Downloading ${baseUrl}/download?file=${fileName}`)
   await downloadFile(baseUrl, fileName, downloadPath, expectedSize, onProgress)
 
+  const downloadedSize = statSync(downloadPath).size
+  onProgress?.({
+    percent: 100,
+    transferred: downloadedSize,
+    total: downloadedSize,
+    speed: "",
+    phase: "verifying",
+    message: "正在校验下载文件..."
+  })
   console.log("[Updater] Verifying SHA256...")
   const actualHash = await sha256File(downloadPath)
   if (actualHash !== expectedSha256) {
@@ -145,6 +169,14 @@ export async function downloadUpdate(
 
   if (isGz) {
     const gzSize = statSync(downloadPath).size
+    onProgress?.({
+      percent: 100,
+      transferred: gzSize,
+      total: gzSize,
+      speed: "",
+      phase: "extracting",
+      message: "正在解压更新文件..."
+    })
     console.log("[Updater] Decompressing... gz size:", gzSize)
     await pipeline(createReadStream(downloadPath), createGunzip(), createWriteStream(finalPath))
     const asarSize = statSync(finalPath).size

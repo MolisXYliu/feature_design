@@ -1,7 +1,7 @@
 import { app } from "electron"
 import { spawn } from "child_process"
 import { writeFileSync } from "fs"
-import { join, dirname } from "path"
+import { basename, join, dirname } from "path"
 import { getUpdatesDir } from "./downloader"
 
 const EXE_NAME = "CMBDevClaw.exe"
@@ -35,16 +35,64 @@ function getMarkerPath(): string {
 }
 
 /**
- * Generate the update.bat script content for ASAR replacement.
- * The BAT script:
+ * Escape values for PowerShell single-quoted string literals.
+ */
+function escapePowerShellLiteral(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+function toPsString(value: string): string {
+  return `'${escapePowerShellLiteral(value)}'`
+}
+
+/**
+ * Windows PowerShell 5.1 treats BOM-less scripts as ANSI.
+ * Prefix with BOM so install paths containing non-ASCII characters are safe.
+ */
+export function writePowerShellScript(ps1Path: string, content: string): void {
+  const normalized = content.startsWith("\n") ? content.slice(1) : content
+  writeFileSync(ps1Path, `\uFEFF${normalized}`, "utf-8")
+}
+
+function writePs1Launcher(ps1Path: string): string {
+  const ps1FileName = basename(ps1Path)
+  const logFileName = `${basename(ps1Path, ".ps1")}.launcher.log`
+  const launcherPath = ps1Path.replace(/\.ps1$/i, ".cmd")
+  const launcherContent = `@echo off\r
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0${ps1FileName}" > "%~dp0${logFileName}" 2>&1\r
+`
+  writeFileSync(launcherPath, launcherContent, "ascii")
+  return launcherPath
+}
+
+/**
+ * Launch the PowerShell installer through a cmd wrapper.
+ * Directly detaching powershell.exe proved unreliable in production, while
+ * the existing detached cmd/bat flow is stable on Windows.
+ */
+export function launchDetachedPowerShellScript(ps1Path: string): void {
+  const launcherPath = writePs1Launcher(ps1Path)
+  const child = spawn("cmd.exe", ["/c", launcherPath], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  })
+  child.on("error", (err) => {
+    console.error("[Updater] Failed to spawn PowerShell launcher:", err)
+  })
+  child.unref()
+}
+
+/**
+ * Generate the update.ps1 script content for ASAR replacement.
  *   1. Waits for the Electron process to exit (up to 30s)
  *   2. Backs up current app.asar → app.asar.bak
- *   3. Copies new app.asar into place
+ *   3. Copies new app.asar into place (retries up to 5 times)
  *   4. Writes update-marker.json for startup self-check
- *   5. Cleans up temp files
+ *   5. Cleans up temp file
  *   6. Restarts the application
  */
-function generateUpdateBat(
+function generateUpdatePs1(
   newAsarPath: string,
   fromVersion: string,
   toVersion: string
@@ -53,134 +101,186 @@ function generateUpdateBat(
   const backupPath = getBackupPath()
   const markerPath = getMarkerPath()
   const exePath = getExePath()
-  const exeName = EXE_NAME
   const exeBaseName = EXE_NAME.replace(".exe", "")
 
-  return `@echo off
-chcp 65001 >nul
-echo [Updater] Waiting for application to exit...
+  return `
+$exeBaseName = ${toPsString(exeBaseName)}
+$appAsarPath = ${toPsString(appAsarPath)}
+$backupPath  = ${toPsString(backupPath)}
+$newAsarPath = ${toPsString(newAsarPath)}
+$markerPath  = ${toPsString(markerPath)}
+$exePath     = ${toPsString(exePath)}
 
-:: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
-if not %ERRORLEVEL%==0 goto TIMEOUT
-goto APP_EXITED
+# Wait for process to exit (up to 30s)
+$n = 0
+while ((Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) -and $n -lt 30) {
+  Start-Sleep -Seconds 1
+  $n++
+}
+if (Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) {
+  exit 1
+}
 
-:TIMEOUT
-echo [Updater] Timeout waiting for app to exit, aborting
-exit /b 1
+# Backup
+if (Test-Path $appAsarPath) {
+  try {
+    Copy-Item -Path $appAsarPath -Destination $backupPath -Force -ErrorAction Stop
+  } catch {
+    exit 1
+  }
+}
 
-:APP_EXITED
-echo [Updater] Application exited, starting update...
+# Replace with retry
+if (-not (Test-Path $newAsarPath)) { exit 1 }
+$retry = 0
+$ok = $false
+while ($retry -lt 5 -and -not $ok) {
+  try {
+    Copy-Item -Path $newAsarPath -Destination $appAsarPath -Force -ErrorAction Stop
+    $ok = $true
+  } catch {
+    $retry++
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not $ok) {
+  if (Test-Path $backupPath) { Copy-Item -Path $backupPath -Destination $appAsarPath -Force -ErrorAction SilentlyContinue }
+  exit 1
+}
 
-:: Step 1: Backup current version
-if not exist "${appAsarPath}" goto SKIP_BACKUP
-copy /Y "${appAsarPath}" "${backupPath}" >nul
-if not %ERRORLEVEL%==0 goto BACKUP_FAILED
-echo [Updater] Backed up current version
-goto DO_REPLACE
+# Write marker
+Set-Content -Path $markerPath -Value '{"fromVersion":"${fromVersion}","toVersion":"${toVersion}"}' -Encoding UTF8
 
-:BACKUP_FAILED
-echo [Updater] Backup failed
-exit /b 1
+# Cleanup
+if (Test-Path $newAsarPath) { Remove-Item -Path $newAsarPath -Force -ErrorAction SilentlyContinue }
 
-:SKIP_BACKUP
-echo [Updater] No existing asar to backup
-
-:DO_REPLACE
-:: Check source file exists
-if not exist "${newAsarPath}" goto SOURCE_NOT_FOUND
-echo [Updater] Source file OK: ${newAsarPath}
-goto DO_COPY
-
-:SOURCE_NOT_FOUND
-echo [Updater] ERROR: source file not found: ${newAsarPath}
-exit /b 1
-
-:DO_COPY
-:: Replace app.asar, retry up to 5 times
-set COPY_RETRY=0
-:COPY_RETRY
-copy /Y "${newAsarPath}" "${appAsarPath}" >nul
-if not %ERRORLEVEL%==0 goto COPY_FAILED
-echo [Updater] Replace successful
-goto WRITE_MARKER
-
-:COPY_FAILED
-set /A COPY_RETRY+=1
-echo [Updater] Copy attempt %COPY_RETRY% failed, retrying in 2s...
-if %COPY_RETRY% GEQ 5 goto REPLACE_FAILED
-timeout /t 2 /nobreak >nul
-goto COPY_RETRY
-
-:REPLACE_FAILED
-echo [Updater] Replace failed after retries, rolling back...
-copy /Y "${backupPath}" "${appAsarPath}" >nul
-echo [Updater] Rolled back to previous version
-exit /b 1
-
-:WRITE_MARKER
-:: Step 3: Write update marker for startup self-check
-powershell -NoProfile -WindowStyle Hidden -Command "Set-Content -Path '${markerPath}' -Value '{\"fromVersion\":\"${fromVersion}\",\"toVersion\":\"${toVersion}\"}' -Encoding UTF8"
-
-:: Step 4: Clean up downloaded temp file
-del /Q "${newAsarPath}" >nul 2>&1
-
-:: Step 5: Restart application
-echo [Updater] Starting new version...
-start "" "${exePath}"
-exit /b 0
+# Restart
+Start-Process -FilePath $exePath -WindowStyle Normal
 `
 }
 
 /**
- * Generate the rollback.bat script content.
+ * Generate the rollback.ps1 script content.
  * Replaces app.asar with app.asar.bak and restarts.
  */
-export function generateRollbackBat(backupAsarPath: string): string {
+export function generateRollbackPs1(backupAsarPath: string): string {
   const appAsarPath = getAppAsarPath()
   const markerPath = getMarkerPath()
   const exePath = getExePath()
-  const exeName = EXE_NAME
   const exeBaseName = EXE_NAME.replace(".exe", "")
 
-  return `@echo off
-chcp 65001 >nul
-echo [Updater] Rolling back...
+  return `
+$exeBaseName    = ${toPsString(exeBaseName)}
+$backupAsarPath = ${toPsString(backupAsarPath)}
+$appAsarPath    = ${toPsString(appAsarPath)}
+$markerPath     = ${toPsString(markerPath)}
+$exePath        = ${toPsString(exePath)}
 
-:: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
-if not %ERRORLEVEL%==0 goto TIMEOUT
-goto DO_ROLLBACK
+# Wait for process to exit (up to 30s)
+$n = 0
+while ((Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) -and $n -lt 30) {
+  Start-Sleep -Seconds 1
+  $n++
+}
+if (Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) {
+  exit 1
+}
 
-:TIMEOUT
-echo [Updater] Timeout, aborting rollback
-exit /b 1
+# Rollback
+try {
+  Copy-Item -Path $backupAsarPath -Destination $appAsarPath -Force -ErrorAction Stop
+} catch {
+  exit 1
+}
 
-:DO_ROLLBACK
-:: Replace with backup
-copy /Y "${backupAsarPath}" "${appAsarPath}" >nul
-if not %ERRORLEVEL%==0 goto ROLLBACK_FAILED
-goto DONE
+# Remove marker
+if (Test-Path $markerPath) { Remove-Item -Path $markerPath -Force -ErrorAction SilentlyContinue }
 
-:ROLLBACK_FAILED
-echo [Updater] Rollback failed
-exit /b 1
+# Restart
+Start-Process -FilePath $exePath -WindowStyle Normal
+`
+}
 
-:DONE
-:: Remove update marker
-if exist "${markerPath}" del /Q "${markerPath}" >nul 2>&1
+/**
+ * Generate the full-zip update ps1 script content.
+ *   1. Waits for the Electron process to exit
+ *   2. Backs up current app directory → appDir.bak\
+ *   3. Extracts the zip to a temp directory
+ *   4. Copies all extracted files over the app directory
+ *   5. Writes update-marker.json for startup self-check
+ *   6. Cleans up temp dir and zip file
+ *   7. Restarts the application
+ */
+function generateFullZipUpdatePs1(
+  zipPath: string,
+  appDir: string,
+  exePath: string,
+  fromVersion: string,
+  toVersion: string
+): string {
+  const backupDir = `${appDir}.bak`
+  const markerPath = join(appDir, "resources", "update-marker.json")
+  const exeBaseName = EXE_NAME.replace(".exe", "")
 
-echo [Updater] Rollback complete, restarting...
-start "" "${exePath}"
-exit /b 0
+  return `
+$exeBaseName = ${toPsString(exeBaseName)}
+$zipPath     = ${toPsString(zipPath)}
+$appDir      = ${toPsString(appDir)}
+$backupDir   = ${toPsString(backupDir)}
+$markerPath  = ${toPsString(markerPath)}
+$exePath     = ${toPsString(exePath)}
+$tempDir     = Join-Path $env:TEMP 'cmbdevclaw_update_tmp'
+
+# Wait for process to exit (up to 30s)
+$n = 0
+while ((Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) -and $n -lt 30) {
+  Start-Sleep -Seconds 1
+  $n++
+}
+if (Get-Process -Name $exeBaseName -ErrorAction SilentlyContinue) {
+  exit 1
+}
+
+# Backup current installation (copy contents, not the folder itself)
+if (Test-Path $backupDir) { Remove-Item -Path $backupDir -Recurse -Force }
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+try {
+  Get-ChildItem -Path $appDir -Force | Copy-Item -Destination $backupDir -Recurse -Force -ErrorAction Stop
+} catch {
+  exit 1
+}
+
+# Extract zip
+if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force }
+try {
+  Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force -ErrorAction Stop
+} catch {
+  exit 1
+}
+
+# Copy extracted files over app directory (include hidden files)
+try {
+  Get-ChildItem -Path $tempDir -Force | Copy-Item -Destination $appDir -Recurse -Force -ErrorAction Stop
+} catch {
+  Get-ChildItem -Path $backupDir -Force | Copy-Item -Destination $appDir -Recurse -Force -ErrorAction SilentlyContinue
+  exit 1
+}
+
+# Write marker
+Set-Content -Path $markerPath -Value '{"fromVersion":"${fromVersion}","toVersion":"${toVersion}","updateType":"full"}' -Encoding UTF8
+
+# Cleanup
+Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+
+# Restart
+Start-Process -FilePath $exePath -WindowStyle Normal
 `
 }
 
 /**
  * Execute ASAR replacement update.
- * Generates update.bat, spawns it detached, and quits the app.
+ * Generates update.ps1, spawns it detached, and quits the app.
  */
 export function installAsarUpdate(newAsarPath: string, toVersion: string): void {
   const fromVersion = app.getVersion()
@@ -190,123 +290,21 @@ export function installAsarUpdate(newAsarPath: string, toVersion: string): void 
   console.log("[Updater] Backup path:", getBackupPath())
   console.log("[Updater] EXE path:", getExePath())
 
-  const batContent = generateUpdateBat(newAsarPath, fromVersion, toVersion)
-  const batPath = join(getUpdatesDir(), "update.bat")
+  const ps1Content = generateUpdatePs1(newAsarPath, fromVersion, toVersion)
+  const ps1Path = join(getUpdatesDir(), "update.ps1")
 
-  writeFileSync(batPath, batContent, "utf-8")
-  console.log("[Updater] Generated update.bat at", batPath)
+  writePowerShellScript(ps1Path, ps1Content)
+  console.log("[Updater] Generated update.ps1 at", ps1Path)
 
-  // Spawn BAT script in detached mode so it survives app exit
-  const child = spawn("cmd", ["/c", batPath], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
-  })
-  child.unref()
+  launchDetachedPowerShellScript(ps1Path)
 
   console.log("[Updater] Spawned update script, quitting app...")
   app.quit()
 }
 
 /**
- * Generate the full-zip update BAT script content.
- * The BAT script:
- *   1. Waits for the Electron process to exit
- *   2. Backs up current app directory → appDir.bak/
- *   3. Extracts the zip to a temp directory via PowerShell
- *   4. Copies all extracted files over the app directory
- *   5. Writes update-marker.json for startup self-check
- *   6. Cleans up temp dir and zip file
- *   7. Restarts the application
- */
-function generateFullZipUpdateBat(
-  zipPath: string,
-  appDir: string,
-  exePath: string,
-  fromVersion: string,
-  toVersion: string
-): string {
-  const backupDir = `${appDir}.bak`
-  const tempDir = `%TEMP%\\cmbdevclaw_update_tmp`
-  const markerPath = join(appDir, "update-marker.json")
-  const exeName = EXE_NAME
-  const exeBaseName = EXE_NAME.replace(".exe", "")
-
-  return `@echo off
-chcp 65001 >nul
-echo [FullUpdater] Waiting for application to exit...
-echo [FullUpdater] zip=${zipPath}
-echo [FullUpdater] appDir=${appDir}
-echo [FullUpdater] exePath=${exePath}
-
-:: Wait for process to exit using PowerShell (no extra windows)
-powershell -NoProfile -WindowStyle Hidden -Command "& { $n=0; while ((Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) -and $n -lt 30) { Start-Sleep -Seconds 1; $n++ } }"
-powershell -NoProfile -WindowStyle Hidden -Command "if (Get-Process -Name '${exeBaseName}' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
-if not %ERRORLEVEL%==0 goto TIMEOUT
-goto APP_EXITED
-
-:TIMEOUT
-echo [FullUpdater] Timeout waiting for app to exit, aborting
-exit /b 1
-
-:APP_EXITED
-echo [FullUpdater] Application exited, starting full update...
-
-:: Step 1: Backup current installation
-if exist "${backupDir}" rmdir /s /q "${backupDir}"
-xcopy /e /i /h /y "${appDir}\\" "${backupDir}\\" >nul
-if not %ERRORLEVEL%==0 goto BACKUP_FAILED
-echo [FullUpdater] Backup complete: ${backupDir}
-goto EXTRACT
-
-:BACKUP_FAILED
-echo [FullUpdater] Backup failed
-exit /b 1
-
-:EXTRACT
-:: Step 2: Extract zip to temp dir
-if exist "${tempDir}" rmdir /s /q "${tempDir}"
-echo [FullUpdater] Extracting ${zipPath} to ${tempDir}...
-powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${tempDir}' -Force"
-if not %ERRORLEVEL%==0 goto EXTRACT_FAILED
-echo [FullUpdater] Extraction complete
-goto COPY_FILES
-
-:EXTRACT_FAILED
-echo [FullUpdater] Extraction failed
-exit /b 1
-
-:COPY_FILES
-:: Step 3: Copy new files over app directory
-echo [FullUpdater] Copying files to ${appDir}...
-xcopy /e /i /h /y "${tempDir}\\*" "${appDir}\\" >nul
-if not %ERRORLEVEL%==0 goto COPY_FAILED
-echo [FullUpdater] Copy complete
-goto WRITE_MARKER
-
-:COPY_FAILED
-echo [FullUpdater] Copy failed, rolling back from backup...
-xcopy /e /i /h /y "${backupDir}\\" "${appDir}\\" >nul
-exit /b 1
-
-:WRITE_MARKER
-:: Step 4: Write update marker for startup self-check
-powershell -NoProfile -WindowStyle Hidden -Command "Set-Content -Path '${markerPath}' -Value '{\"fromVersion\":\"${fromVersion}\",\"toVersion\":\"${toVersion}\",\"updateType\":\"full\"}' -Encoding UTF8"
-
-:: Step 5: Clean up
-rmdir /s /q "${tempDir}"
-del /Q "${zipPath}" >nul 2>&1
-
-:: Step 6: Restart application
-echo [FullUpdater] Starting new version...
-start "" "${exePath}"
-exit /b 0
-`
-}
-
-/**
  * Execute full update.
- * - If the file is a .zip: generates a BAT script to extract and replace the entire app directory.
+ * - If the file is a .zip: generates a ps1 script to extract and replace the entire app directory.
  * - If the file is a .exe: launches the NSIS setup installer directly (requires company whitelist).
  */
 export function installFullUpdate(filePath: string, toVersion: string): void {
@@ -321,18 +319,13 @@ export function installFullUpdate(filePath: string, toVersion: string): void {
     console.log("[Updater] app dir:", appDir)
     console.log("[Updater] exe path:", exePath)
 
-    const batContent = generateFullZipUpdateBat(filePath, appDir, exePath, fromVersion, toVersion)
-    const batPath = join(getUpdatesDir(), "full-update.bat")
+    const ps1Content = generateFullZipUpdatePs1(filePath, appDir, exePath, fromVersion, toVersion)
+    const ps1Path = join(getUpdatesDir(), "full-update.ps1")
 
-    writeFileSync(batPath, batContent, "utf-8")
-    console.log("[Updater] Generated full-update.bat at", batPath)
+    writePowerShellScript(ps1Path, ps1Content)
+    console.log("[Updater] Generated full-update.ps1 at", ps1Path)
 
-    const child = spawn("cmd", ["/c", batPath], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true
-    })
-    child.unref()
+    launchDetachedPowerShellScript(ps1Path)
 
     console.log("[Updater] Spawned full-update script, quitting app...")
   } else {

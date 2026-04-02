@@ -598,6 +598,59 @@ interface CustomAPI {
     getMode: () => Promise<"auto" | "pinned">
     setMode: (mode: "auto" | "pinned") => Promise<void>
   }
+  update: {
+    check: () => Promise<
+      | { hasUpdate: false }
+      | {
+        hasUpdate: true
+        version: string
+        updateType: string
+        releaseNotes: string
+        size: number
+        mandatory: boolean
+        currentStatus?: string
+        currentProgress?: {
+          percent: number
+          transferred: number
+          total: number
+          speed: string
+          phase: "downloading" | "verifying" | "extracting"
+          message: string
+        } | null
+        currentError?: string | null
+      }
+    >
+    download: () => Promise<{ success: boolean }>
+    install: () => Promise<void>
+    dismiss: () => Promise<{ success: boolean }>
+    rollback: () => Promise<void>
+    getStatus: () => Promise<{
+      status: string
+      update: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean } | null
+      progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      } | null
+      errorMessage: string | null
+      canRollback: boolean
+    }>
+    getStartupResult: () => Promise<{ updatedFrom?: string; updatedTo?: string }>
+    onAvailable: (callback: (info: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean; autoDownloading?: boolean }) => void) => () => void
+    onProgress: (callback: (progress: {
+      percent: number
+      transferred: number
+      total: number
+      speed: string
+      phase: "downloading" | "verifying" | "extracting"
+      message: string
+    }) => void) => () => void
+    onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => () => void
+    onError: (callback: (err: { message: string; silent?: boolean }) => void) => () => void
+  }
 }
 
 declare global {

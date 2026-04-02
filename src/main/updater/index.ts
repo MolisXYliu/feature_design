@@ -1,8 +1,9 @@
 import { ipcMain, BrowserWindow } from "electron"
 import { checkForUpdate, type UpdateCheckResult } from "./checker"
-import { downloadUpdate } from "./downloader"
+import { downloadUpdate, type DownloadProgress } from "./downloader"
 import { installAsarUpdate, installFullUpdate } from "./installer"
 import { rollbackToPrevious, isRollbackAvailable } from "./rollback"
+import { notifyAlways } from "../services/notify"
 
 // Module state
 let checkInterval: ReturnType<typeof setInterval> | null = null
@@ -10,9 +11,9 @@ let initialCheckTimer: ReturnType<typeof setTimeout> | null = null
 let lastCheckResult: UpdateCheckResult | null = null
 let downloadedFilePath: string | null = null
 let updateStatus: "idle" | "available" | "downloading" | "downloaded" | "error" = "idle"
+let lastDownloadProgress: DownloadProgress | null = null
+let lastErrorMessage: string | null = null
 
-const CHECK_INTERVAL_MS = 30 * 60 * 1000 // 30 minutes
-const INITIAL_DELAY_MS = 30 * 1000 // 30 seconds after startup
 
 function getUpdateServerUrl(): string {
   const url = (import.meta.env.VITE_UPDATE_SERVER_URL as string) || ""
@@ -30,6 +31,51 @@ function broadcast(channel: string, data: unknown): void {
     if (!win.isDestroyed()) {
       win.webContents.send(channel, data)
     }
+  }
+}
+
+/**
+ * Download the update. If silent=true, errors are not broadcast to renderer.
+ */
+async function performDownload(silent: boolean): Promise<void> {
+  if (!lastCheckResult) return
+  const baseUrl = getUpdateServerUrl()
+  if (!baseUrl) return
+
+  updateStatus = "downloading"
+  lastDownloadProgress = null
+  lastErrorMessage = null
+  console.log(`[Updater] ${silent ? "Background" : "Manual"} download starting: ${lastCheckResult.downloadFile}`)
+
+  try {
+    downloadedFilePath = await downloadUpdate(
+      baseUrl,
+      lastCheckResult.downloadFile,
+      lastCheckResult.downloadSha256,
+      lastCheckResult.downloadSize,
+      (p) => {
+        lastDownloadProgress = p
+        broadcast("update:progress", p)
+      }
+    )
+    updateStatus = "downloaded"
+    lastDownloadProgress = null
+    lastErrorMessage = null
+    console.log("[Updater] Download complete:", downloadedFilePath)
+    broadcast("update:downloaded", {
+      version: lastCheckResult.version,
+      updateType: lastCheckResult.updateType,
+      releaseNotes: lastCheckResult.releaseNotes,
+      size: lastCheckResult.downloadSize,
+      mandatory: lastCheckResult.mandatory
+    })
+  } catch (err) {
+    updateStatus = "error"
+    lastDownloadProgress = null
+    const message = err instanceof Error ? err.message : "Download failed"
+    lastErrorMessage = message
+    console.error("[Updater] Download failed:", message)
+    broadcast("update:error", { message, silent })
   }
 }
 
@@ -54,9 +100,15 @@ async function performCheck(manual: boolean): Promise<UpdateCheckResult | null> 
         updateType: result.updateType,
         releaseNotes: result.releaseNotes,
         size: result.downloadSize,
-        mandatory: result.mandatory
+        mandatory: result.mandatory,
+        autoDownloading: !manual
       })
       console.log(`[Updater] Update available: v${result.version} (${result.updateType})`)
+
+      if (!manual) {
+        // Auto-check: silently download in background, notify when ready
+        performDownload(true)
+      }
     } else if (manual) {
       console.log("[Updater] Already up to date")
     }
@@ -78,6 +130,22 @@ async function performCheck(manual: boolean): Promise<UpdateCheckResult | null> 
 export function registerUpdaterHandlers(): void {
   // Manual check for updates
   ipcMain.handle("update:check", async () => {
+    // If download is already in progress or done, don't hit the server again —
+    // just return the known state so the UI can restore the correct stage.
+    if ((updateStatus === "downloading" || updateStatus === "downloaded" || updateStatus === "error") && lastCheckResult) {
+      return {
+        hasUpdate: true,
+        version: lastCheckResult.version,
+        updateType: lastCheckResult.updateType,
+        releaseNotes: lastCheckResult.releaseNotes,
+        size: lastCheckResult.downloadSize,
+        mandatory: lastCheckResult.mandatory,
+        currentStatus: updateStatus,
+        currentProgress: lastDownloadProgress,
+        currentError: lastErrorMessage
+      }
+    }
+
     const result = await performCheck(true)
     return result
       ? {
@@ -86,47 +154,24 @@ export function registerUpdaterHandlers(): void {
           updateType: result.updateType,
           releaseNotes: result.releaseNotes,
           size: result.downloadSize,
-          mandatory: result.mandatory
+          mandatory: result.mandatory,
+          currentStatus: "available" as const,
+          currentProgress: null,
+          currentError: null
         }
       : { hasUpdate: false }
   })
 
-  // Start downloading the update
+  // Start downloading the update (manual trigger)
   ipcMain.handle("update:download", async () => {
     if (!lastCheckResult) {
       throw new Error("没有可用的更新，请先检查更新")
     }
-
-    const baseUrl = getUpdateServerUrl()
-    if (!baseUrl) throw new Error("更新服务器地址未配置")
-
-    updateStatus = "downloading"
-    console.log(`[Updater] Downloading: ${lastCheckResult.downloadFile}, size: ${lastCheckResult.downloadSize}, sha256: ${lastCheckResult.downloadSha256}`)
-
-    try {
-      downloadedFilePath = await downloadUpdate(
-        baseUrl,
-        lastCheckResult.downloadFile,
-        lastCheckResult.downloadSha256,
-        lastCheckResult.downloadSize,
-        (p) => broadcast("update:progress", p)
-      )
-
-      console.log("[Updater] Download complete, file saved to:", downloadedFilePath)
-      updateStatus = "downloaded"
-      broadcast("update:downloaded", {
-        version: lastCheckResult.version,
-        updateType: lastCheckResult.updateType
-      })
-
-      return { success: true }
-    } catch (err) {
-      updateStatus = "error"
-      const message = err instanceof Error ? err.message : "Download failed"
-      console.error("[Updater] Download failed:", message)
-      broadcast("update:error", { message })
-      throw err
+    if (updateStatus === "downloading" || updateStatus === "downloaded") {
+      return { success: true } // already in progress or done
     }
+    await performDownload(false)
+    return { success: true }
   })
 
   // Install the downloaded update (triggers restart)
@@ -134,6 +179,8 @@ export function registerUpdaterHandlers(): void {
     if (!lastCheckResult || !downloadedFilePath) {
       throw new Error("没有已下载的更新")
     }
+
+    notifyAlways("正在安装更新", `正在安装 v${lastCheckResult.version}，完成后应用将自动重启`)
 
     if (lastCheckResult.updateType === "asar") {
       installAsarUpdate(downloadedFilePath, lastCheckResult.version)
@@ -145,9 +192,14 @@ export function registerUpdaterHandlers(): void {
 
   // Dismiss the update notification
   ipcMain.handle("update:dismiss", async () => {
-    // Just reset status; the next scheduled check will re-notify
+    // Don't clear lastCheckResult — background download may still be in progress
+    // and needs it to broadcast update:downloaded with the right info
+    if (updateStatus !== "downloading") {
+      lastCheckResult = null
+    }
     updateStatus = "idle"
-    lastCheckResult = null
+    lastDownloadProgress = null
+    lastErrorMessage = null
     return { success: true }
   })
 
@@ -171,6 +223,8 @@ export function registerUpdaterHandlers(): void {
             mandatory: lastCheckResult.mandatory
           }
         : null,
+      progress: lastDownloadProgress,
+      errorMessage: lastErrorMessage,
       canRollback: isRollbackAvailable()
     }
   })
