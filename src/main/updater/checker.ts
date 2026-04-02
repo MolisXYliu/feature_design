@@ -96,7 +96,6 @@ export function fetchLatestJson(baseUrl: string): Promise<LatestJson> {
       let data = ""
       res.on("data", (chunk: Buffer) => { data += chunk.toString() })
       res.on("end", () => {
-        console.log("[Updater] Response body:", data)
         try {
           const json = JSON.parse(data) as LatestJson
           resolve(json)

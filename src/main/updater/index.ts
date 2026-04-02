@@ -167,7 +167,8 @@ export function registerUpdaterHandlers(): void {
             version: lastCheckResult.version,
             updateType: lastCheckResult.updateType,
             releaseNotes: lastCheckResult.releaseNotes,
-            size: lastCheckResult.downloadSize
+            size: lastCheckResult.downloadSize,
+            mandatory: lastCheckResult.mandatory
           }
         : null,
       canRollback: isRollbackAvailable()
