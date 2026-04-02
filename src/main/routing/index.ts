@@ -844,6 +844,16 @@ function resolveFromExactModel(
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/** Resolve the user-configured model name from a resolvedModelId like "custom:minmax2.7". */
+function resolveModelName(resolvedModelId: string): string {
+  const cfgId = resolvedModelId.startsWith("custom:")
+    ? resolvedModelId.slice("custom:".length)
+    : resolvedModelId
+  const cfg = getCustomModelConfigs().find((c) => c.id === cfgId)
+  // Return the actual model name (e.g. "MiniMax-M2.7"), fall back to display name, then raw id
+  return cfg?.model ?? cfg?.name ?? cfgId
+}
+
 /** Safely build a RoutingTrace — never throws. */
 function buildRoutingTrace(
   ctx: RoutingContext,
@@ -859,8 +869,9 @@ function buildRoutingTrace(
       routingMode: ctx.routingMode,
       resolvedTier: finalResult.resolvedTier,
       resolvedModelId: finalResult.resolvedModelId,
+      resolvedModelName: resolveModelName(finalResult.resolvedModelId),
       decidedByLayer: finalResult.layer,
-      totalDurationMs: layers.reduce((sum, l) => sum + l.durationMs, 0),
+      routingTotalDurationMs: layers.reduce((sum, l) => sum + l.durationMs, 0),
       layers
     }
   } catch {

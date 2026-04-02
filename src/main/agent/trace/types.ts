@@ -130,12 +130,14 @@ export interface RoutingTrace {
   routingMode: "auto" | "pinned"
   /** Final resolved tier */
   resolvedTier: "premium" | "economy"
-  /** Final resolved model ID */
+  /** Final resolved model ID (internal, e.g. "custom:minmax2.7") */
   resolvedModelId: string
+  /** User-configured model name (e.g. "MiniMax-M2.7"), resolved from custom model config */
+  resolvedModelName: string
   /** Which layer produced the final decision */
   decidedByLayer: "pinned" | "thread" | "layer1" | "layer2" | "layer3"
   /** Total routing time in ms (sum of all layers evaluated) */
-  totalDurationMs: number
+  routingTotalDurationMs: number
   /** Per-layer records in evaluation order */
   layers: RoutingLayerRecord[]
 }
