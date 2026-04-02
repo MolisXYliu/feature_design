@@ -39,6 +39,8 @@ import type {
   RoutingTrace
 } from "./types"
 import { NoopTraceReporter } from "./types"
+import { getLocalIP } from "../../net-utils"
+import { getUserInfo } from "../../storage"
 
 // ─────────────────────────────────────────────────────────
 // Global reporter registry
@@ -388,6 +390,8 @@ export class TraceCollector {
       userMessage: this.userMessage,
       modelId: this.modelId,
       ...(this.modelName ? { modelName: this.modelName } : {}),
+      userIp: getLocalIP(),
+      userName: getUserInfo()?.userName,
       steps: this.steps,
       modelCalls: this.modelCalls,
       nodes: this.finalizeNodes(outcome, endedAt, errorMessage),

@@ -176,6 +176,10 @@ export interface AgentTrace {
   modelId: string
   /** Human-readable model name (e.g. "minmax"), populated at recording time */
   modelName?: string
+  /** Local IP address of the machine at trace time */
+  userIp?: string
+  /** Logged-in user's name from UserInfoConfig */
+  userName?: string
   /** Ordered list of reasoning steps */
   steps: TraceStep[]
   /** Ordered model-call runs (request + response) */
