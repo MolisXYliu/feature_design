@@ -31,7 +31,6 @@ import {
   Loader2
 } from "lucide-react"
 import type { FileAttachment } from "@/types"
-import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -50,7 +49,7 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
-import DisplayDiffTest from "./DisplayDiffTest"
+import { toast } from "sonner"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -142,7 +141,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }))
   )
   const [yoloMode, setYoloMode] = useState(false)
-  const [showCopyNotification, setShowCopyNotification] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
   // NUX (first-run sandbox setup)
   const [showNux, setShowNux] = useState(false)
@@ -1454,10 +1452,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const handleCopyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(
       () => {
-        setShowCopyNotification(true)
-        setTimeout(() => setShowCopyNotification(false), 2000)
+        toast.success("已复制目标链接到剪切板，请在浏览器中打开查看")
       },
-      (err) => console.error("Failed to copy text: ", err)
+      (err) => {
+        console.error("Failed to copy text: ", err)
+        toast.error("复制失败，请重试")
+      }
     )
   }
 
@@ -1596,21 +1596,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       )}
 
       {/* Skill generation progress is shown in the right panel's 代理 section */}
-      {/* Copy notification */}
-      {showCopyNotification && (
-        <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
-          <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm px-4 py-2 shadow-lg">
-            <div className="flex items-center gap-2 text-sm text-foreground">
-              <div className="size-4 rounded-full bg-green-500 flex items-center justify-center">
-                <svg className="size-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">

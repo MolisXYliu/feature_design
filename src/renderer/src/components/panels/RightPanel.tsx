@@ -27,7 +27,8 @@ import {
   Webhook,
   Maximize2,
   Minimize2,
-  EyeOff
+  EyeOff,
+  Loader2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
@@ -40,6 +41,7 @@ import { FileViewer } from "@/components/tabs/FileViewer"
 import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
+import { GitPanelView } from "@/components/panels/GitPanelView"
 
 type HookConfig = Awaited<ReturnType<typeof window.api.hooks.list>>[number]
 
@@ -133,8 +135,9 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 interface RightPanelProps {
-  moduleMode: "work" | "preview"
+  moduleMode: "work" | "preview" | "git"
   onRequestPreviewMode?: () => void
+  onRequestGitMode?: () => void
   onRequestWorkMode?: () => void
   onPreviewFullscreenChange?: (isFullscreen: boolean) => void
 }
@@ -142,6 +145,7 @@ interface RightPanelProps {
 export function RightPanel({
   moduleMode,
   onRequestPreviewMode,
+  onRequestGitMode,
   onRequestWorkMode,
   onPreviewFullscreenChange
 }: RightPanelProps): React.JSX.Element {
@@ -170,6 +174,8 @@ export function RightPanel({
   const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
   const [previewReloadToken, setPreviewReloadToken] = useState(0)
   const lastAppliedPreviewKeyRef = useRef<string | null>(null)
+  const lastRecordedBatchKeyRef = useRef<string | null>(null)
+  const lastAutoSwitchedBatchKeyRef = useRef<string | null>(null)
   const lastThreadIdRef = useRef<string | null>(null)
   const prevStreamLoadingRef = useRef(false)
   const [tasksOpen, setTasksOpen] = useState(false)
@@ -271,6 +277,44 @@ export function RightPanel({
     return null
   }, [threadState?.messages, streamData.messages])
 
+  const latestCompletedLlmBatch = useMemo(() => {
+    const persisted = threadState?.messages ?? []
+    const streaming = (streamData.messages as Array<{ id?: string; tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }> | undefined) ?? []
+    const all = [
+      ...persisted.map((m) => ({ message: m })),
+      ...streaming.map((m) => ({ message: m }))
+    ]
+    const completedToolCallIds = new Set<string>()
+    for (const item of all) {
+      const message = item.message as { role?: string; type?: string; tool_call_id?: string }
+      if ((message.role === "tool" || message.type === "tool") && message.tool_call_id) {
+        completedToolCallIds.add(message.tool_call_id)
+      }
+    }
+    for (let i = all.length - 1; i >= 0; i--) {
+      const msg = all[i].message
+      const toolCalls = msg?.tool_calls || []
+      const files = new Set<string>()
+      const toolIds: string[] = []
+      for (const tool of toolCalls) {
+        if (!tool?.id || !completedToolCallIds.has(tool.id)) continue
+        const filePath = getToolCallFilePath(tool)
+        if (filePath) {
+          files.add(filePath)
+          toolIds.push(tool.id)
+        }
+      }
+      if (files.size > 0) {
+        const messageId = msg?.id || `m-${i}`
+        return {
+          batchKey: `${messageId}:${toolIds.sort().join(",")}`,
+          files: Array.from(files)
+        }
+      }
+    }
+    return null
+  }, [threadState?.messages, streamData.messages])
+
   useEffect(() => {
     const wasLoading = prevStreamLoadingRef.current
     const isLoading = streamData.isLoading
@@ -278,6 +322,33 @@ export function RightPanel({
 
     // Render preview when this round finishes: true -> false
     if (!(wasLoading && !isLoading)) return
+    if (
+      latestCompletedLlmBatch?.files?.length &&
+      lastAutoSwitchedBatchKeyRef.current !== latestCompletedLlmBatch.batchKey
+    ) {
+      lastAutoSwitchedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+      const switchPanelByWorkspaceType = async (): Promise<void> => {
+        try {
+          if (!currentThreadId) return
+          const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+          if (summary.isGitRepo ?? summary.isWorktree) {
+            onRequestGitMode?.()
+            return
+          }
+        } catch {
+          // ignore summary refresh errors
+        }
+        if (!latestResourceEvent) return
+        if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
+        lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+        setPreviewPath(latestResourceEvent.path)
+        setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+        setPreviewReloadToken((v) => v + 1)
+        onRequestPreviewMode?.()
+      }
+      void switchPanelByWorkspaceType()
+      return
+    }
     if (!latestResourceEvent) return
     if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
 
@@ -286,7 +357,7 @@ export function RightPanel({
     setPreviewDiff(latestResourceEvent.codeDiff ?? null)
     setPreviewReloadToken((v) => v + 1)
     onRequestPreviewMode?.()
-  }, [streamData.isLoading, latestResourceEvent, onRequestPreviewMode])
+  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode, currentThreadId])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -295,6 +366,8 @@ export function RightPanel({
       setPreviewPath(null)
       setPreviewDiff(null)
       lastAppliedPreviewKeyRef.current = null
+      lastRecordedBatchKeyRef.current = null
+      lastAutoSwitchedBatchKeyRef.current = null
       prevStreamLoadingRef.current = false
     }
   }, [currentThreadId])
@@ -305,9 +378,20 @@ export function RightPanel({
       if (data.threadId === currentThreadId && previewPath) {
         setPreviewReloadToken((v) => v + 1)
       }
+      if (data.threadId === currentThreadId) {
+        window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
+          if (summary.isGitRepo ?? summary.isWorktree) {
+            onRequestGitMode?.()
+            return
+          }
+          onRequestPreviewMode?.()
+        }).catch(() => {
+          // ignore summary refresh errors
+        })
+      }
     })
     return cleanup
-  }, [currentThreadId, previewPath])
+  }, [currentThreadId, previewPath, onRequestGitMode, onRequestPreviewMode])
 
   useEffect(() => {
     const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
@@ -325,6 +409,15 @@ export function RightPanel({
       onPreviewFullscreenChange?.(false)
     }
   }, [moduleMode, previewPath, onPreviewFullscreenChange])
+
+  useEffect(() => {
+    if (!currentThreadId || !latestCompletedLlmBatch || latestCompletedLlmBatch.files.length === 0) return
+    if (lastRecordedBatchKeyRef.current === latestCompletedLlmBatch.batchKey) return
+    lastRecordedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+    window.api.workspace.recordLlmModifiedFiles(currentThreadId, latestCompletedLlmBatch.files).catch((error) => {
+      console.error("[RightPanel] Failed to record LLM modified files:", error)
+    })
+  }, [currentThreadId, latestCompletedLlmBatch])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -696,9 +789,9 @@ export function RightPanel({
       )}
     >
       {moduleMode === "preview" && (
-        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-background">
           <div
-            className="bg-white p-2 h-full min-h-0"
+            className="bg-background p-2 h-full min-h-0"
             style={{ height: PREVIEW_MAX_HEIGHT }}
           >
             {previewPath ? (
@@ -735,6 +828,28 @@ export function RightPanel({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {moduleMode === "git" && (
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+          <div className="bg-white p-2 h-full min-h-0">
+            <GitPanelView
+              threadId={currentThreadId ?? ""}
+              workspacePath={threadState?.workspacePath ?? null}
+              onOpenFileFolder={async (filePath) => {
+                try {
+                  const resolved = resolvePreviewPaths(filePath, threadState?.workspacePath ?? null)
+                  const platform = await window.electron.ipcRenderer.invoke("get-platform")
+                  const normalizedPath =
+                    platform === "win32" ? resolved.fullPath.replace(/\//g, "\\") : resolved.fullPath
+                  await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+                } catch (error) {
+                  console.error("[GitPanel] Failed to show item in folder:", error)
+                }
+              }}
+            />
           </div>
         </div>
       )}
@@ -1282,27 +1397,27 @@ function ResourcePreview({
         <div className="flex items-center gap-1">
           <button
             onClick={toggleFullscreen}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title={isFullscreen ? "缩小全屏" : "全屏预览"}
+            aria-label={isFullscreen ? "缩小全屏" : "全屏预览"}
           >
             {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-            {isFullscreen ? "缩小" : "全屏"}
           </button>
           <button
             onClick={handleHidePreview}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="隐藏预览并切换到工作目录"
+            aria-label="隐藏预览并切换到工作目录"
           >
             <EyeOff className="size-3.5" />
-            隐藏
           </button>
           <button
             onClick={openInFolder}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="打开文件所在文件夹"
+            aria-label="打开文件所在文件夹"
           >
             <FolderOpen className="size-3.5" />
-            文件夹
           </button>
         </div>
       </div>

@@ -332,8 +332,59 @@ const api = {
     clearWorktreeContext: (threadId: string): Promise<void> => {
       return ipcRenderer.invoke("workspace:clearWorktreeContext", threadId) as Promise<void>
     },
-    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string): Promise<void> => {
-      return ipcRenderer.invoke("workspace:saveWorktreeContext", { threadId, gitRoot, branch, baseBranch }) as Promise<void>
+    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string, baseCommit?: string): Promise<void> => {
+      return ipcRenderer.invoke("workspace:saveWorktreeContext", { threadId, gitRoot, branch, baseBranch, baseCommit }) as Promise<void>
+    },
+    recordLlmModifiedFiles: (threadId: string, files: string[]): Promise<{ success: boolean; files?: string[]; error?: string }> => {
+      return ipcRenderer.invoke("workspace:recordLlmModifiedFiles", { threadId, files }) as Promise<{
+        success: boolean
+        files?: string[]
+        error?: string
+      }>
+    },
+    getGitPanelState: (threadId: string): Promise<{
+      success: boolean
+      isWorktree: boolean
+      isGitRepo?: boolean
+      taskId: string
+      files: Array<{ path: string; diff: string; additions: number; deletions: number }>
+      totals: { additions: number; deletions: number; fileCount: number }
+      hasPendingDiff: boolean
+      hasPushableCommit: boolean
+      trackedFiles?: string[]
+      worktreeBranch?: string | null
+      suggestedCommitMessage?: string
+      error?: string
+    }> => {
+      return ipcRenderer.invoke("workspace:getGitPanelState", { threadId }) as Promise<{
+        success: boolean
+        isWorktree: boolean
+        isGitRepo?: boolean
+        taskId: string
+        files: Array<{ path: string; diff: string; additions: number; deletions: number }>
+        totals: { additions: number; deletions: number; fileCount: number }
+        hasPendingDiff: boolean
+        hasPushableCommit: boolean
+        trackedFiles?: string[]
+        worktreeBranch?: string | null
+        suggestedCommitMessage?: string
+        error?: string
+      }>
+    },
+    getGitPanelSummary: (threadId: string): Promise<{
+      success: boolean
+      isWorktree: boolean
+      isGitRepo?: boolean
+      hasPendingDiff: boolean
+      changedFiles: number
+    }> => {
+      return ipcRenderer.invoke("workspace:getGitPanelSummary", { threadId }) as Promise<{
+        success: boolean
+        isWorktree: boolean
+        isGitRepo?: boolean
+        hasPendingDiff: boolean
+        changedFiles: number
+      }>
     },
     isGit: (
       folderPath: string
@@ -357,20 +408,55 @@ const api = {
         Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
       >
     },
+    removeWorktree: (
+      gitRoot: string,
+      worktreePath: string
+    ): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:removeWorktree", {
+        gitRoot,
+        worktreePath
+      }) as Promise<{ success: boolean; error?: string }>
+    },
     createWorktree: (
       gitRoot: string,
       branch: string
-    ): Promise<{ success: boolean; path?: string; branch?: string; baseBranch?: string; error?: string }> => {
+    ): Promise<{ success: boolean; path?: string; branch?: string; baseBranch?: string; baseCommit?: string; error?: string }> => {
       return ipcRenderer.invoke("workspace:createWorktree", { gitRoot, branch }) as Promise<{
         success: boolean
         path?: string
         branch?: string
         baseBranch?: string
+        baseCommit?: string
         error?: string
       }>
     },
-    commitWorktree: (worktreePath: string, message: string): Promise<{ success: boolean; error?: string }> => {
-      return ipcRenderer.invoke("workspace:commitWorktree", { worktreePath, message }) as Promise<{
+    commitWorktree: (threadId: string, message: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:commitWorktree", { threadId, message }) as Promise<{
+        success: boolean
+        error?: string
+      }>
+    },
+    pushWorktree: (threadId: string, message?: string): Promise<{
+      success: boolean
+      autoCommitted?: boolean
+      error?: string
+      steps?: Array<{ step: "pull" | "commit" | "push" | "verify" | "final"; status: "ok" | "failed" | "skipped"; detail: string }>
+    }> => {
+      return ipcRenderer.invoke("workspace:pushWorktree", { threadId, message }) as Promise<{
+        success: boolean
+        autoCommitted?: boolean
+        error?: string
+        steps?: Array<{ step: "pull" | "commit" | "push" | "verify" | "final"; status: "ok" | "failed" | "skipped"; detail: string }>
+      }>
+    },
+    rejectWorktreeChanges: (threadId: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:rejectWorktreeChanges", { threadId }) as Promise<{
+        success: boolean
+        error?: string
+      }>
+    },
+    rejectWorktreeFile: (threadId: string, filePath: string): Promise<{ success: boolean; error?: string }> => {
+      return ipcRenderer.invoke("workspace:rejectWorktreeFile", { threadId, filePath }) as Promise<{
         success: boolean
         error?: string
       }>

@@ -117,6 +117,9 @@ interface ForbiddenPattern {
 }
 
 const FORBIDDEN_PATTERNS: ForbiddenPattern[] = [
+  { pattern: /\bgit\s+commit\b/i, reason: "LLM cannot run git commit; use Git Panel user approval flow" },
+  { pattern: /\bgit\s+push\b/i, reason: "LLM cannot run git push; use Git Panel user approval flow" },
+  { pattern: /\bgit\s+merge\b/i, reason: "LLM cannot run git merge in this workflow" },
   // Unix
   { pattern: /\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/\s*$/, reason: "rm -rf / is extremely dangerous" },
   { pattern: /\bmkfs\b/, reason: "mkfs formats disk partitions" },
@@ -261,7 +264,7 @@ export function assessCommandSafety(
 }
 
 function containsDirectGitSubmitCommand(command: string): boolean {
-  return /\bgit\s+(add|commit|push)\b/i.test(command)
+  return /\bgit\s+(add|commit|push|merge)\b/i.test(command)
 }
 
 export function derivePermanentApprovalPattern(command: string): string | null {
