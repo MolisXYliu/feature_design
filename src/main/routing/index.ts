@@ -44,6 +44,9 @@ interface ThreadRoutingState {
   premiumStickyUntil?: number
   /** Force premium: economy mis-route (tool errors / failed run) activates this for 30 min */
   forcePremiumUntil?: number
+  /** Failover sticky: after a model API failover, prefer the successful model for a period */
+  failoverStickyModelId?: string
+  failoverStickyUntil?: number
   /** Last known input token count — used for context window capacity guard */
   lastInputTokens?: number
 }
@@ -58,8 +61,9 @@ export interface RoutingFeedback {
   lastInputTokens?: number
 }
 
-const PREMIUM_STICKY_TTL_MS = 40 * 60 * 1000  // 40 min
-const FORCE_PREMIUM_TTL_MS  = 60 * 60 * 1000  // 60 min
+const PREMIUM_STICKY_TTL_MS  = 40 * 60 * 1000  // 40 min
+const FORCE_PREMIUM_TTL_MS   = 60 * 60 * 1000  // 60 min
+const FAILOVER_STICKY_TTL_MS = 30 * 60 * 1000  // 30 min — after failover, prefer the successful model
 
 function readThreadRoutingState(threadId: string | undefined): ThreadRoutingState | null {
   if (!threadId) return null
@@ -83,15 +87,41 @@ function writeThreadRoutingState(threadId: string, patch: Partial<ThreadRoutingS
   updateThread(threadId, { metadata: JSON.stringify(meta) })
 }
 
-/** Called after routing decision is made — remembers what tier/model was chosen. */
-export function rememberRoutingDecision(threadId: string | undefined, result: RoutingResult): void {
+/** Called after a successful failover — makes subsequent turns prefer the failover model. */
+export function setFailoverSticky(threadId: string | undefined, modelId: string): void {
   if (!threadId) return
   try {
     writeThreadRoutingState(threadId, {
+      failoverStickyModelId: modelId,
+      failoverStickyUntil: Date.now() + FAILOVER_STICKY_TTL_MS
+    })
+    console.log(`[ROUTING] Failover sticky set for thread ${threadId}: ${modelId} (${FAILOVER_STICKY_TTL_MS / 60_000}min)`)
+  } catch (err) {
+    console.warn(`[ROUTING] Failed to set failover sticky for thread ${threadId}:`, err)
+  }
+}
+
+/** Called after routing decision is made — remembers what tier/model was chosen.
+ *  When `failoverStickyModelId` is provided, the failover sticky fields are written
+ *  in the same atomic patch to avoid a double read-modify-write race. */
+export function rememberRoutingDecision(
+  threadId: string | undefined,
+  result: RoutingResult,
+  failoverStickyModelId?: string
+): void {
+  if (!threadId) return
+  try {
+    const patch: Partial<ThreadRoutingState> = {
       lastResolvedTier: result.resolvedTier,
       lastResolvedModelId: result.resolvedModelId,
       lastRoutedAt: Date.now()
-    })
+    }
+    if (failoverStickyModelId) {
+      patch.failoverStickyModelId = failoverStickyModelId
+      patch.failoverStickyUntil = Date.now() + FAILOVER_STICKY_TTL_MS
+      console.log(`[ROUTING] Failover sticky set for thread ${threadId}: ${failoverStickyModelId} (${FAILOVER_STICKY_TTL_MS / 60_000}min)`)
+    }
+    writeThreadRoutingState(threadId, patch)
   } catch (err) {
     console.warn(
       `[ROUTING] Failed to persist routing decision for thread ${threadId}:`,
@@ -967,6 +997,36 @@ export async function resolveModel(ctx: RoutingContext): Promise<RoutingResult> 
           `thread:${ctx.continuation}→reuse-last-model`
         )
         return withTrace(r)
+      }
+
+      // Failover sticky: after a model API failover, prefer the successful model
+      if (
+        threadState.failoverStickyModelId &&
+        (threadState.failoverStickyUntil ?? 0) > now
+      ) {
+        const foCfgId = threadState.failoverStickyModelId.startsWith("custom:")
+          ? threadState.failoverStickyModelId.slice("custom:".length)
+          : threadState.failoverStickyModelId
+        const foCfg = getCustomModelConfigs().find((c) => c.id === foCfgId)
+        // Only use sticky if the model is still configured and has an API key
+        if (foCfg?.apiKey) {
+          const remainingMs = (threadState.failoverStickyUntil ?? 0) - now
+          recordLayer({
+            layer: "thread",
+            durationMs: Date.now() - t0,
+            result: foCfg.tier ?? "premium",
+            reason: "failover-sticky",
+            detail: { failoverStickyModelId: threadState.failoverStickyModelId, remainingMs }
+          })
+          const r = resolveFromExactModel(
+            threadState.failoverStickyModelId,
+            foCfg.tier ?? "premium",
+            "thread:failover-sticky"
+          )
+          return withTrace(r)
+        }
+        // Sticky model no longer available, fall through to normal routing
+        console.warn(`[ROUTING] Failover sticky model ${threadState.failoverStickyModelId} no longer available, skipping`)
       }
 
       // Force premium: economy mis-route detected

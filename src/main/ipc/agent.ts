@@ -718,14 +718,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             type: "custom",
             data: { type: "model_failover", attempts: failoverAttempts, activeModelId: usedModelId }
           })
-          // P2: persist failover model so resume/interrupt continuations use it
+          // P2: persist failover model + sticky in a single atomic write
           rememberRoutingDecision(threadId, {
             resolvedModelId: usedModelId!,
             resolvedTier: usedCfg?.tier ?? "premium",
             routeReason: `failover from ${failoverAttempts[0].modelId}`,
             fallbackChain: [],
             layer: "pinned"
-          })
+          }, usedModelId!)
           // Update effectiveModelId for downstream trace/feedback
           effectiveModelId = usedModelId
         }
@@ -1461,14 +1461,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
             type: "custom",
             data: { type: "model_failover", attempts: resumeFailoverAttempts, activeModelId: resumeUsedModelId }
           })
-          // P2: persist failover model for subsequent continuations
+          // P2: persist failover model + sticky in a single atomic write
           rememberRoutingDecision(threadId, {
             resolvedModelId: resumeUsedModelId!,
             resolvedTier: usedCfg?.tier ?? "premium",
             routeReason: `failover from ${resumeFailoverAttempts[0].modelId}`,
             fallbackChain: [],
             layer: "pinned"
-          })
+          }, resumeUsedModelId!)
         }
       }
       notifyResumeFailover()
@@ -1652,14 +1652,14 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
               type: "custom",
               data: { type: "model_failover", attempts: intFailoverAttempts, activeModelId: intUsedModelId }
             })
-            // P2: persist failover model for subsequent continuations
+            // P2: persist failover model + sticky in a single atomic write
             rememberRoutingDecision(threadId, {
               resolvedModelId: intUsedModelId!,
               resolvedTier: usedCfg?.tier ?? "premium",
               routeReason: `failover from ${intFailoverAttempts[0].modelId}`,
               fallbackChain: [],
               layer: "pinned"
-            })
+            }, intUsedModelId!)
           }
         }
         notifyIntFailover()
