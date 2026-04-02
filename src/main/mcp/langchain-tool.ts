@@ -22,34 +22,6 @@ function buildLangChainMcpToolDescription(tool: McpCapabilityTool): string {
   return base ? `${base} ${requiredSuffix}` : requiredSuffix
 }
 
-function isChromeToolName(toolName: unknown): boolean {
-  if (typeof toolName !== "string") return false
-  const normalized = toolName.trim().toLowerCase()
-  return (
-    normalized.startsWith("chrome_")
-    || normalized.includes("chrome_computer")
-    || normalized === "computer"
-    || normalized === "computer_use"
-  )
-}
-
-function isChromeMcpUnavailableError(message: string): boolean {
-  const msg = message.toLowerCase()
-  return (
-    msg.includes("econnrefused") ||
-    msg.includes("127.0.0.1:12306") ||
-    msg.includes("connect") ||
-    msg.includes("connection") ||
-    msg.includes("timed out") ||
-    msg.includes("timeout") ||
-    msg.includes("fetch failed") ||
-    msg.includes("server disconnected") ||
-    msg.includes("socket hang up") ||
-    msg.includes("mcp") ||
-    msg.includes("transport")
-  )
-}
-
 function isToolCallLike(arg: unknown): arg is { id?: string; args?: unknown } {
   return Boolean(arg && typeof arg === "object" && "args" in arg)
 }
@@ -183,14 +155,8 @@ export function createEagerMcpTool(
         return toEagerToolResponse(result)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const shouldFallbackToAgentBrowser =
-          isChromeToolName(tool.toolName) && isChromeMcpUnavailableError(message)
-        const finalMessage = shouldFallbackToAgentBrowser
-          ? `${message}\nFallback: chrome MCP seems unavailable. Please use browser_playwright (or playwright_cli) for this browser task.`
-          : message
-
-        console.warn(`[Runtime] MCP tool "${tool.toolName}" error (non-fatal):`, finalMessage)
-        return [`MCP tool error: ${finalMessage}`, []]
+        console.warn(`[Runtime] MCP tool "${tool.toolName}" error (non-fatal):`, message)
+        return [`MCP tool error: ${message}`, []]
       }
     }
   })

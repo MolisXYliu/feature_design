@@ -3,7 +3,7 @@ import { join } from "path"
 import { MultiServerMCPClient } from "@langchain/mcp-adapters"
 import { buildMcpServerConfig } from "../ipc/mcp"
 import { getEnabledMcpConnectors, getPlugins, parseMcpJsonFile } from "../storage"
-import type { McpConnectorConfig, PluginMcpServerConfig } from "../types"
+import type { PluginMcpServerConfig } from "../types"
 import { buildAliasMaps, buildCapabilityAliases, type McpCapabilitySeed } from "./aliasing"
 import type {
   McpCapabilityAliasMaps,
@@ -14,10 +14,6 @@ import type {
 import { normalizeMcpInvocationResult } from "./result-utils"
 import { SchemaCache } from "./schema-cache"
 import { recordSuccessfulToolExample } from "./tool-example-store"
-
-const BUILTIN_MCP_CHROME_URL = "http://127.0.0.1:12306/mcp"
-const BUILTIN_MCP_CHROME_ID = "__builtin_mcp_chrome__"
-const BUILTIN_MCP_CHROME_NAME = "mcp-chrome"
 
 interface CapabilitySource {
   kind: "connector" | "plugin"
@@ -32,19 +28,6 @@ interface CapabilityCache {
   client: MultiServerMCPClient
   tools: McpCapabilityTool[]
   aliasMaps: McpCapabilityAliasMaps
-}
-
-function normalizeMcpUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase()
-}
-
-function includesBuiltinChrome(connectors: McpConnectorConfig[]): boolean {
-  return connectors.some((connector) => {
-    const byUrl = normalizeMcpUrl(connector.url) === normalizeMcpUrl(BUILTIN_MCP_CHROME_URL)
-    const byName = connector.name.trim().toLowerCase().includes("mcp-chrome")
-      || connector.name.trim().toLowerCase().includes("chrome mcp")
-    return byUrl || byName
-  })
 }
 
 function toPluginSources(): CapabilitySource[] {
@@ -92,24 +75,7 @@ function buildPluginServerConfig(config: PluginMcpServerConfig): Record<string, 
 }
 
 function toConnectorSources(): CapabilitySource[] {
-  const configured = getEnabledMcpConnectors()
-  const connectors = includesBuiltinChrome(configured)
-    ? configured
-    : [
-      ...configured,
-      {
-        id: BUILTIN_MCP_CHROME_ID,
-        name: BUILTIN_MCP_CHROME_NAME,
-        url: BUILTIN_MCP_CHROME_URL,
-        enabled: true,
-        advanced: { transport: "streamable-http" as const },
-        lazyLoad: false,
-        createdAt: "",
-        updatedAt: ""
-      }
-    ]
-
-  return connectors.map((connector) => ({
+  return getEnabledMcpConnectors().map((connector) => ({
     kind: "connector" as const,
     providerKey: connector.id,
     providerDisplayName: connector.name || connector.id,
