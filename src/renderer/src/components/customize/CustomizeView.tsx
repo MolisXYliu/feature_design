@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, GitBranch, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser, Webhook } from "lucide-react"
+import { ArrowLeft, Brain, Clock, GitBranch, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser, Webhook, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -15,6 +15,7 @@ import { EvolutionPanel } from "./EvolutionPanel"
 import { ChatXPanel } from "./ChatXPanel"
 import { UserInfoPanel } from "./UserInfoPanel"
 import { HooksPanel } from "./HooksPanel"
+import { CodeExecToolsPanel } from "./CodeExecToolsPanel"
 
 type CustomizeTab =
   | "skills"
@@ -29,6 +30,7 @@ type CustomizeTab =
   | "chatx"
   | "userinfo"
   | "hooks"
+  | "codeExecTools"
 
 export function CustomizeView(): React.JSX.Element {
   const { setShowCustomizeView, customizeInitialTab, pendingEvolution, setPendingEvolution } = useAppStore()
@@ -212,6 +214,18 @@ export function CustomizeView(): React.JSX.Element {
             <Webhook className="size-4 shrink-0" />
             钩子
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "codeExecTools"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("codeExecTools")}
+          >
+            <Wrench className="size-4 shrink-0" />
+            自定义工具管理
+          </button>
         </nav>
       </div>
 
@@ -240,6 +254,10 @@ export function CustomizeView(): React.JSX.Element {
       ) : activeTab === "hooks" ? (
         <div className="flex flex-1 overflow-hidden">
           <HooksPanel />
+        </div>
+      ) : activeTab === "codeExecTools" ? (
+        <div className="flex flex-1 overflow-hidden">
+          <CodeExecToolsPanel />
         </div>
       ) : null}
     </div>

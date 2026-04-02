@@ -74,6 +74,7 @@ import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
+import { registerCodeExecToolsHandlers } from "./ipc/code-exec-tools"
 import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
 import { S3TraceReporter } from "./agent/trace/s3-reporter"
@@ -319,6 +320,7 @@ if (!gotTheLock) {
     registerOptimizerHandlers(ipcMain)
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
+    registerCodeExecToolsHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
 
     // Register file system handlers

@@ -7,6 +7,7 @@ import type { McpToolSearchMode } from "../mcp/tool-catalog"
 const SAVED_CODE_EXEC_TOOLS_VERSION = 1
 const SAVED_TOOL_PREFIX = "saved__"
 const DEFAULT_TIMEOUT_MS = 20_000
+const SAVED_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/
 
 const MAX_STRING_LENGTH = 32
 const MAX_ARRAY_ITEMS = 2
@@ -286,6 +287,49 @@ function ensureUniqueToolId(baseSlug: string, store: SavedCodeExecToolsFile, cod
   return candidate
 }
 
+export function getSavedCodeExecToolName(toolId: string): string {
+  const normalized = toolId.replace(/^saved__?/i, "").trim()
+  return normalized || toolId
+}
+
+export function validateSavedCodeExecToolName(toolName: string): string | null {
+  const normalized = toolName.replace(/^saved__?/i, "").trim()
+
+  if (!normalized) {
+    return "tool_name 不能为空"
+  }
+
+  if (!SAVED_TOOL_NAME_PATTERN.test(normalized)) {
+    return "tool_name 仅支持英文、数字、下划线(_)和短横线(-)，不能包含中文、空格或其他符号"
+  }
+
+  return null
+}
+
+export function resolveSavedCodeExecToolId(
+  toolName: string,
+  options?: { currentToolId?: string }
+): string {
+  const validationError = validateSavedCodeExecToolName(toolName)
+  if (validationError) {
+    throw new Error(validationError)
+  }
+
+  const store = loadStore()
+  const normalizedToolName = toolName.replace(/^saved__?/i, "").trim()
+  const baseSlug = toSnakeCase(normalizedToolName, "workflow")
+  const candidate = `${SAVED_TOOL_PREFIX}${ensureIdentifier(baseSlug, "workflow")}`
+
+  const conflict = store.entries.find(
+    (entry) => entry.toolId === candidate && entry.toolId !== options?.currentToolId
+  )
+  if (conflict) {
+    throw new Error(`工具 ID 已存在: ${candidate}`)
+  }
+
+  return candidate
+}
+
 function scoreKeyword(text: string, query: string, toolId: string): number {
   const textLower = text.toLowerCase()
   const queryLower = query.toLowerCase().trim()
@@ -380,7 +424,12 @@ function buildSavedCodeExecToolId(
   store: SavedCodeExecToolsFile,
   input: SavedCodeExecToolIdOptions
 ): string {
-  const normalizedToolName = input.toolName.replace(/^saved__?/i, "")
+  const validationError = validateSavedCodeExecToolName(input.toolName)
+  if (validationError) {
+    throw new Error(validationError)
+  }
+
+  const normalizedToolName = input.toolName.replace(/^saved__?/i, "").trim()
   const baseSlug = toSnakeCase(normalizedToolName, "workflow")
   return ensureUniqueToolId(baseSlug, store, input.codeHash)
 }
@@ -461,6 +510,44 @@ export function hasSavedCodeExecToolForCode(code: string, timeoutMs?: number): b
   const codeHash = computeSavedCodeExecToolHash(code, timeoutMs)
 
   return loadStore().entries.some((entry) => entry.codeHash === codeHash)
+}
+
+export function replaceSavedCodeExecTool(
+  currentToolId: string,
+  nextEntry: SavedCodeExecTool
+): SavedCodeExecTool {
+  const store = loadStore()
+  const index = store.entries.findIndex((entry) => entry.toolId === currentToolId)
+  if (index < 0) {
+    throw new Error(`工具不存在: ${currentToolId}`)
+  }
+
+  const toolIdConflict = store.entries.find(
+    (entry, entryIndex) => entryIndex !== index && entry.toolId === nextEntry.toolId
+  )
+  if (toolIdConflict) {
+    throw new Error(`工具 ID 已存在: ${nextEntry.toolId}`)
+  }
+
+  const codeHashConflict = store.entries.find(
+    (entry, entryIndex) => entryIndex !== index && entry.codeHash === nextEntry.codeHash
+  )
+  if (codeHashConflict) {
+    throw new Error(`已有相同代码的工具: ${codeHashConflict.toolId}`)
+  }
+
+  store.entries[index] = nextEntry
+  saveStore(store)
+  return nextEntry
+}
+
+export function deleteSavedCodeExecTool(toolId: string): void {
+  const store = loadStore()
+  const nextEntries = store.entries.filter((entry) => entry.toolId !== toolId)
+  if (nextEntries.length === store.entries.length) return
+
+  store.entries = nextEntries
+  saveStore(store)
 }
 
 export function searchSavedCodeExecTools(input: {

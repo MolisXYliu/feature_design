@@ -16,6 +16,12 @@ import type {
   ChatXConfig
 } from "../main/types"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewPayload,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../main/ipc/code-exec-tools"
 import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
@@ -1027,6 +1033,14 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("hooks:delete", id),
     setEnabled: (id: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("hooks:setEnabled", { id, enabled })
+  },
+  codeExecTools: {
+    list: (): Promise<ManagedSavedCodeExecTool[]> => ipcRenderer.invoke("codeExecTools:list"),
+    update: (payload: SavedCodeExecToolUpdatePayload): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:update", payload),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke("codeExecTools:delete", id),
+    runPreview: (payload: SavedCodeExecPreviewPayload): Promise<SavedCodeExecPreviewResult> =>
+      ipcRenderer.invoke("codeExecTools:runPreview", payload)
   },
   routing: {
     getMode: (): Promise<"auto" | "pinned"> => ipcRenderer.invoke("routing:getMode"),

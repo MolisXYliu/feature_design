@@ -16,6 +16,12 @@ import type {
 } from "../main/types"
 import {UserInfoConfig} from '../main/storage'
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewPayload,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../main/ipc/code-exec-tools"
 
 interface ElectronAPI {
   openExternal: Promise
@@ -513,6 +519,12 @@ interface CustomAPI {
     update: (config: HookUpsert & { id: string }) => Promise<{ id: string }>
     delete: (id: string) => Promise<void>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
+  }
+  codeExecTools: {
+    list: () => Promise<ManagedSavedCodeExecTool[]>
+    update: (payload: SavedCodeExecToolUpdatePayload) => Promise<ManagedSavedCodeExecTool>
+    delete: (id: string) => Promise<void>
+    runPreview: (payload: SavedCodeExecPreviewPayload) => Promise<SavedCodeExecPreviewResult>
   }
   routing: {
     getMode: () => Promise<"auto" | "pinned">
