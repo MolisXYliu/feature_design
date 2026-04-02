@@ -56,7 +56,6 @@ import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
 import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
-import { createGitWorkflowTool } from "./tools/git-workflow-tool"
 import { createPlaywrightTool } from "./tools/playwright-tool"
 import { createPlaywrightCliTool } from "./tools/playwright-cli-tool"
 import { createToolSearchTools } from "./tools/tool-search-tool"
@@ -619,6 +618,8 @@ function getModelInstance(
   return new ChatOpenAI({
     model: resolvedModel,
     apiKey,
+    maxRetries: 1,
+    timeout: 60_000,
     configuration: {
       baseURL: customConfig.baseUrl
     }
@@ -819,8 +820,6 @@ ${subagentShellGuidance}
 - edit_file: edit a file in the filesystem
 - glob: find files matching a pattern (e.g., "**/*.py")
 - grep: search for literal text within files (NOT regex). Do NOT use "|", ".*" or other regex syntax — call grep once per term instead.
-- git_workflow: get git info silently without any response or commentary. After calling this tool, output：成功！你可以展开本工具进行提交。.
-- When git_workflow is available, do NOT use execute to run git add/git commit/git push. Submit code only via git_workflow.
 - Browser strategy: for browser tasks, first follow any matching enabled skill; only if no relevant skill is available, use browser_playwright.
 - browser_playwright: built-in browser automation and page interaction tool powered by project-local Playwright (fallback when no matching browser skill exists).
 
@@ -897,12 +896,69 @@ The workspace root is: ${workspacePath}`
     extraTools.push(createSkillEvolutionTool({ threadId: options.threadId }))
   }
 
-  extraTools.push(createGitWorkflowTool(workspacePath))
   extraTools.push(createPlaywrightTool(workspacePath))
+
+  // Wrap extra tools so that errors are returned as strings instead of throwing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function wrapToolErrors(tools: any[]): void {
+    for (const t of tools) {
+      if (typeof t.func === "function") {
+        const originalFunc = t.func
+        t.func = async (...args: unknown[]) => {
+          try {
+            return await originalFunc.apply(t, args)
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            const level = e instanceof TypeError || e instanceof ReferenceError ? "error" : "warn"
+            console[level](`[Runtime] Tool "${t.name}" error (non-fatal):`, msg)
+            return msg
+          }
+        }
+      }
+    }
+  }
+  wrapToolErrors(extraTools)
+  wrapToolErrors(memoryTools as any[])
+
+  // Wrap extra tools so that errors are returned as strings instead of throwing
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function wrapToolErrors(tools: any[]): void {
+    for (const t of tools) {
+      if (typeof t.func === "function") {
+        const originalFunc = t.func
+        t.func = async (...args: unknown[]) => {
+          try {
+            return await originalFunc.apply(t, args)
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            const level = e instanceof TypeError || e instanceof ReferenceError ? "error" : "warn"
+            console[level](`[Runtime] Tool "${t.name}" error (non-fatal):`, msg)
+            return msg
+          }
+        }
+      }
+    }
+  }
+  wrapToolErrors(extraTools)
+  wrapToolErrors(memoryTools as any[])
 
   if (toolSearchTools.some((tool) => (tool as { name?: string }).name === "search_tool")) {
     console.log("[Runtime] Added tool search tools")
     systemPrompt += LAZY_MCP_SYSTEM_PROMPT
+    wrapToolErrors(toolSearchTools as any[])
+  }
+
+  if (allMcpTools.length > 0) {
+    extraTools.push(createCodeExecTool({
+      workspacePath,
+      threadId: options.threadId,
+      modelId: options.modelId,
+      yoloMode,
+      capabilityService,
+      approvalStore,
+      requestApproval
+    }))
+    systemPrompt += CODE_EXEC_SYSTEM_PROMPT
   }
 
   if (allMcpTools.length > 0) {
@@ -925,8 +981,7 @@ The workspace root is: ${workspacePath}`
   console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", triggerTokens, "→ keep:", keepTokens, "→ tool evict limit:", toolEvictLimit, "→ trim for summary:", trimForSummary, "→ max output bytes:", maxOutputBytes)
 
   const finalTools = [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools]
-  const hasGitWorkflowTool = finalTools.some((t) => (t as { name?: string }).name === "git_workflow")
-  backend.setGitWorkflowCommitOnly(hasGitWorkflowTool)
+  backend.setGitWorkflowCommitOnly(false)
   console.log("[Runtime] Final tool list:", finalTools.map((t) => (t as { name?: string }).name ?? "(unnamed)"))
 
   const agent = createDeepAgent({

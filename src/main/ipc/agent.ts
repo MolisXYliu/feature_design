@@ -55,6 +55,11 @@ import {
   type SkillProposal,
   type WorthinessResult
 } from "../agent/skill-evolution/skill-proposal-logic"
+import {
+  isRetryableApiError,
+  buildOrderedChain,
+  type FailoverAttempt
+} from "../agent/failover"
 import type {
   AgentInvokeParams,
   AgentResumeParams,
@@ -572,6 +577,8 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
     let toolErrorCount = 0
     // High-water mark of input tokens — hoisted for catch/finally access
     let highWaterInputTokens = 0
+    // Actual model used after failover — hoisted for catch/finally routing feedback
+    let usedModelId: string | undefined
 
     try {
       // Get workspace path from thread metadata - REQUIRED
@@ -614,7 +621,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         requestedModelId,
         routingMode: getGlobalRoutingMode()
       }).catch(() => null)
-      const effectiveModelId = invokeRoutingResult?.resolvedModelId ?? requestedModelId
+      let effectiveModelId = invokeRoutingResult?.resolvedModelId ?? requestedModelId
 
       // Persist routing decision for thread continuity (sticky/force logic next turn)
       if (invokeRoutingResult) rememberRoutingDecision(threadId, invokeRoutingResult)
@@ -637,27 +644,93 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         })
       }
 
-      const agent = await createAgentRuntime({
-        threadId,
-        workspacePath,
-        modelId: effectiveModelId,
-        abortSignal: abortController.signal,
-        noSkillEvolutionTool: true
-      })
       const humanMessage = new HumanMessage(message)
+      const streamConfig = {
+        configurable: { thread_id: threadId },
+        signal: abortController.signal,
+        streamMode: ["messages", "values"] as ("messages" | "values")[],
+        recursionLimit: 1000
+      }
 
-      // Stream with both modes:
-      // - 'messages' for real-time token streaming
-      // - 'values' for full state (todos, files, etc.)
-      const stream = await agent.stream(
-        { messages: [humanMessage] },
-        {
-          configurable: { thread_id: threadId },
-          signal: abortController.signal,
-          streamMode: ["messages", "values"],
-          recursionLimit: 1000
+      // ── Failover loop: try models in order, resume from checkpoint on retryable errors ──
+      const primaryTier = invokeRoutingResult?.resolvedTier ?? "premium"
+      const orderedChain = buildOrderedChain(effectiveModelId, invokeRoutingResult?.fallbackChain, primaryTier)
+      const failoverAttempts: FailoverAttempt[] = []
+      usedModelId = effectiveModelId
+      let isFirstAttempt = true
+      let agent: Awaited<ReturnType<typeof createAgentRuntime>> | null = null
+      let stream: AsyncIterable<unknown> | null = null
+
+      for (const candidateId of orderedChain) {
+        if (abortController.signal.aborted) break
+        try {
+          agent = await createAgentRuntime({
+            threadId,
+            workspacePath,
+            modelId: candidateId,
+            abortSignal: abortController.signal,
+            noSkillEvolutionTool: true
+          })
+          // First attempt sends the message; subsequent attempts resume from checkpoint
+          const input = isFirstAttempt ? { messages: [humanMessage] } : null
+          stream = await agent.stream(input, streamConfig)
+          usedModelId = candidateId
+          break
+        } catch (err) {
+          if (!isRetryableApiError(err)) throw err
+          failoverAttempts.push({ modelId: candidateId, error: String(err), timestamp: Date.now() })
+          console.warn(`[Agent][Failover] ${candidateId} failed: ${err}, trying next...`)
+          // Keep isFirstAttempt=true: init-time errors (createAgentRuntime / agent.stream)
+          // happen before any graph tick, so HumanMessage is NOT yet checkpointed.
+          // Next candidate must still send { messages: [humanMessage] }.
+          if (!abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 500))
+          }
         }
-      )
+      }
+
+      // P3: user cancellation during failover should not be reported as hard error
+      if (abortController.signal.aborted) {
+        // Fall through to outer abort handling
+        throw Object.assign(new Error("aborted"), { name: "AbortError" })
+      }
+
+      if (!stream || !agent) {
+        const allErrors = failoverAttempts.map((a) => `${a.modelId}: ${a.error}`).join("; ")
+        throw new Error(`All models failed: ${allErrors}`)
+      }
+
+      // Notify frontend if failover happened — update model display + context window
+      const notifyFailover = (): void => {
+        if (failoverAttempts.length > 0 && usedModelId !== effectiveModelId) {
+          const usedCfgId = usedModelId?.startsWith("custom:") ? usedModelId.slice("custom:".length) : usedModelId
+          const usedCfg = getCustomModelConfigs().find((c) => c.id === usedCfgId)
+          window.webContents.send(channel, {
+            type: "custom",
+            data: {
+              type: "routing_result",
+              resolvedModelId: usedModelId,
+              resolvedTier: usedCfg?.tier ?? "premium",
+              routeReason: `failover from ${failoverAttempts[0].modelId}`
+            }
+          })
+          window.webContents.send(channel, {
+            type: "custom",
+            data: { type: "model_failover", attempts: failoverAttempts, activeModelId: usedModelId }
+          })
+          // P2: persist failover model + sticky in a single atomic write
+          rememberRoutingDecision(threadId, {
+            resolvedModelId: usedModelId!,
+            resolvedTier: usedCfg?.tier ?? "premium",
+            routeReason: `failover from ${failoverAttempts[0].modelId}`,
+            fallbackChain: [],
+            layer: "pinned"
+          }, usedModelId!)
+          // Update effectiveModelId for downstream trace/feedback
+          effectiveModelId = usedModelId
+        }
+      }
+      notifyFailover()
 
       // Update tracer with resolved modelId.
       // Set modelName from config.model (the real API model name, e.g. "MiniMax-M2.7") as an
@@ -1057,20 +1130,59 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
       let lastFinalText = ""  // 最终回复（不含中间工具推理），用于 ChatX HTTP 回复
 
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break
+      // P1: Mid-stream failover — if the stream fails with a retryable error,
+      // try remaining models in the chain using resume semantics.
+      const remainingCandidates = orderedChain.slice(
+        usedModelId ? orderedChain.indexOf(usedModelId) + 1 : orderedChain.length
+      )
+      let activeStream: AsyncIterable<unknown> = stream
 
-        const [mode, data] = chunk as unknown as [string, unknown]
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        try {
+          for await (const chunk of activeStream) {
+            if (abortController.signal.aborted) break
 
-        // Serialize first — live BaseMessage objects must be serialized before
-        // we can inspect the LangChain class path (msgChunk.id becomes the
-        // class array ["langchain_core","messages","AIMessageChunk"] only after
-        // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
-        const serialized = JSON.parse(JSON.stringify(data))
-        // UI forwarding is the primary path. Trace / metrics / skill-evolution
-        // processing below are side effects and must never block streaming.
-        forwardStreamChunk(mode, serialized)
-        processChunkSideEffects(mode, serialized)
+            const [mode, data] = chunk as unknown as [string, unknown]
+
+            // Serialize first — live BaseMessage objects must be serialized before
+            // we can inspect the LangChain class path (msgChunk.id becomes the
+            // class array ["langchain_core","messages","AIMessageChunk"] only after
+            // toJSON() / JSON.stringify; on the live object, .id is the msg-id string).
+            const serialized = JSON.parse(JSON.stringify(data))
+            // UI forwarding is the primary path. Trace / metrics / skill-evolution
+            // processing below are side effects and must never block streaming.
+            forwardStreamChunk(mode, serialized)
+            processChunkSideEffects(mode, serialized)
+          }
+          break // Stream completed successfully
+        } catch (midStreamErr) {
+          if (!isRetryableApiError(midStreamErr) || remainingCandidates.length === 0) {
+            throw midStreamErr
+          }
+          if (abortController.signal.aborted) throw midStreamErr
+
+          const failedModelId = usedModelId ?? "unknown"
+          failoverAttempts.push({ modelId: failedModelId, error: String(midStreamErr), timestamp: Date.now() })
+          console.warn(`[Agent][Failover] Mid-stream ${failedModelId} failed: ${midStreamErr}, trying next...`)
+
+          if (!abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 500))
+          }
+
+          // Try next candidate with resume semantics
+          const nextCandidate = remainingCandidates.shift()!
+          agent = await createAgentRuntime({
+            threadId,
+            workspacePath,
+            modelId: nextCandidate,
+            abortSignal: abortController.signal,
+            noSkillEvolutionTool: true
+          })
+          activeStream = await agent.stream(null, streamConfig) // resume from checkpoint
+          usedModelId = nextCandidate
+          notifyFailover()
+        }
       }
 
       if (!abortController.signal.aborted) {
@@ -1085,7 +1197,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         if (invokeRoutingResult) {
           rememberRoutingFeedback(threadId, {
             resolvedTier: invokeRoutingResult.resolvedTier,
-            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            resolvedModelId: usedModelId ?? invokeRoutingResult.resolvedModelId,
             outcome: "success",
             toolCallCount: toolCallCounter.getCount(),
             toolErrorCount,
@@ -1193,7 +1305,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         if (invokeRoutingResult) {
           rememberRoutingFeedback(threadId, {
             resolvedTier: invokeRoutingResult.resolvedTier,
-            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            resolvedModelId: usedModelId ?? invokeRoutingResult.resolvedModelId,
             outcome: "error",
             toolCallCount: toolCallCounter.getCount(),
             toolErrorCount,
@@ -1206,7 +1318,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         if (invokeRoutingResult) {
           rememberRoutingFeedback(threadId, {
             resolvedTier: invokeRoutingResult.resolvedTier,
-            resolvedModelId: invokeRoutingResult.resolvedModelId,
+            resolvedModelId: usedModelId ?? invokeRoutingResult.resolvedModelId,
             outcome: "cancelled",
             toolCallCount: toolCallCounter.getCount(),
             toolErrorCount,
@@ -1275,16 +1387,9 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         requestedModelId: requestedModelIdResume,
         routingMode: getGlobalRoutingMode()
       }).catch(() => null)
-      const effectiveModelId = resumeRoutingResult?.resolvedModelId ?? requestedModelIdResume
+      const effectiveResumeModelId = resumeRoutingResult?.resolvedModelId ?? requestedModelIdResume
 
-      const agent = await createAgentRuntime({
-        threadId,
-        workspacePath,
-        modelId: effectiveModelId,
-        abortSignal: abortController.signal,
-        noSkillEvolutionTool: true
-      })
-      const config = {
+      const resumeStreamConfig = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
         streamMode: ["messages", "values"] as ("messages" | "values")[],
@@ -1297,18 +1402,113 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       const pendingCount = command?.resume?.pendingCount ?? 1
       const decisions = Array.from({ length: pendingCount }, () => ({ type: decisionType }))
       const resumeValue = { decisions }
-      const stream = await agent.stream(new Command({ resume: resumeValue }), config)
 
-      for await (const chunk of stream) {
+      // ── Failover loop for resume ──
+      const resumePrimaryTier = resumeRoutingResult?.resolvedTier ?? "premium"
+      const resumeOrderedChain = buildOrderedChain(effectiveResumeModelId, resumeRoutingResult?.fallbackChain, resumePrimaryTier)
+      const resumeFailoverAttempts: FailoverAttempt[] = []
+      let resumeUsedModelId = effectiveResumeModelId
+      let resumeStream: AsyncIterable<unknown> | null = null
+
+      for (const candidateId of resumeOrderedChain) {
         if (abortController.signal.aborted) break
+        try {
+          const resumeAgent = await createAgentRuntime({
+            threadId,
+            workspacePath,
+            modelId: candidateId,
+            abortSignal: abortController.signal,
+            noSkillEvolutionTool: true
+          })
+          resumeStream = await resumeAgent.stream(new Command({ resume: resumeValue }), resumeStreamConfig)
+          resumeUsedModelId = candidateId
+          break
+        } catch (err) {
+          if (!isRetryableApiError(err)) throw err
+          resumeFailoverAttempts.push({ modelId: candidateId, error: String(err), timestamp: Date.now() })
+          console.warn(`[Agent][Failover][Resume] ${candidateId} failed: ${err}, trying next...`)
+          if (!abortController.signal.aborted) {
+            await new Promise((r) => setTimeout(r, 500))
+          }
+        }
+      }
 
-        const [mode, data] = chunk as unknown as [string, unknown]
+      // P3: cancellation during failover
+      if (abortController.signal.aborted) {
+        throw Object.assign(new Error("aborted"), { name: "AbortError" })
+      }
 
-        window.webContents.send(channel, {
-          type: "stream",
-          mode,
-          data: JSON.parse(JSON.stringify(data))
-        })
+      if (!resumeStream) {
+        const allErrors = resumeFailoverAttempts.map((a) => `${a.modelId}: ${a.error}`).join("; ")
+        throw new Error(`All models failed during resume: ${allErrors}`)
+      }
+
+      // Notify frontend + persist routing state if failover happened
+      const notifyResumeFailover = (): void => {
+        if (resumeFailoverAttempts.length > 0 && resumeUsedModelId !== effectiveResumeModelId) {
+          const usedCfgId = resumeUsedModelId?.startsWith("custom:") ? resumeUsedModelId.slice("custom:".length) : resumeUsedModelId
+          const usedCfg = getCustomModelConfigs().find((c) => c.id === usedCfgId)
+          window.webContents.send(channel, {
+            type: "custom",
+            data: {
+              type: "routing_result",
+              resolvedModelId: resumeUsedModelId,
+              resolvedTier: usedCfg?.tier ?? "premium",
+              routeReason: `failover from ${resumeFailoverAttempts[0].modelId}`
+            }
+          })
+          window.webContents.send(channel, {
+            type: "custom",
+            data: { type: "model_failover", attempts: resumeFailoverAttempts, activeModelId: resumeUsedModelId }
+          })
+          // P2: persist failover model + sticky in a single atomic write
+          rememberRoutingDecision(threadId, {
+            resolvedModelId: resumeUsedModelId!,
+            resolvedTier: usedCfg?.tier ?? "premium",
+            routeReason: `failover from ${resumeFailoverAttempts[0].modelId}`,
+            fallbackChain: [],
+            layer: "pinned"
+          }, resumeUsedModelId!)
+        }
+      }
+      notifyResumeFailover()
+
+      // P1: Mid-stream failover for resume
+      const resumeRemainingCandidates = resumeOrderedChain.slice(
+        resumeUsedModelId ? resumeOrderedChain.indexOf(resumeUsedModelId) + 1 : resumeOrderedChain.length
+      )
+      let activeResumeStream: AsyncIterable<unknown> = resumeStream
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        try {
+          for await (const chunk of activeResumeStream) {
+            if (abortController.signal.aborted) break
+            const [mode, data] = chunk as unknown as [string, unknown]
+            window.webContents.send(channel, {
+              type: "stream",
+              mode,
+              data: JSON.parse(JSON.stringify(data))
+            })
+          }
+          break
+        } catch (midErr) {
+          if (!isRetryableApiError(midErr) || resumeRemainingCandidates.length === 0) throw midErr
+          if (abortController.signal.aborted) throw midErr
+
+          resumeFailoverAttempts.push({ modelId: resumeUsedModelId ?? "unknown", error: String(midErr), timestamp: Date.now() })
+          console.warn(`[Agent][Failover][Resume] Mid-stream ${resumeUsedModelId} failed: ${midErr}, trying next...`)
+          if (!abortController.signal.aborted) await new Promise((r) => setTimeout(r, 500))
+
+          const nextCandidate = resumeRemainingCandidates.shift()!
+          const nextAgent = await createAgentRuntime({
+            threadId, workspacePath, modelId: nextCandidate,
+            abortSignal: abortController.signal, noSkillEvolutionTool: true
+          })
+          activeResumeStream = await nextAgent.stream(new Command({ resume: resumeValue }), resumeStreamConfig)
+          resumeUsedModelId = nextCandidate
+          notifyResumeFailover()
+        }
       }
 
       if (!abortController.signal.aborted) {
@@ -1386,8 +1586,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       }).catch(() => null)
       const effectiveInterruptModelId = interruptRoutingResult?.resolvedModelId ?? modelId ?? undefined
 
-      const agent = await createAgentRuntime({ threadId, workspacePath, modelId: effectiveInterruptModelId, abortSignal: abortController.signal, noSkillEvolutionTool: true })
-      const config = {
+      const interruptStreamConfig = {
         configurable: { thread_id: threadId },
         signal: abortController.signal,
         streamMode: ["messages", "values"] as ("messages" | "values")[],
@@ -1395,18 +1594,112 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
       }
 
       if (decision.type === "approve") {
-        // Resume execution by invoking with null (continues from checkpoint)
-        const stream = await agent.stream(null, config)
+        // ── Failover loop for interrupt-continue ──
+        const intPrimaryTier = interruptRoutingResult?.resolvedTier ?? "premium"
+        const intOrderedChain = buildOrderedChain(effectiveInterruptModelId, interruptRoutingResult?.fallbackChain, intPrimaryTier)
+        const intFailoverAttempts: FailoverAttempt[] = []
+        let intUsedModelId = effectiveInterruptModelId
+        let intStream: AsyncIterable<unknown> | null = null
 
-        for await (const chunk of stream) {
+        for (const candidateId of intOrderedChain) {
           if (abortController.signal.aborted) break
+          try {
+            const intAgent = await createAgentRuntime({
+              threadId,
+              workspacePath,
+              modelId: candidateId,
+              abortSignal: abortController.signal,
+              noSkillEvolutionTool: true
+            })
+            intStream = await intAgent.stream(null, interruptStreamConfig)
+            intUsedModelId = candidateId
+            break
+          } catch (err) {
+            if (!isRetryableApiError(err)) throw err
+            intFailoverAttempts.push({ modelId: candidateId, error: String(err), timestamp: Date.now() })
+            console.warn(`[Agent][Failover][Interrupt] ${candidateId} failed: ${err}, trying next...`)
+            if (!abortController.signal.aborted) {
+              await new Promise((r) => setTimeout(r, 500))
+            }
+          }
+        }
 
-          const [mode, data] = chunk as unknown as [string, unknown]
-          window.webContents.send(channel, {
-            type: "stream",
-            mode,
-            data: JSON.parse(JSON.stringify(data))
-          })
+        // P3: cancellation during failover
+        if (abortController.signal.aborted) {
+          throw Object.assign(new Error("aborted"), { name: "AbortError" })
+        }
+
+        if (!intStream) {
+          const allErrors = intFailoverAttempts.map((a) => `${a.modelId}: ${a.error}`).join("; ")
+          throw new Error(`All models failed during interrupt-continue: ${allErrors}`)
+        }
+
+        // Notify frontend + persist routing state if failover happened
+        const notifyIntFailover = (): void => {
+          if (intFailoverAttempts.length > 0 && intUsedModelId !== effectiveInterruptModelId) {
+            const usedCfgId = intUsedModelId?.startsWith("custom:") ? intUsedModelId.slice("custom:".length) : intUsedModelId
+            const usedCfg = getCustomModelConfigs().find((c) => c.id === usedCfgId)
+            window.webContents.send(channel, {
+              type: "custom",
+              data: {
+                type: "routing_result",
+                resolvedModelId: intUsedModelId,
+                resolvedTier: usedCfg?.tier ?? "premium",
+                routeReason: `failover from ${intFailoverAttempts[0].modelId}`
+              }
+            })
+            window.webContents.send(channel, {
+              type: "custom",
+              data: { type: "model_failover", attempts: intFailoverAttempts, activeModelId: intUsedModelId }
+            })
+            // P2: persist failover model + sticky in a single atomic write
+            rememberRoutingDecision(threadId, {
+              resolvedModelId: intUsedModelId!,
+              resolvedTier: usedCfg?.tier ?? "premium",
+              routeReason: `failover from ${intFailoverAttempts[0].modelId}`,
+              fallbackChain: [],
+              layer: "pinned"
+            }, intUsedModelId!)
+          }
+        }
+        notifyIntFailover()
+
+        // P1: Mid-stream failover for interrupt-continue
+        const intRemainingCandidates = intOrderedChain.slice(
+          intUsedModelId ? intOrderedChain.indexOf(intUsedModelId) + 1 : intOrderedChain.length
+        )
+        let activeIntStream: AsyncIterable<unknown> = intStream
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          try {
+            for await (const chunk of activeIntStream) {
+              if (abortController.signal.aborted) break
+              const [mode, data] = chunk as unknown as [string, unknown]
+              window.webContents.send(channel, {
+                type: "stream",
+                mode,
+                data: JSON.parse(JSON.stringify(data))
+              })
+            }
+            break
+          } catch (midErr) {
+            if (!isRetryableApiError(midErr) || intRemainingCandidates.length === 0) throw midErr
+            if (abortController.signal.aborted) throw midErr
+
+            intFailoverAttempts.push({ modelId: intUsedModelId ?? "unknown", error: String(midErr), timestamp: Date.now() })
+            console.warn(`[Agent][Failover][Interrupt] Mid-stream ${intUsedModelId} failed: ${midErr}, trying next...`)
+            if (!abortController.signal.aborted) await new Promise((r) => setTimeout(r, 500))
+
+            const nextCandidate = intRemainingCandidates.shift()!
+            const nextAgent = await createAgentRuntime({
+              threadId, workspacePath, modelId: nextCandidate,
+              abortSignal: abortController.signal, noSkillEvolutionTool: true
+            })
+            activeIntStream = await nextAgent.stream(null, interruptStreamConfig)
+            intUsedModelId = nextCandidate
+            notifyIntFailover()
+          }
         }
 
         if (!abortController.signal.aborted) {

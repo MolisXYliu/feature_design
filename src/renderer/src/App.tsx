@@ -1,14 +1,24 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
-import { Briefcase, Eye, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
+import {
+  Briefcase,
+  Eye,
+  GitBranch,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen
+} from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
+import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 import { initMMJ } from "../js/mmjUtils"
+import { Toaster } from "sonner"
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -31,7 +41,7 @@ const LEFT_DEFAULT = 280
 const RIGHT_MIN = 250
 const RIGHT_MAX = 1600
 const RIGHT_DEFAULT = 300
-const RIGHT_PREVIEW_EXPAND_VW = 0.4
+const RIGHT_PREVIEW_EXPAND_VW = 0.35
 
 function App(): React.JSX.Element {
   const {
@@ -48,11 +58,15 @@ function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
-  const [rightModule, setRightModule] = useState<"work" | "preview">("work")
+  const [rightModule, setRightModule] = useState<"work" | "preview" | "git">("work")
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
+  const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
+  const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
+  const moduleActiveClass = "text-status-warning bg-status-warning/15 border-status-warning/45 hover:bg-status-warning/20"
+  const moduleInactiveClass = "text-foreground hover:bg-muted/45"
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
 
@@ -166,10 +180,87 @@ function App(): React.JSX.Element {
     handlePreviewCollapse()
   }, [handlePreviewCollapse])
 
+  const selectGitModule = useCallback(() => {
+    setRightModule("git")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
+
   useEffect(() => {
-    setRightModule("work")
-    handlePreviewCollapse()
-  }, [currentThreadId, handlePreviewCollapse])
+    let cancelled = false
+
+    const syncRightModuleByWorkspace = async (): Promise<void> => {
+      if (!currentThreadId || mainView !== "thread") {
+        setRightModule("work")
+        handlePreviewCollapse()
+        return
+      }
+
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (cancelled) return
+
+        const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
+        if (isGitWorkspace) {
+          autoOpenedGitForThreadRef.current = currentThreadId
+          setRightModule("git")
+          handlePreviewExpand()
+          return
+        }
+
+        setRightModule("work")
+        handlePreviewCollapse()
+      } catch {
+        if (cancelled) return
+        setRightModule("work")
+        handlePreviewCollapse()
+      }
+    }
+
+    void syncRightModuleByWorkspace()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentThreadId, mainView, handlePreviewCollapse, handlePreviewExpand])
+
+  useEffect(() => {
+    if (!currentThreadId || mainView !== "thread") {
+      setHasPendingGitDiff(false)
+      return
+    }
+    let cancelled = false
+
+    const refreshSummary = async (): Promise<void> => {
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (!cancelled) {
+          const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
+          setHasPendingGitDiff(Boolean(isGitWorkspace && summary.hasPendingDiff))
+          if (isGitWorkspace && autoOpenedGitForThreadRef.current !== currentThreadId) {
+            autoOpenedGitForThreadRef.current = currentThreadId
+            setRightModule("git")
+            handlePreviewExpand()
+          }
+        }
+      } catch {
+        if (!cancelled) setHasPendingGitDiff(false)
+      }
+    }
+
+    refreshSummary()
+    const timer = window.setInterval(refreshSummary, 3000)
+    const cleanupFs = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId === currentThreadId) {
+        refreshSummary()
+      }
+    })
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      cleanupFs()
+    }
+  }, [currentThreadId, mainView, handlePreviewExpand])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -267,17 +358,16 @@ function App(): React.JSX.Element {
                 {sidebarCollapsed ? (
                   <PanelLeftOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelLeftClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{sidebarToggleText}</span>
               </button>
             )}
           </div>
@@ -324,8 +414,8 @@ function App(): React.JSX.Element {
                   type="button"
                   className={`${panelToggleBaseClass} ${
                     rightModule === "preview"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
@@ -338,9 +428,26 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
+                    rightModule === "git"
+                      ? moduleActiveClass
+                      : hasPendingGitDiff
+                        ? "text-foreground border-status-warning/40 hover:bg-muted/45"
+                        : moduleInactiveClass
+                  }`}
+                  onClick={selectGitModule}
+                  title="Git 操作"
+                  aria-label="Git 操作"
+                  aria-pressed={rightModule === "git"}
+                >
+                  <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
+                  <span>Git 操作</span>
+                </button>
+                <button
+                  type="button"
+                  className={`${panelToggleBaseClass} ${
                     rightModule === "work"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
@@ -368,17 +475,16 @@ function App(): React.JSX.Element {
                 {rightPanelCollapsed ? (
                   <PanelRightOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelRightClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{rightPanelToggleText}</span>
               </button>
             )}
           </div>
@@ -391,7 +497,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : (
+        ) : mainView !== "claudecode" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -435,6 +541,7 @@ function App(): React.JSX.Element {
                   <RightPanel
                     moduleMode={rightModule}
                     onRequestPreviewMode={selectPreviewModule}
+                    onRequestGitMode={selectGitModule}
                     onRequestWorkMode={selectWorkModule}
                     onPreviewFullscreenChange={setPreviewFullscreen}
                   />
@@ -442,8 +549,25 @@ function App(): React.JSX.Element {
               </>
             )}
           </div>
-        )}
+        ) : null}
+
+        {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
+        <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>
+          {/* claudecode 模式下也显示侧边栏 */}
+          {mainView === "claudecode" && !sidebarCollapsed && (
+            <>
+              <div style={{ width: leftWidth }} className="shrink-0">
+                <ThreadSidebar />
+              </div>
+              <ResizeHandle onDrag={handleLeftResize} />
+            </>
+          )}
+          <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+            <ClaudeCodePanel />
+          </main>
+        </div>
       </div>
+      <Toaster position="top-center" richColors duration={2200} />
     </ThreadProvider>
   )
 }

@@ -375,10 +375,51 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Detect commands that are known to fail in elevated mode due to permission/cert issues.
    * These are routed directly to unelevated mode to avoid wasted elevated attempt.
    */
+  /**
+   * Cache for isPythonCliTool results to avoid repeated filesystem lookups.
+   * Key: executable name (lowercase), Value: whether it lives in a Python Scripts dir.
+   */
+  private static _pythonCliCache = new Map<string, boolean>()
+
+  /**
+   * Returns true if the command's executable is located in a Python Scripts
+   * directory on PATH. Detects any pip-installed CLI tool automatically without
+   * requiring a hardcoded allowlist.
+   *
+   * These tools rely on USERPROFILE/HOME/APPDATA to find their config and cache.
+   * In elevated mode those env vars point to the sandbox user's profile (which
+   * may not exist), causing empty-string path resolution → EPERM lstat ''.
+   * Running them in unelevated mode keeps the real user identity, fixing the issue.
+   */
+  private static isPythonCliTool(command: string): boolean {
+    if (process.platform !== "win32") return false
+    // Extract just the executable token (skip shell built-ins or paths with separators)
+    const firstToken = command.trim().split(/\s+/)[0]
+    if (!firstToken || firstToken.includes("/") || firstToken.includes("\\")) return false
+    const exeName = firstToken.toLowerCase().replace(/\.exe$/i, "")
+    if (LocalSandbox._pythonCliCache.has(exeName)) {
+      return LocalSandbox._pythonCliCache.get(exeName)!
+    }
+    // Scan PATH for Python Scripts directories and check if the exe lives there
+    const pathDirs = (process.env.PATH || "").split(";")
+    for (const dir of pathDirs) {
+      if (!dir) continue
+      const ldir = dir.toLowerCase()
+      // Python Scripts dirs always contain both "python" and "script" in the path
+      if (!ldir.includes("python") || !ldir.includes("script")) continue
+      if (existsSync(path.join(dir, exeName + ".exe")) || existsSync(path.join(dir, exeName))) {
+        LocalSandbox._pythonCliCache.set(exeName, true)
+        return true
+      }
+    }
+    LocalSandbox._pythonCliCache.set(exeName, false)
+    return false
+  }
+
   private static shouldPreferUnelevated(command: string): boolean {
     const cmd = command.trim().toLowerCase()
     return (
-      // Python
+      // Python package managers
       /\bpip\s+install\b/.test(cmd)
       || /\bpip3\s+install\b/.test(cmd)
       || /\bpoetry\s+(install|add|update)\b/.test(cmd)
@@ -406,6 +447,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || /\bbundle\s+(install|update|add)\b/.test(cmd)
       // C/C++
       || /\bvcpkg\s+install\b/.test(cmd)
+      // Any pip-installed CLI tool detected via PATH scan (auto, no hardcoded list needed)
+      || LocalSandbox.isPythonCliTool(command)
     )
   }
 

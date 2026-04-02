@@ -80,12 +80,13 @@ export default defineConfig({
       lib: {
         entry: {
           index: "src/main/index.ts",
+          "pty-host": "src/main/pty-host.ts",
           "code-exec-helper": "src/main/code-exec/helper-entry.ts"
         },
         formats: ["cjs"]
       },
       rollupOptions: {
-        external: ["electron"],
+        external: ["electron", "node-pty"],
         plugins: [copyResources()]
       }
     }
