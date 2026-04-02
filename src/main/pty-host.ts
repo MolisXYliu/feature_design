@@ -6,7 +6,7 @@
 import { spawn as ptySpawn, IPty } from "node-pty"
 import { platform, homedir } from "os"
 import { existsSync } from "fs"
-import { join } from "path"
+import { join, basename } from "path"
 import { execSync } from "child_process"
 
 const activePtys = new Map<string, IPty>()
@@ -191,8 +191,13 @@ function handleCreate(msg: CreateMsg): void {
     const isJsFile = msg.claudePath.endsWith(".js")
     const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
 
-    // 构建启动命令
+    // Windows: 把我们找到的 bash.exe 路径告知 Claude Code，避免其内部检测失败
     const isWin = platform() === "win32"
+    if (isWin && !env.CLAUDE_CODE_GIT_BASH_PATH && basename(shell).toLowerCase().includes("bash")) {
+      env.CLAUDE_CODE_GIT_BASH_PATH = shell
+    }
+
+    // 构建启动命令
     let claudeCmd: string
     if (isJsFile) {
       if (isWin) {
