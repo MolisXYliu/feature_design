@@ -92,6 +92,8 @@ function findNodeExe(): string {
   const candidates = [
     join("C:\\", "Program Files", "nodejs", "node.exe"),
     join("C:\\", "Program Files (x86)", "nodejs", "node.exe"),
+    join("D:\\", "Program Files", "nodejs", "node.exe"),
+    join("D:\\", "Program Files (x86)", "nodejs", "node.exe"),
     join(homedir(), "scoop", "apps", "nodejs", "current", "node.exe"),
     join(homedir(), ".volta", "bin", "node.exe"),
   ]
