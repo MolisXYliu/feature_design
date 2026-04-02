@@ -674,6 +674,8 @@ function getModelInstance(
   return new ChatOpenAI({
     model: resolvedModel,
     apiKey,
+    maxRetries: 1,
+    timeout: 60_000,
     configuration: {
       baseURL: customConfig.baseUrl
     }

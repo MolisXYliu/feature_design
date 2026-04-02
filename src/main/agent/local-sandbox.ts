@@ -196,8 +196,47 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["APPDATA", roamingAppData],
       ["LOCALAPPDATA", localAppData],
       ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
-      ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME]
+      ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
+      // ── Tool cache/home redirects ──
+      // Sandbox user has no access to the host user's HOME directories.
+      // Redirect all tool caches to TEMP-based writable directories.
+      // Node.js
+      ["NPM_CONFIG_CACHE", path.win32.join(realTempDir, "sandbox-npm-cache")],
+      ["YARN_CACHE_FOLDER", path.win32.join(realTempDir, "sandbox-yarn-cache")],
+      ["PNPM_HOME", path.win32.join(realTempDir, "sandbox-pnpm-home")],
+      ["PNPM_STORE_DIR", path.win32.join(realTempDir, "sandbox-pnpm-store")],
+      // Go
+      ["GOPATH", path.win32.join(realTempDir, "sandbox-gopath")],
+      ["GOMODCACHE", path.win32.join(realTempDir, "sandbox-gopath", "pkg", "mod")],
+      ["GOBIN", path.win32.join(realTempDir, "sandbox-gopath", "bin")],
+      // Rust
+      ["CARGO_HOME", path.win32.join(realTempDir, "sandbox-cargo-home")],
+      ["RUSTUP_HOME", path.win32.join(realTempDir, "sandbox-rustup-home")],
+      // .NET
+      ["NUGET_PACKAGES", path.win32.join(realTempDir, "sandbox-nuget-packages")],
+      // Ruby
+      ["GEM_HOME", path.win32.join(realTempDir, "sandbox-gem-home")],
+      ["BUNDLE_PATH", path.win32.join(realTempDir, "sandbox-gem-home")],
+      // Python — PYTHONUSERBASE redirects pip's --user install target (fallback when
+      // site-packages is not writable). Without this, pip writes to %APPDATA%\Python
+      // which the sandbox user cannot access.
+      ["PYTHONUSERBASE", path.win32.join(realTempDir, "sandbox-python-user")],
+      ["PIP_CACHE_DIR", path.win32.join(realTempDir, "sandbox-pip-cache")],
+      ["POETRY_CACHE_DIR", path.win32.join(realTempDir, "sandbox-poetry-cache")],
+      ["CONDA_PKGS_DIRS", path.win32.join(realTempDir, "sandbox-conda-pkgs")],
+      // Gradle (JVM but uses its own env var, not JAVA_TOOL_OPTIONS)
+      ["GRADLE_USER_HOME", path.win32.join(realTempDir, "sandbox-gradle-home")],
+      // C/C++
+      ["VCPKG_DEFAULT_BINARY_CACHE", path.win32.join(realTempDir, "sandbox-vcpkg-cache")]
     ]
+
+    // Preserve host user's JAVA_HOME so the sandbox user can locate the JDK.
+    // The sandbox user's own profile has no JDK; without this, tools that depend
+    // on JAVA_HOME (javac, mvn, gradle, etc.) fail with "JAVA_HOME not found".
+    const hostJavaHome = process.env.JAVA_HOME
+    if (hostJavaHome) {
+      envOverrides.push(["JAVA_HOME", hostJavaHome])
+    }
 
     // Two-layer JVM user.home strategy:
     //   JAVA_TOOL_OPTIONS → user.home = TEMP-based writable dir (for app logs, caches, etc.)
@@ -211,16 +250,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
     const javaToolFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
     const mavenFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
-
-    // Ensure sandbox temp directories exist before setting env vars
-    // Sandbox subdirectories are pre-created and ACL-granted by executeInWindowsSandbox()
-    // before codex.exe starts — no need for mkdir in the preamble.
+    // sbt/ivy: redirect global base and ivy cache to TEMP so sbt doesn't write to ~/.sbt / ~/.ivy2
+    const sbtBase = path.win32.join(realTempDir, "sandbox-sbt")
+    const ivyHome = path.win32.join(realTempDir, "sandbox-ivy2")
+    const sbtFlags = `-Dsbt.global.base=${sbtBase} -Divy.home=${ivyHome}`
 
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
-      const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}"`
+      const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
       return `${base} & ${jvmOpts}`
     }
 
@@ -230,7 +269,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         .join("; ")
       const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
-      const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"`
+      const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
+      const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
       return `${base}; ${jvmOpts}`
     }
 
@@ -245,20 +285,68 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * No user.home redirect needed — same user, can read ~/.m2/settings.xml etc.
    */
   private static buildUnelevatedEnvPreamble(shellBase: string, tempDir: string): string {
+    // ── Tool cache/home redirects ──
+    // WRITE_RESTRICTED token only allows writing to workspace + TEMP.
+    // HOME directories (~/.npm, ~/.cargo, ~/.gradle, etc.) have no Everyone ACE,
+    // so tool caches must be redirected to TEMP-based writable directories.
+    const toolCacheOverrides: Array<[string, string]> = [
+      // Node.js
+      ["NPM_CONFIG_CACHE", path.win32.join(tempDir, "sandbox-npm-cache")],
+      ["YARN_CACHE_FOLDER", path.win32.join(tempDir, "sandbox-yarn-cache")],
+      ["PNPM_HOME", path.win32.join(tempDir, "sandbox-pnpm-home")],
+      ["PNPM_STORE_DIR", path.win32.join(tempDir, "sandbox-pnpm-store")],
+      // Go
+      ["GOPATH", path.win32.join(tempDir, "sandbox-gopath")],
+      ["GOMODCACHE", path.win32.join(tempDir, "sandbox-gopath", "pkg", "mod")],
+      ["GOBIN", path.win32.join(tempDir, "sandbox-gopath", "bin")],
+      // Rust
+      ["CARGO_HOME", path.win32.join(tempDir, "sandbox-cargo-home")],
+      ["RUSTUP_HOME", path.win32.join(tempDir, "sandbox-rustup-home")],
+      // .NET
+      ["NUGET_PACKAGES", path.win32.join(tempDir, "sandbox-nuget-packages")],
+      // Ruby
+      ["GEM_HOME", path.win32.join(tempDir, "sandbox-gem-home")],
+      ["BUNDLE_PATH", path.win32.join(tempDir, "sandbox-gem-home")],
+      // Python — PYTHONUSERBASE redirects pip's --user install target (fallback when
+      // site-packages is not writable). Without this, pip writes to %APPDATA%\Python
+      // which the restricted token cannot access.
+      ["PYTHONUSERBASE", path.win32.join(tempDir, "sandbox-python-user")],
+      ["PIP_CACHE_DIR", path.win32.join(tempDir, "sandbox-pip-cache")],
+      ["POETRY_CACHE_DIR", path.win32.join(tempDir, "sandbox-poetry-cache")],
+      ["CONDA_PKGS_DIRS", path.win32.join(tempDir, "sandbox-conda-pkgs")],
+      // Gradle
+      ["GRADLE_USER_HOME", path.win32.join(tempDir, "sandbox-gradle-home")],
+      // C/C++
+      ["VCPKG_DEFAULT_BINARY_CACHE", path.win32.join(tempDir, "sandbox-vcpkg-cache")]
+    ]
+
+    // ── JVM flags ──
     const mavenRepoLocal = path.win32.join(tempDir, "m2-sandbox-repo")
     const javaHome = path.win32.join(tempDir, "sandbox-java-home")
     const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
     const javaToolFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
     const mavenFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal}`
+    // sbt/ivy
+    const sbtBase = path.win32.join(tempDir, "sandbox-sbt")
+    const ivyHome = path.win32.join(tempDir, "sandbox-ivy2")
+    const sbtFlags = `-Dsbt.global.base=${sbtBase} -Divy.home=${ivyHome}`
 
     if (shellBase === "cmd") {
-      return `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}"`
+      const toolCache = toolCacheOverrides
+        .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
+        .join(" & ")
+      const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
+      return `${toolCache} & ${jvmOpts}`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
+      const toolCache = toolCacheOverrides
+        .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
+        .join("; ")
       const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
-      return `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"`
+      const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
+      return `${toolCache}; $env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
     }
 
     return ""
@@ -287,16 +375,81 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Detect commands that are known to fail in elevated mode due to permission/cert issues.
    * These are routed directly to unelevated mode to avoid wasted elevated attempt.
    */
+  /**
+   * Cache for isPythonCliTool results to avoid repeated filesystem lookups.
+   * Key: executable name (lowercase), Value: whether it lives in a Python Scripts dir.
+   */
+  private static _pythonCliCache = new Map<string, boolean>()
+
+  /**
+   * Returns true if the command's executable is located in a Python Scripts
+   * directory on PATH. Detects any pip-installed CLI tool automatically without
+   * requiring a hardcoded allowlist.
+   *
+   * These tools rely on USERPROFILE/HOME/APPDATA to find their config and cache.
+   * In elevated mode those env vars point to the sandbox user's profile (which
+   * may not exist), causing empty-string path resolution → EPERM lstat ''.
+   * Running them in unelevated mode keeps the real user identity, fixing the issue.
+   */
+  private static isPythonCliTool(command: string): boolean {
+    if (process.platform !== "win32") return false
+    // Extract just the executable token (skip shell built-ins or paths with separators)
+    const firstToken = command.trim().split(/\s+/)[0]
+    if (!firstToken || firstToken.includes("/") || firstToken.includes("\\")) return false
+    const exeName = firstToken.toLowerCase().replace(/\.exe$/i, "")
+    if (LocalSandbox._pythonCliCache.has(exeName)) {
+      return LocalSandbox._pythonCliCache.get(exeName)!
+    }
+    // Scan PATH for Python Scripts directories and check if the exe lives there
+    const pathDirs = (process.env.PATH || "").split(";")
+    for (const dir of pathDirs) {
+      if (!dir) continue
+      const ldir = dir.toLowerCase()
+      // Python Scripts dirs always contain both "python" and "script" in the path
+      if (!ldir.includes("python") || !ldir.includes("script")) continue
+      if (existsSync(path.join(dir, exeName + ".exe")) || existsSync(path.join(dir, exeName))) {
+        LocalSandbox._pythonCliCache.set(exeName, true)
+        return true
+      }
+    }
+    LocalSandbox._pythonCliCache.set(exeName, false)
+    return false
+  }
+
   private static shouldPreferUnelevated(command: string): boolean {
     const cmd = command.trim().toLowerCase()
-    return /\bpip\s+install\b/.test(cmd)
+    return (
+      // Python package managers
+      /\bpip\s+install\b/.test(cmd)
+      || /\bpip3\s+install\b/.test(cmd)
+      || /\bpoetry\s+(install|add|update)\b/.test(cmd)
+      || /\bconda\s+install\b/.test(cmd)
+      // Node.js
       || /\bnpm\s+install\b/.test(cmd)
       || /\bnpm\s+i\b/.test(cmd)
-      || /\byarn\s+add\b/.test(cmd)
-      || /\bpnpm\s+(add|install)\b/.test(cmd)
-      || /\bcargo\s+install\b/.test(cmd)
+      || /\bnpm\s+ci\b/.test(cmd)
+      || /\byarn\s+(add|install)\b/.test(cmd)
+      || /\bpnpm\s+(add|install|i)\b/.test(cmd)
+      || /\bnpx\s/.test(cmd)
+      // Rust
+      || /\bcargo\s+(install|build|test|run|fetch)\b/.test(cmd)
+      || /\brustup\s+(update|install|default)\b/.test(cmd)
+      // Go — build/test/run auto-download modules when not cached
+      || /\bgo\s+(build|test|run|get|install|mod\s+download)\b/.test(cmd)
+      // JVM
+      || /\bgradle\b/.test(cmd)
+      || /\bgradlew\b/.test(cmd)
+      || /\bsbt\b/.test(cmd)
+      // .NET
+      || /\bdotnet\s+(restore|build|test|run|publish)\b/.test(cmd)
+      // Ruby
       || /\bgem\s+install\b/.test(cmd)
-      || /\bconda\s+install\b/.test(cmd)
+      || /\bbundle\s+(install|update|add)\b/.test(cmd)
+      // C/C++
+      || /\bvcpkg\s+install\b/.test(cmd)
+      // Any pip-installed CLI tool detected via PATH scan (auto, no hardcoded list needed)
+      || LocalSandbox.isPythonCliTool(command)
+    )
   }
 
   constructor(options: LocalSandboxOptions = {}) {
@@ -1403,17 +1556,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * Check if the current process is running with administrator privileges (Windows only).
    * Cached after first call.
    *
+   * Uses `whoami /groups` + High Mandatory Level SID (S-1-16-12288) — the only
+   * reliable method. Queries the process token directly, no service dependency.
+   *
+   * Do NOT use `net session`: in corporate domain environments it can succeed
+   * for non-admin users due to group policy, producing a false positive that
+   * causes the UAC prompt to be skipped entirely.
+   *
+   * Do NOT use `fsutil dirty query` — it succeeds without admin on Windows 11.
+   *
    * IMPORTANT: In packaged Electron apps, process.cwd() may point to an
-   * invalid or ASAR-internal path, causing execSync to fail even when the
-   * process IS elevated. We explicitly set cwd to %SYSTEMROOT% and add
-   * windowsHide to prevent spurious failures.
-   *
-   * Uses two detection methods:
-   * 1. `net session` — classic, depends on LanmanServer service
-   * 2. `whoami /groups` + High Mandatory Level SID (S-1-16-12288) — most reliable,
-   *    queries the process token directly, no service dependency
-   *
-   * NOTE: Do NOT use `fsutil dirty query` — it succeeds without admin on Windows 11.
+   * invalid or ASAR-internal path, causing execSync to fail. We explicitly
+   * set cwd to %SYSTEMROOT% and add windowsHide to prevent spurious failures.
    */
   static isElevated(): boolean {
     if (LocalSandbox._isElevated !== null) return LocalSandbox._isElevated
@@ -1421,36 +1575,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       LocalSandbox._isElevated = false
       return false
     }
-    // Use a known-good cwd to avoid failures in packaged Electron apps
-    // where process.cwd() may point inside app.asar or a non-existent directory.
     const safeCwd = process.env.SYSTEMROOT || process.env.windir || "C:\\Windows"
-
-    // Method 1: net session (requires admin, depends on LanmanServer service)
-    try {
-      execSync("net session", { stdio: "ignore", windowsHide: true, cwd: safeCwd })
-      LocalSandbox._isElevated = true
-      console.log("[LocalSandbox] isElevated=true (net session)")
-      return true
-    } catch (e) {
-      console.log("[LocalSandbox] net session failed:", (e as Error).message?.slice(0, 120))
-    }
-    // Method 2: whoami /groups — check for High Mandatory Level SID (S-1-16-12288)
-    // This queries the process token directly, independent of any service.
-    // High = admin elevated, Medium (S-1-16-8192) = normal user or non-elevated admin.
     try {
       const output = execSync("whoami /groups", { encoding: "utf-8", windowsHide: true, cwd: safeCwd })
-      if (output.includes("S-1-16-12288")) {
-        LocalSandbox._isElevated = true
-        console.log("[LocalSandbox] isElevated=true (whoami /groups)")
-        return true
-      }
-      console.log("[LocalSandbox] whoami: no High Mandatory Level SID found")
+      LocalSandbox._isElevated = output.includes("S-1-16-12288")
+      console.log(`[LocalSandbox] isElevated=${LocalSandbox._isElevated} (whoami /groups)`)
     } catch (e) {
       console.log("[LocalSandbox] whoami failed:", (e as Error).message?.slice(0, 120))
+      LocalSandbox._isElevated = false
     }
-    LocalSandbox._isElevated = false
-    console.log("[LocalSandbox] isElevated=false")
-    return false
+    return LocalSandbox._isElevated
   }
 
   /** Directories that currently have the Everyone ACE granted, with reference count.

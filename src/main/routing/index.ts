@@ -1,7 +1,7 @@
 import { createHash } from "crypto"
 import { ChatOpenAI } from "@langchain/openai"
 import { HumanMessage, SystemMessage } from "@langchain/core/messages"
-import { getModelByTier, getCustomModelConfigs, getGlobalRoutingMode } from "../storage"
+import { getModelByTier, getCustomModelConfigs, getGlobalRoutingMode, DEFAULT_MAX_TOKENS } from "../storage"
 import { getThread, updateThread } from "../db"
 import type { RoutingTrace, RoutingLayerRecord } from "../agent/trace/types"
 
@@ -44,6 +44,8 @@ interface ThreadRoutingState {
   premiumStickyUntil?: number
   /** Force premium: economy mis-route (tool errors / failed run) activates this for 30 min */
   forcePremiumUntil?: number
+  /** Last known input token count — used for context window capacity guard */
+  lastInputTokens?: number
 }
 
 export interface RoutingFeedback {
@@ -52,10 +54,12 @@ export interface RoutingFeedback {
   outcome: "success" | "error" | "cancelled"
   toolCallCount: number
   toolErrorCount: number
+  /** High-water mark of input tokens from the completed run */
+  lastInputTokens?: number
 }
 
-const PREMIUM_STICKY_TTL_MS = 20 * 60 * 1000  // 20 min
-const FORCE_PREMIUM_TTL_MS  = 30 * 60 * 1000  // 30 min
+const PREMIUM_STICKY_TTL_MS = 40 * 60 * 1000  // 40 min
+const FORCE_PREMIUM_TTL_MS  = 60 * 60 * 1000  // 60 min
 
 function readThreadRoutingState(threadId: string | undefined): ThreadRoutingState | null {
   if (!threadId) return null
@@ -121,7 +125,9 @@ export function rememberRoutingFeedback(threadId: string | undefined, fb: Routin
       // any tool work → stick to premium for 20 min (follow-up messages likely need same context)
       premiumStickyUntil: touchedTools ? now + PREMIUM_STICKY_TTL_MS : prev.premiumStickyUntil,
       // economy failure → force premium for 30 min
-      forcePremiumUntil: misroutedEconomy ? now + FORCE_PREMIUM_TTL_MS : prev.forcePremiumUntil
+      forcePremiumUntil: misroutedEconomy ? now + FORCE_PREMIUM_TTL_MS : prev.forcePremiumUntil,
+      // Persist input token high-water mark for context window capacity guard
+      lastInputTokens: fb.lastInputTokens ?? prev.lastInputTokens
     })
   } catch (err) {
     console.warn(
@@ -637,6 +643,116 @@ function buildFallbackChain(primaryTier: "premium" | "economy"): string[] {
   return chain
 }
 
+// ─── Context window capacity guard ──────────────────────────────────────────
+//
+// When routing decides "economy", verify the chosen economy model's context
+// window can handle the current conversation.  If not, try other economy
+// models with a larger window; escalate to premium as a last resort.
+//
+// Threshold: currentInputTokens < 0.75 × model.maxTokens
+// Aligned with summarization trigger ratio so guard fires before context compaction.
+//
+const CONTEXT_CAPACITY_RATIO = 0.75
+
+/**
+ * Guard: ensure the economy model's context window is large enough.
+ *
+ * Returns the original result untouched when:
+ *  - tier is premium (no guard needed)
+ *  - no lastInputTokens data (first turn in thread — context is tiny)
+ *  - economy model has enough capacity
+ *
+ * Otherwise returns a new RoutingResult pointing to a larger-context economy
+ * model, or escalates to premium.
+ */
+function guardContextCapacity(
+  result: RoutingResult,
+  threadId: string | undefined,
+  layerRecords: RoutingLayerRecord[]
+): RoutingResult {
+  if (result.resolvedTier !== "economy") return result
+
+  const state = readThreadRoutingState(threadId)
+  const lastInputTokens = state?.lastInputTokens
+  if (!lastInputTokens || lastInputTokens <= 0) return result
+
+  const configs = getCustomModelConfigs()
+  const currentCfgId = result.resolvedModelId.startsWith("custom:")
+    ? result.resolvedModelId.slice("custom:".length)
+    : result.resolvedModelId
+  const currentCfg = configs.find((c) => c.id === currentCfgId)
+  const currentMax = currentCfg?.maxTokens ?? DEFAULT_MAX_TOKENS
+  const threshold = Math.floor(currentMax * CONTEXT_CAPACITY_RATIO)
+
+  if (lastInputTokens < threshold) {
+    // Current economy model can handle it — no guard needed
+    return result
+  }
+
+  // Current economy model is near capacity — try other economy models sorted by maxTokens desc
+  const otherEconomy = configs
+    .filter((c) => (c.tier ?? "premium") === "economy" && c.id !== currentCfgId)
+    .sort((a, b) => (b.maxTokens ?? DEFAULT_MAX_TOKENS) - (a.maxTokens ?? DEFAULT_MAX_TOKENS))
+
+  for (const candidate of otherEconomy) {
+    const candidateMax = candidate.maxTokens ?? DEFAULT_MAX_TOKENS
+    if (lastInputTokens < Math.floor(candidateMax * CONTEXT_CAPACITY_RATIO)) {
+      const guardReason = `context-guard:switch-economy(${lastInputTokens}/${candidateMax})`
+      console.log(
+        `[ROUTING] ${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          event: "context-capacity-guard",
+          action: "switch-economy",
+          lastInputTokens,
+          originalModelMax: currentMax,
+          newModelId: candidate.id,
+          newModelMax: candidateMax
+        })}`
+      )
+      layerRecords.push({
+        layer: "layer2",
+        durationMs: 0,
+        result: "economy",
+        reason: guardReason,
+        detail: { lastInputTokens, originalMax: currentMax, switchedTo: candidate.id, switchedMax: candidateMax }
+      })
+      return {
+        ...result,
+        resolvedModelId: `custom:${candidate.id}`,
+        routeReason: `${result.routeReason}→${guardReason}`,
+        fallbackChain: [
+          `custom:${candidate.id}`,
+          ...result.fallbackChain.filter((id) => id !== `custom:${candidate.id}`)
+        ]
+      }
+    }
+  }
+
+  // No economy model can handle the context — escalate to premium
+  const guardReason = `context-guard:escalate-premium(${lastInputTokens}/${currentMax})`
+  console.log(
+    `[ROUTING] ${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: "context-capacity-guard",
+      action: "escalate-premium",
+      lastInputTokens,
+      economyModelMax: currentMax,
+      checkedCandidates: otherEconomy.length
+    })}`
+  )
+  layerRecords.push({
+    layer: "layer2",
+    durationMs: 0,
+    result: "premium",
+    reason: guardReason,
+    detail: { lastInputTokens, economyMax: currentMax, candidatesChecked: otherEconomy.length }
+  })
+  // Guard only runs for layer2/layer3 economy results, but TS doesn't know — cast safely
+  const safeLayer = (result.layer === "pinned" ? "layer2" : result.layer) as "layer1" | "thread" | "layer2" | "layer3"
+  const premiumResult = resolveFromTier("premium", `${result.routeReason}→${guardReason}`, safeLayer)
+  return premiumResult
+}
+
 // ─── Resolve model from tier ─────────────────────────────────────────────────
 
 function resolveFromTier(
@@ -925,7 +1041,9 @@ export async function resolveModel(ctx: RoutingContext): Promise<RoutingResult> 
           messageLength: l2Detail.messageLength
         }
       })
-      const r = resolveFromTier(l2Detail.result, `layer2:rules→${l2Detail.result}`, "layer2")
+      let r = resolveFromTier(l2Detail.result, `layer2:rules→${l2Detail.result}`, "layer2")
+      // Context window capacity guard — ensure economy model can handle current context
+      r = guardContextCapacity(r, ctx.threadId, layerRecords)
       console.log(`[ROUTING] ${JSON.stringify({ ...logCtx, layer: r.layer, resolvedTier: r.resolvedTier, routeReason: r.routeReason })}`)
       return withTrace(r)
     }
@@ -963,7 +1081,9 @@ export async function resolveModel(ctx: RoutingContext): Promise<RoutingResult> 
         timeoutMs: LAYER3_TIMEOUT_MS
       }
     })
-    const r = resolveFromTier(l3.tier, `layer3:llm→${l3.tier}`, "layer3")
+    let r = resolveFromTier(l3.tier, `layer3:llm→${l3.tier}`, "layer3")
+    // Context window capacity guard — ensure economy model can handle current context
+    r = guardContextCapacity(r, ctx.threadId, layerRecords)
     console.log(`[ROUTING] ${JSON.stringify({ ...logCtx, layer: r.layer, resolvedTier: r.resolvedTier, routeReason: r.routeReason })}`)
     return withTrace(r)
   }

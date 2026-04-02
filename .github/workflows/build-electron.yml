@@ -1,0 +1,117 @@
+name: Build Electron App
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - feature/gitaction
+  workflow_dispatch: # 支持手动触发
+
+concurrency:
+  group: build-electron-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            script: dist:win
+          - os: ubuntu-latest
+            platform: linux
+            script: dist
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Decrypt .env for build
+        run: node scripts/env-crypt.mjs decrypt-file .env
+        env:
+          ENV_ENCRYPTION_KEY: ${{ secrets.ENV_ENCRYPTION_KEY }}
+
+      - name: Install dependencies (Windows with optional deps fallback)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install --include=optional
+          if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
+            Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
+            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+            Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+            npm install --include=optional
+          }
+
+      - name: Install dependencies (Linux with optional deps fallback)
+        if: runner.os == 'Linux'
+        run: |
+          npm install --include=optional
+          if [ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]; then
+            echo "Missing @rollup/rollup-linux-x64-gnu, retry with clean install..."
+            rm -rf node_modules package-lock.json
+            npm install --include=optional
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npx electron-builder --${{ matrix.platform }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-${{ matrix.platform }}-installer
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+          if-no-files-found: warn
+
+      - name: Upload unpacked (Windows)
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-win-unpacked
+          path: dist/win-unpacked/
+
+      - name: Upload unpacked (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMBDevClaw-linux-unpacked
+          path: dist/linux-unpacked/
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -441,7 +441,13 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
                 resolvedModelId: data.resolvedModelId!,
                 resolvedTier: data.resolvedTier!,
                 routeReason: data.routeReason ?? ""
-              }
+              },
+              // Sync currentModel to the routing-resolved model so that
+              // ContextUsageIndicator tracks the correct context window.
+              // Note: only update in-memory state, do NOT persist to thread
+              // metadata — that stays as the user's manual selection for
+              // pinned mode fallback.
+              currentModel: data.resolvedModelId!
             }))
           }
           break
@@ -600,8 +606,25 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
               actions.setWorkspaceFiles(diskResult.files)
             }
           }
-          if (metadata.model) {
-            updateThreadState(threadId, () => ({ currentModel: metadata.model as string }))
+          // Restore the effective model: prefer the routing-resolved model (smart routing),
+          // fall back to user's pinned model selection.
+          const routingState = metadata.routingState as
+            | { lastResolvedModelId?: string; lastResolvedTier?: string }
+            | undefined
+          const effectiveModel = routingState?.lastResolvedModelId || (metadata.model as string) || ""
+          if (effectiveModel) {
+            updateThreadState(threadId, () => ({
+              currentModel: effectiveModel,
+              ...(routingState?.lastResolvedModelId
+                ? {
+                    routingResult: {
+                      resolvedModelId: routingState.lastResolvedModelId!,
+                      resolvedTier: (routingState.lastResolvedTier as "premium" | "economy") ?? "premium",
+                      routeReason: "restored from thread state"
+                    }
+                  }
+                : {})
+            }))
           }
           if (metadata.scheduledTaskId) {
             const taskId = metadata.scheduledTaskId as string
