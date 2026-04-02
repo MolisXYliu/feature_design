@@ -1,57 +1,57 @@
-# `.env` 加密与使用完整指南
+# `.env` 加密/解密与故障处理手册
 
-本文档用于指导团队成员在本项目中安全使用 `.env`：
+本文档按“场景化”组织，优先解决你在日常开发中最常见的问题。
 
-- 远端仓库中 `.env` 永远是加密内容
-- 本地工作区中的 `.env` 可以自动解密为明文，不影响运行
-- GitHub Actions 打包前自动解密，不影响构建
+目标：
 
----
-
-## 1. 先理解目标（必须读）
-
-我们用 Git filter 做“透明加解密”：
-
-1. `git add .env` 时：自动执行 `clean` 过滤器，把明文加密后再写入 Git 索引（最终推到远端的是密文）
-2. `git checkout/pull` 时：自动执行 `smudge` 过滤器，把仓库里的密文解密到工作区（本地文件是明文）
-
-所以：
-
-- Git 历史与远端仓库：密文
-- 本地运行时文件：明文（前提是你配置了密钥）
+- 远端仓库中的 `.env` 永远是密文
+- 本地工作区中的 `.env` 可自动解密为明文，不影响运行
+- CI 打包前自动解密，不影响构建
 
 ---
 
-## 2. 一次性准备（每个开发者都要做）
+## 1. 基本原理（先看 1 分钟）
+
+我们使用 Git filter：
+
+1. `git add .env` 时触发 `clean`，将明文加密后再写入索引
+2. `git checkout/pull/merge/rebase` 时触发 `smudge`，将密文解密到工作区
+
+结论：
+
+- Git 历史与远端：密文
+- 本地运行文件：明文（前提是密钥可用）
+
+---
+
+## 2. 一次性初始化（每个开发者）
 
 ### 2.1 获取密钥
 
-联系 `qyang` 获取同一个 `ENV_ENCRYPTION_KEY`（不要在群里明文发）。
+联系 `qyang` 获取 `ENV_ENCRYPTION_KEY`（不要在群里明文发送）。
 
-格式支持二选一：
+支持格式：
 
-- 64位 hex（推荐）
+- 64 位 hex
 - 32-byte base64
-
-密钥属于敏感信息，本文档不提供示例值。
 
 ---
 
-### 2.2 配置本地 Git filter（只需一次）
+### 2.2 配置 filter
 
-在项目根目录执行：
+在仓库根目录执行：
 
 ```bash
 npm run env:filter:setup
 ```
 
-该命令会在你的本地仓库 `.git/config` 写入：
+它会写入本仓库 `.git/config`：
 
 - `filter.envcrypt.clean = node scripts/env-crypt.mjs clean`
 - `filter.envcrypt.smudge = node scripts/env-crypt.mjs smudge`
 - `filter.envcrypt.required = true`
 
-验证是否配置成功：
+验证：
 
 ```bash
 git config --get filter.envcrypt.clean
@@ -61,32 +61,7 @@ git config --get filter.envcrypt.required
 
 ---
 
-### 2.3 配置密钥（两种方式，任选其一）
-
-#### 方式 A：环境变量（推荐给个人开发环境）
-
-临时生效（当前终端）：
-
-```bash
-export ENV_ENCRYPTION_KEY=你的密钥
-```
-
-永久生效（zsh）：
-
-```bash
-echo 'export ENV_ENCRYPTION_KEY=你的密钥' >> ~/.zshrc
-source ~/.zshrc
-```
-
-验证：
-
-```bash
-echo $ENV_ENCRYPTION_KEY
-```
-
----
-
-#### 方式 B：密钥文件（推荐给共享机器/CI风格环境）
+### 2.3 配置密钥（推荐用文件，IDE 更稳定）
 
 ```bash
 mkdir -p ~/.cmbdevclaw
@@ -94,192 +69,217 @@ printf '%s\n' '你的密钥' > ~/.cmbdevclaw/env.key
 chmod 600 ~/.cmbdevclaw/env.key
 ```
 
-脚本默认读取：
-
-`~/.cmbdevclaw/env.key`
-
-你也可自定义：
-
-```bash
-export ENV_ENCRYPTION_KEY_FILE=/custom/path/env.key
-```
+说明：使用 key 文件后，WebStorm/命令行都能读到密钥，最不容易出问题。
 
 ---
 
-## 3. 首次拉代码后的正确流程（新同事必做）
+## 3. 常用操作
 
-按顺序执行：
-
-1. `git clone ...`
-2. `cd 项目目录`
-3. `npm run env:filter:setup`
-4. 配置 `ENV_ENCRYPTION_KEY`（或 `~/.cmbdevclaw/env.key`）
-5. 执行一次检出刷新：
+### 3.1 修改 `.env` 后怎么提交流程
 
 ```bash
-git checkout -- .env
-```
-
-如果成功，你本地 `.env` 应该是可读明文。
-
----
-
-## 4. 现有仓库从“明文提交”迁移到“密文提交”的步骤（维护者执行）
-
-如果仓库已经在追踪 `.env`，执行以下步骤让后续提交都变密文：
-
-1. 确保本地已完成第 2 节配置
-2. 在项目根目录执行：
-
-```bash
-git add --renormalize .env
-```
-
-3. 查看暂存差异：
-
-```bash
-git diff --cached .env
-```
-
-你应看到 `.env` 内容变成类似 `CMBENV1:...` 的密文格式
-
-4. 提交并推送：
-
-```bash
-git commit -m "chore: store encrypted .env via git filter"
+git add .env
+git commit -m "..."
 git push
 ```
 
----
-
-## 5. 日常开发流程（开发者）
-
-### 5.1 修改 `.env`
-
-直接改本地 `.env` 明文即可，像平常一样运行项目。
-
-### 5.2 提交
-
-直接 `git add .env` + `git commit`。
-
-Git 会自动加密后再写入索引与远端。
-
-### 5.3 自检（可选但推荐）
-
-检查 Git 索引里的 `.env` 是否密文：
+可选验证（确认暂存的是密文）：
 
 ```bash
 git show :.env | head -n 1
 ```
 
-如果输出以 `CMBENV1:` 开头，说明将提交的是密文。
+若输出以 `CMBENV1:` 开头，说明提交的是密文。
 
 ---
 
-## 6. 如何把已拉下来的密文 `.env` 解密为明文（本地）
-
-当你发现本地 `.env` 是 `CMBENV1:...` 密文时，按下面步骤操作：
-
-1. 先确认密钥可用（环境变量或 key 文件二选一）
-
-```bash
-echo $ENV_ENCRYPTION_KEY
-# 或
-ls -l ~/.cmbdevclaw/env.key
-```
-
-2. 触发一次 checkout 解密
-
-```bash
-git checkout -- .env
-```
-
-3. 如果第 2 步后仍是密文，使用强制刷新（推荐）
+### 3.2 本地看到密文，如何恢复成明文
 
 ```bash
 rm -f .env
 git checkout -- .env
 ```
 
-说明：第 3 步会删除工作区 `.env`，再从 Git 索引检出并触发 `smudge` 自动解密。
+这是当前最稳的“强制刷新解密”方式。
 
 ---
 
-## 7. GitHub Actions 配置（必须）
+## 4. 场景化问题与解决方案
 
-本项目工作流会在打包前执行：
+### 场景 A：切分支/rollback/rebase/merge 报错 `Missing encryption key`
+
+典型报错：
+
+- `[env-crypt] Missing encryption key...`
+- `.env: smudge filter envcrypt failed`
+
+原因：
+
+- Git 在检出 `.env` 时要执行解密，但当前进程拿不到密钥
+
+立即处理：
+
+```bash
+mkdir -p ~/.cmbdevclaw
+printf '%s\n' '你的密钥' > ~/.cmbdevclaw/env.key
+chmod 600 ~/.cmbdevclaw/env.key
+git checkout -- .env
+```
+
+然后重试原操作（切分支/rollback/rebase/merge）。
+
+---
+
+### 场景 B：WebStorm 里能报错，终端里正常
+
+原因：
+
+- IDE 的 Git 进程不一定继承你 shell 的 `ENV_ENCRYPTION_KEY`
+
+建议：
+
+- 优先使用 `~/.cmbdevclaw/env.key` 文件方式，不依赖 shell 环境变量
+
+若已配 key 文件，仍失败：
+
+```bash
+git checkout -- .env
+```
+
+然后回到 WebStorm 再操作。
+
+---
+
+### 场景 C：当前分支没有加密脚本，合并 main（有加密逻辑）时失败
+
+典型报错：
+
+- `Cannot find module .../scripts/env-crypt.mjs`
+
+原因：
+
+- 本地 `.git/config` 已启用 filter
+- 但当前分支尚无 `scripts/env-crypt.mjs`
+- Git 在真正 merge 前就先执行了 smudge，导致中断
+
+处理步骤（先解锁再合并）：
+
+```bash
+git merge --abort || true
+git rebase --abort || true
+
+git config --local --unset filter.envcrypt.clean
+git config --local --unset filter.envcrypt.smudge
+git config --local --unset filter.envcrypt.required
+
+git fetch origin
+git merge origin/main
+```
+
+合并成功后恢复：
+
+```bash
+npm run env:filter:setup
+git checkout -- .env
+```
+
+---
+
+### 场景 D：`git add .env` 时报 `clean filter 'envcrypt' failed`
+
+原因：
+
+- 99% 是密钥缺失或 filter 未初始化
+
+排查顺序：
+
+```bash
+git config --get filter.envcrypt.clean
+git config --get filter.envcrypt.smudge
+git config --get filter.envcrypt.required
+```
+
+如果为空，先执行：
+
+```bash
+npm run env:filter:setup
+```
+
+然后确保密钥可用，再重试：
+
+```bash
+git add --renormalize .env
+```
+
+---
+
+### 场景 E：我没改 `.env`，为什么密文变化了？
+
+当前项目已改为确定性加密：相同明文 + 相同密钥应得到相同密文。  
+如果你仍看到变化，常见原因：
+
+1. `.env` 实际内容有细微变化（空格、换行、文件末尾换行）
+2. 使用了不同密钥
+3. 你正在不同分支/旧脚本版本之间切换
+
+可直接重置并验证：
+
+```bash
+rm -f .env
+git checkout -- .env
+git add --renormalize .env
+git diff --cached .env
+```
+
+`git diff --cached .env` 为空，说明已稳定。
+
+---
+
+### 场景 F：CI 打包后请求 URL 变成 `file://.../undefined/...`
+
+原因：
+
+- 打包前没解密 `.env`，导致 `VITE_API_BASE_URL` 缺失
+
+检查：
+
+1. workflow 是否有 `Decrypt .env for build` 步骤
+2. GitHub Secret 是否设置 `ENV_ENCRYPTION_KEY`
+
+---
+
+## 5. GitHub Actions 必做项
+
+仓库必须配置 Secret：
+
+- Key：`ENV_ENCRYPTION_KEY`
+- Value：与本地相同密钥
+
+并在构建前执行：
 
 ```bash
 node scripts/env-crypt.mjs decrypt-file .env
 ```
 
-所以你必须在 GitHub 仓库里配置 Secret：
-
-- 名称：`ENV_ENCRYPTION_KEY`
-- 值：与团队本地一致的同一个密钥
-
-配置路径：
-
-1. GitHub 仓库页面
-2. `Settings`
-3. `Secrets and variables`
-4. `Actions`
-5. `New repository secret`
-
 ---
 
-## 8. 如何确认“远端一定是密文”
+## 6. 紧急解锁流程（“我现在完全不能 Git 操作”）
 
-方法一：看 PR 的 `.env` diff，不应出现明文键值对。  
-方法二：拉取到一个没有密钥的新环境中，仓库里的原始 `.env` 应是 `CMBENV1:...` 格式。  
-方法三：本地查看索引：
+当你被 filter 卡住且手头没有密钥时，先临时关 filter：
 
 ```bash
-git show :.env | head -n 1
+git config --local --unset filter.envcrypt.clean
+git config --local --unset filter.envcrypt.smudge
+git config --local --unset filter.envcrypt.required
 ```
 
----
-
-## 9. 常见问题排查
-
-### 8.1 报错：`Missing encryption key...`
-
-原因：当前 shell 没有密钥。
-
-处理：
-
-1. `echo $ENV_ENCRYPTION_KEY` 检查是否为空
-2. 为空就重新 `export ENV_ENCRYPTION_KEY=...`
-3. 或写入 `~/.cmbdevclaw/env.key`
-
----
-
-### 8.2 报错：`clean filter 'envcrypt' failed`
-
-通常是上面的密钥缺失导致。  
-也可能是没执行 `npm run env:filter:setup`。
-
-处理顺序：
-
-1. `npm run env:filter:setup`
-2. 配好密钥
-3. 重新执行 `git add --renormalize .env`
-
----
-
-### 8.3 拉代码后 `.env` 还是密文
-
-说明 `smudge` 没生效，检查：
-
-1. 是否执行过 `npm run env:filter:setup`
-2. 密钥是否可读（环境变量或 key 文件）
-3. 执行：
+完成紧急操作（pull/merge/rebase/rollback）后，马上恢复：
 
 ```bash
-git checkout -- .env
+npm run env:filter:setup
 ```
 
-如果仍然是密文，再执行：
+然后配置密钥并刷新 `.env`：
 
 ```bash
 rm -f .env
@@ -288,42 +288,34 @@ git checkout -- .env
 
 ---
 
-### 8.4 CI 里接口地址变成 `undefined/...`
+## 7. 安全要求
 
-通常是 CI 未成功解密 `.env` 或缺失 `ENV_ENCRYPTION_KEY` Secret。
-
-检查：
-
-1. Workflow 是否有 `Decrypt .env for build` 步骤
-2. GitHub Secret `ENV_ENCRYPTION_KEY` 是否存在且正确
+1. 密钥不要提交到仓库
+2. 密钥不要写到公开文档、截图、日志
+3. 新人离职或密钥泄露后立即轮换
+4. 轮换后需重新加密并提交 `.env`
 
 ---
 
-## 10. 安全注意事项（务必遵守）
-
-1. 不要把密钥提交到仓库
-2. 不要把密钥写到公开文档/截图/日志
-3. 新人离职或密钥泄露时，立即轮换密钥
-4. 密钥轮换后，需要重新加密并提交 `.env`
-
----
-
-## 11. 关键命令速查
+## 8. 命令速查
 
 ```bash
-# 1) 配置 git filter（一次性）
+# 初始化 filter
 npm run env:filter:setup
 
-# 2) 设置密钥（当前终端）
-export ENV_ENCRYPTION_KEY=你的密钥
-
-# 3) 将 .env 重新规范化为密文提交内容
-git add --renormalize .env
-
-# 4) 查看索引中的 .env 是否已加密
-git show :.env | head -n 1
-
-# 5) 本地把密文 .env 重新解密到工作区
+# 本地强制解密刷新
 rm -f .env
 git checkout -- .env
+
+# 提交前重新规范化
+git add --renormalize .env
+
+# 检查暂存是否密文
+git show :.env | head -n 1
+
+# 临时关闭 filter（紧急）
+git config --local --unset filter.envcrypt.clean
+git config --local --unset filter.envcrypt.smudge
+git config --local --unset filter.envcrypt.required
 ```
+
