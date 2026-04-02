@@ -66,7 +66,8 @@ export function HtmlPreview({
                   width: "max(100%, 1000px)"
                 }
           }
-          sandbox="allow-same-origin"
+          // Allow CDN scripts in preview HTML while keeping iframe origin isolated from the host app.
+          sandbox="allow-scripts"
           scrolling={fillHeight ? "auto" : "no"}
           onLoad={syncHeight}
         />

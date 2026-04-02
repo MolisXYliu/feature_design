@@ -22,10 +22,13 @@ function getShell(): string {
   if (cachedShell) return cachedShell
   if (platform() === "win32") {
     // Git Bash：POSIX 兼容，ConPTY 正常，子进程 stdin 是真 TTY
+    // 1. 快速检查常见路径（便宜：只是 stat 调用）
     const candidates = [
       "C:\\Program Files\\Git\\bin\\bash.exe",
       "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-      // per-user 安装路径
+      "D:\\Program Files\\Git\\bin\\bash.exe",
+      "D:\\Program Files (x86)\\Git\\bin\\bash.exe",
+      "D:\\Git\\bin\\bash.exe",
       join(homedir(), "AppData", "Local", "Programs", "Git", "bin", "bash.exe"),
     ]
     for (const p of candidates) {
@@ -34,11 +37,37 @@ function getShell(): string {
         return cachedShell
       }
     }
-    // 兜底：where.exe 查找，过滤 System32\bash.exe（WSL 启动器）
+
+    // 2. 从注册表查找（覆盖任意安装路径，但需要 fork 子进程）
+    const regKeys = [
+      "HKLM\\SOFTWARE\\GitForWindows",
+      "HKCU\\SOFTWARE\\GitForWindows"
+    ]
+    for (const key of regKeys) {
+      try {
+        const regOut = execSync(
+          `reg query "${key}" /v InstallPath`,
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }
+        )
+        const match = /InstallPath\s+REG_SZ\s+(.+)/i.exec(regOut)
+        if (match) {
+          const installDir = match[1].trim()
+          const regBash = join(installDir, "bin", "bash.exe")
+          if (existsSync(regBash)) {
+            cachedShell = regBash
+            return cachedShell
+          }
+          console.warn(`[PtyHost] Registry found Git at ${installDir} but bash.exe not found`)
+        }
+      } catch { /* key not found */ }
+    }
+
+    // 3. 兜底：where.exe 查找，过滤 System32\bash.exe（WSL 启动器）
     try {
       const out = execSync("where bash.exe", {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000
       })
       const found = out.trim().split(/\r?\n/).find(
         (l) => !l.toLowerCase().includes("system32")
@@ -63,6 +92,8 @@ function findNodeExe(): string {
   const candidates = [
     join("C:\\", "Program Files", "nodejs", "node.exe"),
     join("C:\\", "Program Files (x86)", "nodejs", "node.exe"),
+    join("D:\\", "Program Files", "nodejs", "node.exe"),
+    join("D:\\", "Program Files (x86)", "nodejs", "node.exe"),
     join(homedir(), "scoop", "apps", "nodejs", "current", "node.exe"),
     join(homedir(), ".volta", "bin", "node.exe"),
   ]
@@ -82,6 +113,7 @@ function findNodeExe(): string {
     const out = execSync("where node.exe", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000
     })
     const found = out.trim().split(/\r?\n/)[0]
     if (found) {
