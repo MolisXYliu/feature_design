@@ -936,7 +936,9 @@ export function SkillDetail(props: {
       </div>
 
       <div className="px-4 py-3 border-b border-border">
-        <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
+        <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+          {description}
+        </p>
       </div>
 
       <div className="px-4 py-2 border-b border-border flex items-center gap-2">
