@@ -457,7 +457,7 @@ export function PluginsPanel(): React.JSX.Element {
                     </div>
                   </div>
                   {plugin.description && (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                    <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap break-words">
                       {plugin.description}
                     </p>
                   )}
@@ -638,7 +638,9 @@ export function PluginDetailPanel(props: {
       {/* Description */}
       {plugin.description && (
         <div className="px-4 py-3 border-b border-border">
-          <p className="text-sm text-muted-foreground leading-relaxed">{plugin.description}</p>
+          <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+            {plugin.description}
+          </p>
         </div>
       )}
 
