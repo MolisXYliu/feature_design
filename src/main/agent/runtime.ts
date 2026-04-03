@@ -49,7 +49,8 @@ import {
   BASE_SYSTEM_PROMPT,
   CODE_EXEC_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT,
-  LAZY_MCP_SYSTEM_PROMPT
+  LAZY_MCP_SYSTEM_PROMPT,
+  LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
 } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
@@ -57,10 +58,9 @@ import { createSchedulerTool } from "./tools/scheduler-tool"
 import { createSkillEvolutionTool } from "./tools/skill-evolution-tool"
 import { getThread } from "../db/index"
 import { createPlaywrightTool } from "./tools/playwright-tool"
-import { createPlaywrightCliTool } from "./tools/playwright-cli-tool"
 import { createToolSearchTools } from "./tools/tool-search-tool"
 import { createCodeExecTool } from "./tools/code-exec-tool"
-import { getWindowsSandboxMode, getYoloMode, getEnabledHooks } from "../storage"
+import { getWindowsSandboxMode, getYoloMode, getEnabledHooks, isCodeExecEnabled } from "../storage"
 import { ApprovalStore } from "./approval-store"
 import { ToolOrchestrator } from "./tool-orchestrator"
 import type { ApprovalRequest, ApprovalDecision } from "../types"
@@ -857,6 +857,7 @@ The workspace root is: ${workspacePath}`
   }
 
   const capabilityService = getGlobalMcpCapabilityService()
+  const codeExecEnabled = isCodeExecEnabled()
   const allMcpTools = await capabilityService.listTools()
   const eagerMcpMetadata = allMcpTools.filter((tool) => tool.visibility === "eager")
   const lazyMcpMetadata = allMcpTools.filter((tool) => tool.visibility === "lazy")
@@ -864,6 +865,8 @@ The workspace root is: ${workspacePath}`
   const toolSearchTools = await createToolSearchTools(capabilityService, {
     workspacePath,
     threadId: options.threadId
+  }, {
+    codeExecEnabled
   })
 
   if (allMcpTools.length > 0) {
@@ -920,48 +923,14 @@ The workspace root is: ${workspacePath}`
   wrapToolErrors(extraTools)
   wrapToolErrors(memoryTools as any[])
 
-  // Wrap extra tools so that errors are returned as strings instead of throwing
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function wrapToolErrors(tools: any[]): void {
-    for (const t of tools) {
-      if (typeof t.func === "function") {
-        const originalFunc = t.func
-        t.func = async (...args: unknown[]) => {
-          try {
-            return await originalFunc.apply(t, args)
-          } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : String(e)
-            const level = e instanceof TypeError || e instanceof ReferenceError ? "error" : "warn"
-            console[level](`[Runtime] Tool "${t.name}" error (non-fatal):`, msg)
-            return msg
-          }
-        }
-      }
-    }
-  }
-  wrapToolErrors(extraTools)
-  wrapToolErrors(memoryTools as any[])
 
   if (toolSearchTools.some((tool) => (tool as { name?: string }).name === "search_tool")) {
     console.log("[Runtime] Added tool search tools")
-    systemPrompt += LAZY_MCP_SYSTEM_PROMPT
+    systemPrompt += codeExecEnabled ? LAZY_MCP_SYSTEM_PROMPT : LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
     wrapToolErrors(toolSearchTools as any[])
   }
 
-  if (allMcpTools.length > 0) {
-    extraTools.push(createCodeExecTool({
-      workspacePath,
-      threadId: options.threadId,
-      modelId: options.modelId,
-      yoloMode,
-      capabilityService,
-      approvalStore,
-      requestApproval
-    }))
-    systemPrompt += CODE_EXEC_SYSTEM_PROMPT
-  }
-
-  if (allMcpTools.length > 0) {
+  if (codeExecEnabled && allMcpTools.length > 0) {
     extraTools.push(createCodeExecTool({
       workspacePath,
       threadId: options.threadId,

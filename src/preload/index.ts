@@ -1148,6 +1148,13 @@ const api = {
   },
   codeExecTools: {
     list: (): Promise<ManagedSavedCodeExecTool[]> => ipcRenderer.invoke("codeExecTools:list"),
+    getSettings: (): Promise<{ codeExecEnabled: boolean }> => ipcRenderer.invoke("codeExecTools:getSettings"),
+    setCodeExecEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("codeExecTools:setCodeExecEnabled", enabled),
+    setEnabled: (id: string, enabled: boolean): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:setEnabled", { id, enabled }),
+    setLastPreviewParams: (id: string, params: Record<string, unknown>): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:setLastPreviewParams", { id, params }),
     update: (payload: SavedCodeExecToolUpdatePayload): Promise<ManagedSavedCodeExecTool> =>
       ipcRenderer.invoke("codeExecTools:update", payload),
     delete: (id: string): Promise<void> => ipcRenderer.invoke("codeExecTools:delete", id),

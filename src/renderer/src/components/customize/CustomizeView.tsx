@@ -224,7 +224,8 @@ export function CustomizeView(): React.JSX.Element {
             onClick={() => setActiveTab("codeExecTools")}
           >
             <Wrench className="size-4 shrink-0" />
-            自定义工具管理
+            <span className="min-w-0 flex-1 truncate whitespace-nowrap">编程式工具调用</span>
+            <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
           </button>
         </nav>
       </div>

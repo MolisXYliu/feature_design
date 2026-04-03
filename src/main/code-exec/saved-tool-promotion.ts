@@ -253,6 +253,12 @@ function parseDirectParamReference(expression: string): { key: string; optional:
   return null
 }
 
+function parseStringLiteral(expression: string): string | null {
+  const trimmed = stripWrappingParens(expression)
+  const quotedMatch = trimmed.match(/^(['"])([^"'\\]+)\1$/)
+  return quotedMatch ? quotedMatch[2] : null
+}
+
 function parseObjectProperty(propertySource: string): { key: string; valueExpression: string } | null {
   const trimmed = propertySource.trim()
   if (!trimmed || trimmed.startsWith("...")) return null
@@ -368,15 +374,9 @@ function analyzeAwaitMcpCallExpression(
 
   const masked = maskStringsAndComments(trimmed)
   const startIndex = 6
-  if (!masked.startsWith("mcp.", startIndex)) return null
+  if (!masked.startsWith("mcp.$call", startIndex)) return null
 
-  const provider = readIdentifier(masked, startIndex + 4)
-  if (!provider || masked[provider.end] !== ".") return null
-
-  const method = readIdentifier(masked, provider.end + 1)
-  if (!method) return null
-
-  let cursor = method.end
+  let cursor = startIndex + "mcp.$call".length
   while (/\s/.test(masked[cursor] ?? "")) cursor += 1
   if (masked[cursor] !== "(") return null
 
@@ -387,12 +387,12 @@ function analyzeAwaitMcpCallExpression(
   if (trailing) return null
 
   const argsSource = trimmed.slice(cursor + 1, closeIndex).trim()
-  if (!argsSource) return createSourceAnalysis(["mcp_result"])
-
   const args = splitTopLevel(argsSource, ",").map((item) => item.trim()).filter(Boolean)
-  if (args.length !== 1) return null
+  if (args.length === 0 || args.length > 2) return null
+  if (!parseStringLiteral(args[0])) return null
+  if (args.length === 1) return createSourceAnalysis(["mcp_result"])
 
-  const argAnalysis = analyzeExpression(args[0], env, true)
+  const argAnalysis = analyzeExpression(args[1], env, true)
   if (!argAnalysis.ok) return null
 
   return createSourceAnalysis(["mcp_result"])
@@ -506,57 +506,40 @@ function scanMcpCalls(code: string, env: Map<string, ExpressionAnalysis>): McpCa
   const results: McpCallAnalysis[] = []
 
   for (let index = 0; index < masked.length; index += 1) {
-    if (!masked.startsWith("mcp.", index)) continue
+    if (!masked.startsWith("mcp.$call", index)) continue
     const previous = masked[index - 1] ?? ""
     if (/[A-Za-z0-9_$]/.test(previous)) continue
 
-    const provider = readIdentifier(masked, index + 4)
-    if (!provider) {
-      results.push({ dependency: "unknown", ok: false })
-      continue
-    }
-
-    if (masked[provider.end] !== ".") {
-      results.push({ dependency: "unknown", ok: false })
-      continue
-    }
-
-    const method = readIdentifier(masked, provider.end + 1)
-    if (!method) {
-      results.push({ dependency: `${provider.value}.unknown`, ok: false })
-      continue
-    }
-
-    let cursor = method.end
+    let cursor = index + "mcp.$call".length
     while (/\s/.test(masked[cursor] ?? "")) cursor += 1
     if (masked[cursor] !== "(") {
-      results.push({ dependency: `${provider.value}.${method.value}`, ok: false })
+      results.push({ dependency: "unknown", ok: false })
       continue
     }
 
     const closeIndex = findMatchingBracket(masked, cursor, "(", ")")
     if (closeIndex < 0) {
-      results.push({ dependency: `${provider.value}.${method.value}`, ok: false })
+      results.push({ dependency: "unknown", ok: false })
       continue
     }
 
     const argsSource = code.slice(cursor + 1, closeIndex).trim()
-    const dependency = `${provider.value}.${method.value}`
-    if (!argsSource) {
-      results.push({ dependency, ok: true })
-      index = closeIndex
-      continue
-    }
-
     const args = splitTopLevel(argsSource, ",").map((item) => item.trim()).filter(Boolean)
-    if (args.length !== 1) {
-      results.push({ dependency, ok: false })
+    if (args.length === 0 || args.length > 2) {
+      results.push({ dependency: "unknown", ok: false })
       index = closeIndex
       continue
     }
 
-    const argAnalysis = analyzeExpression(args[0], env, true)
-    results.push({ dependency, ok: argAnalysis.ok || isVariableReference(args[0]) })
+    const dependency = parseStringLiteral(args[0]) ?? "unknown"
+    if (args.length === 1) {
+      results.push({ dependency, ok: dependency !== "unknown" })
+      index = closeIndex
+      continue
+    }
+
+    const argAnalysis = analyzeExpression(args[1], env, true)
+    results.push({ dependency, ok: dependency !== "unknown" && (argAnalysis.ok || isVariableReference(args[1])) })
     index = closeIndex
   }
 

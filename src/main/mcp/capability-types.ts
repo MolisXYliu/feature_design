@@ -7,12 +7,10 @@ export interface McpCapabilityTool {
   providerAlias: string
   providerDisplayName: string
   toolName: string
-  methodAlias: string
   description?: string
   inputSchema?: Record<string, unknown>
   outputSchema?: Record<string, unknown>
   visibility: McpToolVisibility
-  scriptAlias: string
 }
 
 export interface McpInvocationResult {
@@ -35,5 +33,4 @@ export interface McpCapabilityService {
 export interface McpCapabilityAliasMaps {
   capabilityById: Map<string, McpCapabilityTool>
   toolIds: Map<string, McpCapabilityTool>
-  scriptAliases: Map<string, McpCapabilityTool>
 }

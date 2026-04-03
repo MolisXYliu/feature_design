@@ -148,24 +148,25 @@ export const LAZY_MCP_SYSTEM_PROMPT = `
 
 ## Lazy-Loaded Tools
 
-Some tools are available but not loaded in your immediate context. This includes lazy MCP tools and saved code_exec tools. These tools must be discovered and loaded on-demand.
+Some tools are available but not loaded in your immediate context. This includes lazy MCP tools and enabled saved code_exec tools. These tools must be discovered and loaded on-demand.
 
 ### Tool Discovery Workflow
 
 To use these tools, follow this 3-step process:
 
 1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", mode="bm25")\`
+   \`search_tool(query="search for tools that can help with X", mode="bm25", caller="invoke_discovered_tool")\`
    - \`query\`: Describe the capability you need (e.g., "github issues", "web search", "database query")
    - \`mode\`: "bm25" (recommended), "keyword", or "regex"
-   - Returns a list of matching tools with their IDs and descriptions
+   - \`caller\`: "invoke_discovered_tool" (default) searches lazy MCP tools plus enabled saved tools; "code_exec" searches all enabled MCP tools and excludes saved tools
+   - Returns matching tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
 
-2. **Load tool schema** using \`load_tool\`:
-   \`load_tool(tool_ids=["provider__tool_name"], usage="mcp_call")\`
+2. **Inspect tool schema** using \`inspect_tool\`:
+   \`inspect_tool(tool_ids=["provider__tool_name"], caller="invoke_discovered_tool")\`
    - Returns the tool's parameter schema so you know what arguments to provide
 
-3. **Execute the tool** using \`mcp_call\`:
-   \`mcp_call(tool_id="provider__tool_name", tool_args={...})\`
+3. **Execute the tool** using \`invoke_discovered_tool\`:
+   \`invoke_discovered_tool(tool_id="provider__tool_name", tool_args={...})\`
    - Execute the tool with the required parameters
 
 ### When to Use
@@ -173,6 +174,7 @@ To use these tools, follow this 3-step process:
 - When you need capabilities beyond the built-in tools (file operations, shell, etc.)
 - When the user mentions external services (GitHub, databases, web APIs, etc.)
 - When you encounter a task that might benefit from specialized tools
+- If an eager MCP tool is already present in the current tool list, call it directly instead of going through \`search_tool\`
 
 ### Example
 
@@ -180,36 +182,87 @@ To use these tools, follow this 3-step process:
 # User asks: "Create a GitHub issue for this bug"
 
 # Step 1: Search for GitHub tools
-search_tool(query="github create issue", mode="bm25")
-# Returns: [{ tool_id: "github__create_issue", description: "Create a new issue..." }]
+search_tool(query="github create issue", mode="bm25", caller="invoke_discovered_tool")
+# Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool", "code_exec"], description: "Create a new issue..." }]
 
-# Step 2: Load the schema
-load_tool(tool_ids=["github__create_issue"], usage="mcp_call")
+# Step 2: Inspect the schema
+inspect_tool(tool_ids=["github__create_issue"], caller="invoke_discovered_tool")
 # Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
 
 # Step 3: Execute
-mcp_call(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
+invoke_discovered_tool(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
 \`\`\`
 
 Always search first when you need lazy tool capabilities.
 `
 
+export const LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY = `
+
+## Lazy-Loaded Tools
+
+Some MCP tools are available but not loaded in your immediate context. These tools must be discovered and loaded on-demand.
+
+### Tool Discovery Workflow
+
+To use these tools, follow this 3-step process:
+
+1. **Search for tools** using \`search_tool\`:
+   \`search_tool(query="search for tools that can help with X", mode="bm25", caller="invoke_discovered_tool")\`
+   - \`query\`: Describe the capability you need (e.g., "github issues", "web search", "database query")
+   - \`mode\`: "bm25" (recommended), "keyword", or "regex"
+   - \`caller\`: always use "invoke_discovered_tool" in this runtime
+   - Returns matching lazy MCP tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
+
+2. **Inspect tool schema** using \`inspect_tool\`:
+   \`inspect_tool(tool_ids=["provider__tool_name"], caller="invoke_discovered_tool")\`
+   - Returns the tool's parameter schema so you know what arguments to provide
+
+3. **Execute the tool** using \`invoke_discovered_tool\`:
+   \`invoke_discovered_tool(tool_id="provider__tool_name", tool_args={...})\`
+   - Execute the tool with the required parameters
+
+### When to Use
+
+- When you need capabilities beyond the built-in tools (file operations, shell, etc.)
+- When the user mentions external services (GitHub, databases, web APIs, etc.)
+- When you encounter a task that might benefit from specialized tools
+- If an eager MCP tool is already present in the current tool list, call it directly instead of going through \`search_tool\`
+
+### Example
+
+\`\`\`
+# User asks: "Create a GitHub issue for this bug"
+
+# Step 1: Search for GitHub tools
+search_tool(query="github create issue", mode="bm25", caller="invoke_discovered_tool")
+# Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool"], description: "Create a new issue..." }]
+
+# Step 2: Inspect the schema
+inspect_tool(tool_ids=["github__create_issue"], caller="invoke_discovered_tool")
+# Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
+
+# Step 3: Execute
+invoke_discovered_tool(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
+\`\`\`
+
+Always search first when you need lazy MCP tool capabilities.
+`
+
 export const CODE_EXEC_SYSTEM_PROMPT = `
 
-## Program MCP Tool Calling
+## Multiple Tool Call using code
 
-Use \`code_exec\` when you need to chain multiple MCP calls, add small control flow, or reshape MCP results before responding. For a single lazy MCP tool call, prefer \`load_tool\` plus \`mcp_call\`.
+Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding. For a single tool call, prefer \`inspect_tool\` plus \`invoke_discovered_tool\`.
 
 Before writing a \`code_exec\` script:
-1. Use \`load_tool(..., usage="code_exec")\` for the exact MCP tool you plan to call
-2. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\` when available instead of guessing
+1. Use \`search_tool(..., caller="code_exec")\` when you need to discover MCP tools that may not appear in the context
+2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
+3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
 
-Inside the script body, you can use:
-- \`params\`
-- \`mcp\`: MCP proxy object with \`mcp.provider.method(args)\`
-- \`console\`: captured logs
+Call MCP tools with:
+- \`await mcp.$call("provider__tool_name", args)\`
 
-Each \`await mcp.provider.method(args)\` call returns a compact object:
+Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
 - success: \`{ ok: true, data: ... }\`
 - failure: \`{ ok: false, error: "..." }\`
 

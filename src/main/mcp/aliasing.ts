@@ -99,7 +99,6 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
 
   for (const [providerKey, providerTools] of Array.from(toolsByProvider.entries()).sort(([left], [right]) => left.localeCompare(right))) {
     const providerAlias = providerAliasByKey.get(providerKey) ?? "provider"
-    const usedMethodAliases = new Set<string>()
     const usedDisplayAliases = new Set<string>()
 
     for (const seed of [...providerTools].sort((left, right) => {
@@ -108,11 +107,6 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
       }
       return left.toolName.localeCompare(right.toolName)
     })) {
-      const methodAlias = makeUniqueAlias(
-        toLowerCamelCase(seed.toolName, "tool"),
-        usedMethodAliases,
-        "tool"
-      )
       const displayMethodAlias = makeUniqueAlias(
         toSnakeCase(seed.toolName, "tool"),
         usedDisplayAliases,
@@ -126,12 +120,10 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
         providerAlias,
         providerDisplayName: seed.providerDisplayName,
         toolName: seed.toolName,
-        methodAlias,
         description: seed.description,
         inputSchema: seed.inputSchema,
         outputSchema: seed.outputSchema,
-        visibility: seed.visibility,
-        scriptAlias: `${providerAlias}.${methodAlias}`
+        visibility: seed.visibility
       })
     }
   }
@@ -144,14 +136,12 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
 export function buildAliasMaps(tools: McpCapabilityTool[]): McpCapabilityAliasMaps {
   const maps: McpCapabilityAliasMaps = {
     capabilityById: new Map(),
-    toolIds: new Map(),
-    scriptAliases: new Map(),
+    toolIds: new Map()
   }
 
   for (const tool of tools) {
     maps.capabilityById.set(tool.capabilityId, tool)
     maps.toolIds.set(tool.toolId, tool)
-    maps.scriptAliases.set(tool.scriptAlias, tool)
   }
 
   return maps

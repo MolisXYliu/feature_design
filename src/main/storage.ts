@@ -254,6 +254,32 @@ export function setMemoryEnabled(enabled: boolean): void {
   writeFileSync(MEMORY_SETTINGS_FILE, JSON.stringify({ enabled }, null, 2))
 }
 
+// ── Code exec settings ──
+
+const CODE_EXEC_SETTINGS_FILE = join(OPENWORK_DIR, "code-exec-settings.json")
+
+interface CodeExecSettings {
+  enabled?: boolean
+}
+
+function readCodeExecSettings(): CodeExecSettings {
+  if (!existsSync(CODE_EXEC_SETTINGS_FILE)) return {}
+  try {
+    return JSON.parse(readFileSync(CODE_EXEC_SETTINGS_FILE, "utf-8")) as CodeExecSettings
+  } catch {
+    return {}
+  }
+}
+
+export function isCodeExecEnabled(): boolean {
+  return readCodeExecSettings().enabled !== false
+}
+
+export function setCodeExecEnabled(enabled: boolean): void {
+  getOpenworkDir()
+  writeFileSync(CODE_EXEC_SETTINGS_FILE, JSON.stringify({ enabled }, null, 2))
+}
+
 // ── Skills ──
 
 const DISABLED_SKILLS_FILE = join(OPENWORK_DIR, "disabled-skills.json")

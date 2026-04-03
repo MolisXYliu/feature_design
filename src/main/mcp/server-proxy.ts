@@ -2,6 +2,16 @@ import type { McpCapabilityTool, McpInvocationResult } from "./capability-types"
 import { toCallResult, type McpCallResultValue } from "./result-utils"
 
 export interface McpServerProxy {
+  $call: (toolId: string, args?: Record<string, unknown>) => Promise<McpCallResultValue>
+  $meta: () => {
+    tools: Array<{
+      tool_id: string
+      capability_id: string
+      provider: string
+      name: string
+      description?: string
+    }>
+  }
   [providerAlias: string]: unknown
 }
 
@@ -18,20 +28,19 @@ export function createServerProxy(
   tools: McpCapabilityTool[],
   call: McpServerProxyCaller
 ): McpServerProxy {
-  const proxy = {} as McpServerProxy
-
-  const providers = new Map<string, Record<string, unknown>>()
-
-  for (const tool of tools) {
-    const provider = providers.get(tool.providerAlias) ?? {}
-    provider[tool.methodAlias] = async (args?: Record<string, unknown>): Promise<McpCallResultValue> => {
-      const result = await call(tool.capabilityId, normalizeArgs(args))
+  return {
+    $call: async (toolId: string, args?: Record<string, unknown>): Promise<McpCallResultValue> => {
+      const result = await call(toolId, normalizeArgs(args))
       return toCallResult(result)
-    }
-
-    providers.set(tool.providerAlias, provider)
-    proxy[tool.providerAlias] = provider
+    },
+    $meta: () => ({
+      tools: tools.map((tool) => ({
+        tool_id: tool.toolId,
+        capability_id: tool.capabilityId,
+        provider: tool.providerAlias,
+        name: tool.toolName,
+        description: tool.description
+      }))
+    })
   }
-
-  return proxy
 }

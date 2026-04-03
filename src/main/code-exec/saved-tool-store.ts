@@ -20,6 +20,7 @@ const OMITTED_FILE_TEXT = "<file text omitted>"
 
 export interface SavedCodeExecTool {
   toolId: string
+  enabled: boolean
   description: string
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
@@ -30,6 +31,7 @@ export interface SavedCodeExecTool {
   codeHash: string
   dependencies: string[]
   resultExample?: unknown
+  lastPreviewParams?: Record<string, unknown>
 }
 
 export interface SavedCodeExecToolDraft {
@@ -42,6 +44,7 @@ export interface SavedCodeExecToolDraft {
   codeHash: string
   dependencies: string[]
   resultExample?: unknown
+  lastPreviewParams?: Record<string, unknown>
 }
 
 interface SavedCodeExecToolsFile {
@@ -54,6 +57,10 @@ interface SavedCodeExecToolIdOptions {
   codeHash: string
 }
 
+interface SavedToolQueryOptions {
+  includeDisabled?: boolean
+}
+
 function getSavedCodeExecToolsPath(): string {
   return join(getOpenworkDir(), "code-exec-tools.json")
 }
@@ -63,6 +70,10 @@ function createEmptyStore(): SavedCodeExecToolsFile {
     version: SAVED_CODE_EXEC_TOOLS_VERSION,
     entries: []
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
 let storeCache: SavedCodeExecToolsFile | null = null
@@ -86,9 +97,15 @@ function loadStore(): SavedCodeExecToolsFile {
     ) {
       storeCache = {
         version: SAVED_CODE_EXEC_TOOLS_VERSION,
-        entries: ((parsed as { entries: SavedCodeExecTool[] }).entries ?? []).filter((entry) => {
-          return Boolean(entry && typeof entry === "object" && typeof entry.toolId === "string")
-        })
+        entries: ((parsed as { entries: SavedCodeExecTool[] }).entries ?? [])
+          .filter((entry) => {
+            return Boolean(entry && typeof entry === "object" && typeof entry.toolId === "string")
+          })
+          .map((entry) => ({
+            ...entry,
+            enabled: entry.enabled !== false,
+            lastPreviewParams: isRecord(entry.lastPreviewParams) ? entry.lastPreviewParams : undefined
+          }))
       }
       return storeCache
     }
@@ -261,11 +278,11 @@ export function inferSavedCodeExecSchema(value: unknown): Record<string, unknown
 
 export function parseCodeExecDependencies(code: string): string[] {
   const matches = new Set<string>()
-  const pattern = /mcp\.([A-Za-z_$][A-Za-z0-9_$]*)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g
+  const pattern = /mcp\.\$call\s*\(\s*(['"])([^"'\\]+)\1/g
   let match: RegExpExecArray | null
 
   while ((match = pattern.exec(code)) !== null) {
-    matches.add(`${match[1]}.${match[2]}`)
+    matches.add(match[2])
   }
 
   return Array.from(matches)
@@ -443,6 +460,7 @@ export function buildSavedCodeExecToolDraft(input: {
   timeoutMs?: number
   dependencies: string[]
   resultExample?: unknown
+  lastPreviewParams?: Record<string, unknown>
 }): SavedCodeExecToolDraft {
   const store = loadStore()
   const codeHash = computeSavedCodeExecToolHash(input.code, input.timeoutMs)
@@ -459,7 +477,8 @@ export function buildSavedCodeExecToolDraft(input: {
     timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     codeHash,
     dependencies: input.dependencies,
-    resultExample: input.resultExample
+    resultExample: input.resultExample,
+    lastPreviewParams: input.lastPreviewParams
   }
 }
 
@@ -473,6 +492,7 @@ export function persistSavedCodeExecTool(draft: SavedCodeExecToolDraft): SavedCo
   const now = new Date().toISOString()
   const nextEntry: SavedCodeExecTool = {
     toolId: draft.toolId,
+    enabled: true,
     description: draft.description,
     inputSchema: draft.inputSchema,
     outputSchema: draft.outputSchema,
@@ -482,7 +502,8 @@ export function persistSavedCodeExecTool(draft: SavedCodeExecToolDraft): SavedCo
     updatedAt: now,
     codeHash: draft.codeHash,
     dependencies: draft.dependencies,
-    resultExample: draft.resultExample
+    resultExample: draft.resultExample,
+    lastPreviewParams: draft.lastPreviewParams
   }
 
   store.entries.push(nextEntry)
@@ -491,19 +512,25 @@ export function persistSavedCodeExecTool(draft: SavedCodeExecToolDraft): SavedCo
   return nextEntry
 }
 
-export function listSavedCodeExecTools(): SavedCodeExecTool[] {
-  return [...loadStore().entries].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+export function listSavedCodeExecTools(options?: SavedToolQueryOptions): SavedCodeExecTool[] {
+  return [...loadStore().entries]
+    .filter((entry) => options?.includeDisabled === true || entry.enabled !== false)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
-export function getSavedCodeExecTool(idOrAlias: string): SavedCodeExecTool | null {
+export function getSavedCodeExecTool(idOrAlias: string, options?: SavedToolQueryOptions): SavedCodeExecTool | null {
   const normalized = idOrAlias.trim()
   if (!normalized) return null
-  return loadStore().entries.find((entry) => entry.toolId === normalized) ?? null
+  return listSavedCodeExecTools(options).find((entry) => entry.toolId === normalized) ?? null
 }
 
-export function getSavedCodeExecToolForCode(code: string, timeoutMs?: number): SavedCodeExecTool | null {
+export function getSavedCodeExecToolForCode(
+  code: string,
+  timeoutMs?: number,
+  options?: SavedToolQueryOptions
+): SavedCodeExecTool | null {
   const codeHash = computeSavedCodeExecToolHash(code, timeoutMs)
-  return loadStore().entries.find((entry) => entry.codeHash === codeHash) ?? null
+  return listSavedCodeExecTools(options).find((entry) => entry.codeHash === codeHash) ?? null
 }
 
 export function hasSavedCodeExecToolForCode(code: string, timeoutMs?: number): boolean {
@@ -550,18 +577,51 @@ export function deleteSavedCodeExecTool(toolId: string): void {
   saveStore(store)
 }
 
+export function setSavedCodeExecToolEnabled(toolId: string, enabled: boolean): SavedCodeExecTool {
+  const store = loadStore()
+  const index = store.entries.findIndex((entry) => entry.toolId === toolId)
+  if (index < 0) {
+    throw new Error(`工具不存在: ${toolId}`)
+  }
+
+  const current = store.entries[index]
+  const nextEntry: SavedCodeExecTool = {
+    ...current,
+    enabled,
+    updatedAt: new Date().toISOString()
+  }
+  store.entries[index] = nextEntry
+  saveStore(store)
+  return nextEntry
+}
+
+export function setSavedCodeExecToolLastPreviewParams(
+  toolId: string,
+  params: Record<string, unknown>
+): SavedCodeExecTool {
+  const store = loadStore()
+  const index = store.entries.findIndex((entry) => entry.toolId === toolId)
+  if (index < 0) {
+    throw new Error(`工具不存在: ${toolId}`)
+  }
+
+  const current = store.entries[index]
+  const nextEntry: SavedCodeExecTool = {
+    ...current,
+    lastPreviewParams: params
+  }
+  store.entries[index] = nextEntry
+  saveStore(store)
+  return nextEntry
+}
+
 export function searchSavedCodeExecTools(input: {
   query: string
   topK: number
   mode: McpToolSearchMode
-  serverFilter?: string[]
+  includeDisabled?: boolean
 }): SavedCodeExecTool[] {
-  const filter = input.serverFilter?.map((item) => item.toLowerCase()) ?? []
-  if (filter.length > 0 && !filter.includes("saved") && !filter.includes("saved_code_exec")) {
-    return []
-  }
-
-  return listSavedCodeExecTools()
+  return listSavedCodeExecTools({ includeDisabled: input.includeDisabled })
     .map((tool) => ({
       tool,
       score: scoreSavedTool(tool, input.query, input.mode)

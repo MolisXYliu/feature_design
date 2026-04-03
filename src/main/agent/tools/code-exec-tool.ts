@@ -6,38 +6,49 @@ import { z } from "zod"
 import type { ApprovalDecision, ApprovalRequest } from "../../types"
 import { CodeExecEngine } from "../../code-exec/engine"
 import { LocalProcessRunner } from "../../code-exec/runner"
-import { analyzeCodeExecForSavedToolPromotion } from "../../code-exec/saved-tool-promotion"
-import type { CodeExecToolInput } from "../../code-exec/types"
 import {
+  buildSavedCodeExecResultExample,
   buildSavedCodeExecToolDraft,
   getSavedCodeExecToolForCode,
+  inferSavedCodeExecSchema,
+  parseCodeExecOutputValue,
   persistSavedCodeExecTool
 } from "../../code-exec/saved-tool-store"
+import type { CodeExecMcpCall, CodeExecResult, CodeExecToolInput } from "../../code-exec/types"
 import { getCustomModelConfigs, type CustomModelConfig } from "../../storage"
 import type { ApprovalStore } from "../approval-store"
 import type { McpCapabilityService } from "../../mcp/capability-types"
 
-const DEFAULT_TIMEOUT_MS = 20_000
-const TOOL_PROMOTION_BLOCKED_NOTE = "本次脚本未参数化，未保存为工具。"
-const SAVED_TOOL_METADATA_SYSTEM_PROMPT = `You generate metadata for reusable lazy-loaded tools.
+const DEFAULT_TIMEOUT_MS = 10_000
+const SAVE_TOOL_REWRITE_FAILED_NOTE = "工具化改写失败，请点拒绝关闭。"
+const SAVED_TOOL_REWRITE_SYSTEM_PROMPT = `rewrite a successful ad hoc agent script into a reusable saved tool.
 
 Return JSON only with this shape:
 {
   "tool_name": "snake_case_capability_name",
-  "description": "One sentence describing what the tool does and its main inputs."
+  "description": "One sentence describing what the tool does and its main inputs.",
+  "rewritten_code": "JavaScript async function-body code that uses params for reusable caller inputs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  }
 }
 
 Rules:
-- Focus on the user-facing capability, not implementation details.
-- Do not mention code_exec, saved tools, JavaScript, wrappers, or promotion.
-- Do not include repository names, usernames, or other one-off values unless they are part of the reusable capability.
+- Do not output <think> blocks, markdown fences, or any text before or after the JSON object.
+- Preserve the original behavior as closely as possible using the provided original_code, mcp_calls, and final_output.
+- rewritten_code runs as the body of an async function with access to params, mcp, console, signal, setTimeout, and clearTimeout.
+- Every caller-supplied value that should vary between runs must be read from params inside rewritten_code.
+- Stable implementation defaults may remain inline if they are internal constants, protocol selectors, or obvious defaults.
+- Use mcp.$call("tool_id", args) for MCP calls.
+- input_schema must be a valid JSON-schema-like object with top-level type "object".
+- Every params.<key> used by rewritten_code must appear in input_schema.properties.
 - Keep tool_name short, capability-oriented, and reusable.
-- Keep description concise and optimized for search_tool discovery.`
+- Keep description concise and optimized for search_tool discovery.
+- Do not mention code_exec, saved tools, JavaScript, wrappers, or promotion in tool_name or description.`
 
 const codeExecSchema = z.object({
-  code: z.string().describe("JavaScript async function-body code. The runtime injects params for you, so read from params inside code and never declare or shadow a local params variable. Top-level params is the only source of run-specific values: if owner, repo, perPage, sort, filters, IDs, or query text appears in params, read it from params instead of repeating that value as a literal inside code. For each MCP call, first bind local variables from params or earlier MCP call results, then pass only those bound values into mcp.<provider>.<method>(args). Example inside code: const owner = params.owner; const repo = params.repo; const args = { owner, repo }; const result = await mcp.github.listPullRequests(args);"),
-  params: z.object({}).passthrough().describe("Required top-level input object for code_exec. Put the concrete JSON values for this run here, not inside code. Include every external value that will appear in any MCP call, including values that look like defaults for this run such as sort, order, perPage, query fragments, filters, owner, repo, branch, and IDs. Example: { \"owner\": \"vllm-project\", \"repo\": \"vllm\", \"perPage\": 2 }. Then read them in code with params.owner, params.repo, and params.perPage."),
-  timeoutMs: z.number().int().min(1_000).max(120_000).optional().describe("Execution timeout in milliseconds.")
+  code: z.string().describe("JavaScript async function-body code for one ad hoc script run. Declare local variables directly inside the code, then call MCP tools with mcp.$call(tool_id, args). Example: const targetUrl = \"https://www.example.com\"; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\"chrome__chrome_navigate\", navigateArgs);")
 })
 
 interface CodeExecToolContext {
@@ -50,9 +61,11 @@ interface CodeExecToolContext {
   requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>
 }
 
-interface SavedToolMetadata {
+interface SavedToolRewrite {
   toolName: string
   description: string
+  rewrittenCode: string
+  inputSchema: Record<string, unknown>
 }
 
 function mapDecisionToReview(type: ApprovalDecision["type"]): "approved" | "approved_session" | "denied" {
@@ -76,8 +89,7 @@ async function requestCodeExecApproval(
   const fingerprint = createHash("sha256")
     .update(JSON.stringify({
       code: input.code,
-      params: input.params ?? {},
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
       workspacePath: context.workspacePath
     }))
     .digest("hex")
@@ -96,15 +108,13 @@ async function requestCodeExecApproval(
           name: "code_exec",
           args: {
             code: input.code,
-            params: input.params ?? {},
-            timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+            timeoutMs: DEFAULT_TIMEOUT_MS
           }
         },
         safety_level: "needs_approval",
         operation: "code_exec",
         code: input.code,
-        params: input.params ?? {},
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
         cwd: context.workspacePath,
         reason: "执行 code_exec 脚本需要审批",
         allowed_decisions: ["approve", "reject"],
@@ -126,23 +136,13 @@ async function requestCodeExecApproval(
 function maybePromoteCodeExecAsTool(
   context: CodeExecToolContext,
   input: CodeExecToolInput,
-  output: string
+  result: CodeExecResult
 ): string {
-  if (getSavedCodeExecToolForCode(input.code, input.timeoutMs ?? DEFAULT_TIMEOUT_MS)) {
-    return output
+  if (getSavedCodeExecToolForCode(input.code, DEFAULT_TIMEOUT_MS, { includeDisabled: true })) {
+    return result.output
   }
 
-  const promotion = analyzeCodeExecForSavedToolPromotion({
-    code: input.code,
-    params: input.params,
-    output
-  })
-
-  if (promotion.status === "blocked") {
-    return `${output}\n\n${TOOL_PROMOTION_BLOCKED_NOTE}`
-  }
-
-  if (context.yoloMode || !context.requestApproval) return output
+  if (context.yoloMode || !context.requestApproval) return result.output
 
   void (async () => {
     try {
@@ -156,8 +156,7 @@ function maybePromoteCodeExecAsTool(
         safety_level: "needs_approval",
         operation: "prepare_save_code_exec_tool",
         code: input.code,
-        params: input.params ?? {},
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
         cwd: context.workspacePath,
         reason: "",
         allowed_decisions: ["approve", "reject"],
@@ -166,28 +165,27 @@ function maybePromoteCodeExecAsTool(
 
       if (prepareApproval?.type !== "approve") return
 
-      const metadata = await generateSavedToolMetadata(context, {
+      const rewrite = await generateSavedToolRewrite(context, {
         code: input.code,
-        inputSchema: promotion.inputSchema,
-        outputSchema: promotion.outputSchema,
-        resultExample: promotion.resultExample,
-        dependencies: promotion.dependencies
+        mcpCalls: result.meta?.mcpCalls ?? [],
+        output: result.output
       })
 
-      const metadataError = metadata
-        ? undefined
-        : "工具信息自动生成失败，请手动填写 toolName 和 description，或点拒绝关闭。"
-
-      const draft = metadata
+      const dependencies = Array.from(new Set((result.meta?.mcpCalls ?? []).map((call) => call.toolId).filter(Boolean)))
+      const outputValue = parseCodeExecOutputValue(result.output)
+      const outputSchema = inferSavedCodeExecSchema(outputValue)
+      const resultExample = buildSavedCodeExecResultExample(outputValue)
+      const metadataError = rewrite ? undefined : SAVE_TOOL_REWRITE_FAILED_NOTE
+      const draft = rewrite
         ? buildSavedCodeExecToolDraft({
-          toolName: metadata.toolName,
-          description: metadata.description,
-          inputSchema: promotion.inputSchema,
-          outputSchema: promotion.outputSchema,
-          code: input.code,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          dependencies: promotion.dependencies,
-          resultExample: promotion.resultExample
+          toolName: rewrite.toolName,
+          description: rewrite.description,
+          inputSchema: rewrite.inputSchema,
+          outputSchema,
+          code: rewrite.rewrittenCode,
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          dependencies,
+          resultExample
         })
         : null
 
@@ -200,24 +198,23 @@ function maybePromoteCodeExecAsTool(
         },
         safety_level: "needs_approval",
         operation: "save_code_exec_tool",
-        code: input.code,
-        params: input.params ?? {},
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        savedToolName: metadata?.toolName ?? "",
+        code: rewrite?.rewrittenCode ?? input.code,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        savedToolName: rewrite?.toolName ?? "",
         savedToolId: draft?.toolId,
-        savedToolDescription: metadata?.description ?? "",
+        savedToolDescription: rewrite?.description ?? "",
         savedToolMetadataError: metadataError,
         cwd: context.workspacePath,
         reason: metadataError
-          ? "工具信息自动生成失败，请手动填写后决定是否保存"
+          ? "工具化改写失败，请点拒绝关闭"
           : "工具信息已生成，确认后保存为可复用工具",
-        allowed_decisions: ["approve", "reject"],
-        allowed_approval_types: ["approve", "reject"]
+        allowed_decisions: metadataError ? ["reject"] : ["approve", "reject"],
+        allowed_approval_types: metadataError ? ["reject"] : ["approve", "reject"]
       })
 
-      if (approval?.type === "approve") {
-        const toolName = approval.savedToolName?.trim() || metadata?.toolName?.trim() || ""
-        const description = approval.savedToolDescription?.trim() || metadata?.description?.trim() || ""
+      if (approval?.type === "approve" && rewrite) {
+        const toolName = approval.savedToolName?.trim() || rewrite.toolName.trim()
+        const description = approval.savedToolDescription?.trim() || rewrite.description.trim()
         if (!toolName || !description) {
           console.warn("[code_exec] save tool approval missing tool name or description")
           return
@@ -226,12 +223,12 @@ function maybePromoteCodeExecAsTool(
         const finalDraft = buildSavedCodeExecToolDraft({
           toolName,
           description,
-          inputSchema: promotion.inputSchema,
-          outputSchema: promotion.outputSchema,
-          code: input.code,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          dependencies: promotion.dependencies,
-          resultExample: promotion.resultExample
+          inputSchema: rewrite.inputSchema,
+          outputSchema,
+          code: rewrite.rewrittenCode,
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          dependencies,
+          resultExample
         })
 
         persistSavedCodeExecTool({
@@ -244,7 +241,7 @@ function maybePromoteCodeExecAsTool(
     }
   })()
 
-  return output
+  return result.output
 }
 
 function resolveSidecarModelConfig(selectedModelId?: string): CustomModelConfig | null {
@@ -271,22 +268,75 @@ function extractResponseText(content: unknown): string {
   return ""
 }
 
-function parseSavedToolMetadata(raw: string): SavedToolMetadata | null {
+function stripSavedToolRewriteFormatting(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>\s*/gi, "")
+    .replace(/^[\s\S]*?<\/think>\s*/i, "")
+    .trim()
+}
+
+function extractBalancedJsonObjects(text: string): string[] {
+  const results: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaping = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+
+    if (inString) {
+      if (escaping) {
+        escaping = false
+        continue
+      }
+      if (char === "\\") {
+        escaping = true
+        continue
+      }
+      if (char === "\"") {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === "\"") {
+      inString = true
+      continue
+    }
+
+    if (char === "{") {
+      if (depth === 0) start = index
+      depth += 1
+      continue
+    }
+
+    if (char === "}") {
+      if (depth === 0) continue
+      depth -= 1
+      if (depth === 0 && start >= 0) {
+        results.push(text.slice(start, index + 1).trim())
+        start = -1
+      }
+    }
+  }
+
+  return results
+}
+
+function parseSavedToolRewrite(raw: string): SavedToolRewrite | null {
   const candidates = (() => {
-    const trimmed = raw.trim()
-    if (!trimmed) return []
+    const cleaned = stripSavedToolRewriteFormatting(raw)
+    if (!cleaned) return []
 
-    const results = [trimmed]
-    const fencedMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-    if (fencedMatch?.[1]) {
-      results.push(fencedMatch[1].trim())
+    const results = [cleaned]
+    for (const match of cleaned.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)) {
+      if (match[1]?.trim()) {
+        results.push(match[1].trim())
+      }
     }
 
-    const firstBrace = trimmed.indexOf("{")
-    const lastBrace = trimmed.lastIndexOf("}")
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-      results.push(trimmed.slice(firstBrace, lastBrace + 1).trim())
-    }
+    results.push(...extractBalancedJsonObjects(cleaned))
 
     return Array.from(new Set(results.filter(Boolean)))
   })()
@@ -296,10 +346,20 @@ function parseSavedToolMetadata(raw: string): SavedToolMetadata | null {
       const parsed = JSON.parse(candidate) as Record<string, unknown>
       const toolName = typeof parsed.tool_name === "string" ? parsed.tool_name.trim() : ""
       const description = typeof parsed.description === "string" ? parsed.description.trim() : ""
-      if (!toolName || !description) continue
+      const rewrittenCode = typeof parsed.rewritten_code === "string" ? parsed.rewritten_code.trim() : ""
+      const inputSchema =
+        parsed.input_schema && typeof parsed.input_schema === "object" && !Array.isArray(parsed.input_schema)
+          ? {
+              type: "object",
+              ...(parsed.input_schema as Record<string, unknown>)
+            }
+          : null
+      if (!toolName || !description || !rewrittenCode || !inputSchema) continue
       return {
         toolName,
-        description
+        description,
+        rewrittenCode,
+        inputSchema
       }
     } catch {
       continue
@@ -309,19 +369,17 @@ function parseSavedToolMetadata(raw: string): SavedToolMetadata | null {
   return null
 }
 
-async function generateSavedToolMetadata(
+async function generateSavedToolRewrite(
   context: CodeExecToolContext,
   input: {
     code: string
-    inputSchema: Record<string, unknown>
-    outputSchema?: Record<string, unknown>
-    resultExample?: unknown
-    dependencies: string[]
+    mcpCalls: CodeExecMcpCall[]
+    output: string
   }
-): Promise<SavedToolMetadata | null> {
+): Promise<SavedToolRewrite | null> {
   const config = resolveSidecarModelConfig(context.modelId)
   if (!config?.apiKey) {
-    console.warn("[code_exec] skipped saved-tool metadata generation: missing model config or API key")
+    console.warn("[code_exec] skipped saved-tool rewrite generation: missing model config or API key")
     return null
   }
 
@@ -329,36 +387,34 @@ async function generateSavedToolMetadata(
     model: config.model,
     apiKey: config.apiKey,
     configuration: { baseURL: config.baseUrl },
-    maxTokens: 512,
+    maxTokens: 5120,
     temperature: 0,
     streaming: false
   })
 
   const userPrompt = JSON.stringify({
-    code: input.code,
-    inputSchema: input.inputSchema,
-    outputSchema: input.outputSchema ?? null,
-    resultExample: input.resultExample ?? null,
-    dependencies: input.dependencies
+    original_code: input.code,
+    mcp_calls: input.mcpCalls,
+    final_output: input.output
   }, null, 2)
 
   try {
     const response = await model.invoke(
       [
-        new SystemMessage(SAVED_TOOL_METADATA_SYSTEM_PROMPT),
+        new SystemMessage(SAVED_TOOL_REWRITE_SYSTEM_PROMPT),
         new HumanMessage(userPrompt)
       ],
       { callbacks: [] }
     )
     const raw = extractResponseText(response.content).trim()
-    const metadata = parseSavedToolMetadata(raw)
-    if (!metadata) {
-      console.warn("[code_exec] failed to parse saved-tool metadata response:", raw.slice(0, 200))
+    const rewrite = parseSavedToolRewrite(raw)
+    if (!rewrite) {
+      console.warn("[code_exec] failed to parse saved-tool rewrite response:", raw.slice(0, 200))
       return null
     }
-    return metadata
+    return rewrite
   } catch (error) {
-    console.warn("[code_exec] failed to generate saved-tool metadata:", error)
+    console.warn("[code_exec] failed to generate saved-tool rewrite:", error)
     return null
   }
 }
@@ -375,14 +431,13 @@ export function createCodeExecTool(context: CodeExecToolContext) {
 
       const result = await engine.execute({
         code: input.code,
-        params: input.params,
-        timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
         workspacePath: context.workspacePath,
         threadId: context.threadId
       })
 
       if (result.ok) {
-        return maybePromoteCodeExecAsTool(context, input, result.output)
+        return maybePromoteCodeExecAsTool(context, input, result)
       }
 
       return result.output
@@ -390,11 +445,12 @@ export function createCodeExecTool(context: CodeExecToolContext) {
     {
       name: "code_exec",
       description:
-        "Run a short JavaScript script body that can call MCP tools through mcp.<provider>.<method>(). " +
-        "All variables derived from the context and user input must be passed into the script via `params`. Hardcoding values directly into the code is strictly prohibited" +
-        "Correct example: params={\"owner\":\"vllm-project\",\"repo\":\"vllm\"}, code='const owner = params.owner; const repo = params.repo; const result = await mcp.github.listPullRequests({ owner, repo }); return JSON.stringify(result, null, 2);'. " +
-        "Wrong example: params={}, code='const result = await mcp.github.listPullRequests({ owner: \"vllm-project\", repo: \"vllm\" }); return JSON.stringify(result, null, 2);'. " +
-        "The tool always returns a single string result.",
+        "Run a JavaScript script body that can call MCP tools through mcp.$call(tool_id, args). " +
+        "This tool only accepts a single code string for ad hoc execution. Write any run-specific local constants directly inside the script body. " +
+        "The tool always returns a single string result. " +
+        "Example input: {\n" +
+        "  \"code\": \"const targetUrl = \\\"https://www.example.com\\\"; const textContent = true; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\\\"chrome__chrome_navigate\\\", navigateArgs); if (!navigateResult.ok) { throw new Error(\\\"chrome__chrome_navigate failed: \\\" + navigateResult.error); } const contentArgs = { textContent }; const contentResult = await mcp.$call(\\\"chrome__chrome_get_web_content\\\", contentArgs); if (!contentResult.ok) { throw new Error(\\\"chrome__chrome_get_web_content failed: \\\" + contentResult.error); } return { opened_url: targetUrl, navigate_result: navigateResult.data, page_content: contentResult.data };\"\n" +
+        "}",
       schema: codeExecSchema
     }
   )

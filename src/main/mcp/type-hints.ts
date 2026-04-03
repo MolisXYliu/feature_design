@@ -12,12 +12,27 @@ function formatPropertyKey(key: string): string {
   return isIdentifier(key) ? key : JSON.stringify(key)
 }
 
-function buildParamReference(key: string): string {
-  return isIdentifier(key) ? `params.${key}` : `params[${JSON.stringify(key)}]`
+function buildPlaceholderValue(key: string, schema: unknown): string {
+  if (!schema || typeof schema !== "object") return JSON.stringify(`<${key}>`)
+
+  const source = schema as Record<string, unknown>
+  switch (source.type) {
+    case "integer":
+    case "number":
+      return "0"
+    case "boolean":
+      return "false"
+    case "array":
+      return "[]"
+    case "object":
+      return "{}"
+    default:
+      return JSON.stringify(`<${key}>`)
+  }
 }
 
 function buildExampleArgs(schema: unknown): string {
-  if (!schema || typeof schema !== "object") return "params"
+  if (!schema || typeof schema !== "object") return "{}"
 
   const source = schema as Record<string, unknown>
 
@@ -35,15 +50,15 @@ function buildExampleArgs(schema: unknown): string {
     const keys = requiredKeys.length > 0 ? requiredKeys : Object.keys(properties).slice(0, 2)
     if (keys.length === 0) return "{}"
 
-    const lines = keys.map((key) => `  ${formatPropertyKey(key)}: ${buildParamReference(key)}`)
+    const lines = keys.map((key) => `  ${formatPropertyKey(key)}: ${buildPlaceholderValue(key, properties[key])}`)
     return `{\n${lines.join(",\n")}\n}`
   }
 
-  return "params"
+  return "{}"
 }
 
 function buildCallExample(tool: McpCapabilityTool): string {
-  return `const result = await mcp.${tool.scriptAlias}(${buildExampleArgs(tool.inputSchema ?? { type: "object" })})`
+  return `const result = await mcp.$call(${JSON.stringify(tool.toolId)}, ${buildExampleArgs(tool.inputSchema ?? { type: "object" })})`
 }
 
 export function renderToolHints(tool: McpCapabilityTool): RenderedToolHints {

@@ -581,6 +581,10 @@ interface CustomAPI {
   }
   codeExecTools: {
     list: () => Promise<ManagedSavedCodeExecTool[]>
+    getSettings: () => Promise<{ codeExecEnabled: boolean }>
+    setCodeExecEnabled: (enabled: boolean) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<ManagedSavedCodeExecTool>
+    setLastPreviewParams: (id: string, params: Record<string, unknown>) => Promise<ManagedSavedCodeExecTool>
     update: (payload: SavedCodeExecToolUpdatePayload) => Promise<ManagedSavedCodeExecTool>
     delete: (id: string) => Promise<void>
     runPreview: (payload: SavedCodeExecPreviewPayload) => Promise<SavedCodeExecPreviewResult>

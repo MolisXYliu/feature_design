@@ -6,7 +6,6 @@ export type McpToolSearchVisibility = "lazy" | "eager" | "all"
 export interface McpToolSearchOptions {
   topK: number
   mode: McpToolSearchMode
-  serverFilter?: string[]
   visibility?: McpToolSearchVisibility
 }
 
@@ -145,7 +144,6 @@ function buildSnapshot(tools: McpCapabilityTool[]): string {
     providerAlias: tool.providerAlias,
     providerDisplayName: tool.providerDisplayName,
     toolName: tool.toolName,
-    scriptAlias: tool.scriptAlias,
     description: tool.description ?? "",
     visibility: tool.visibility
   })))
@@ -159,7 +157,6 @@ function buildSearchIndex(tools: McpCapabilityTool[]): SimpleBM25 {
       tool.providerDisplayName,
       tool.providerAlias,
       tool.toolName,
-      tool.scriptAlias,
       tool.description ?? ""
     ].join(" ")
     bm25.index(tool.capabilityId, searchableText, tool)
@@ -186,21 +183,6 @@ function getSearchState(
   return state
 }
 
-function applyServerFilter(
-  tools: McpCapabilityTool[],
-  serverFilter?: string[]
-): McpCapabilityTool[] {
-  if (!serverFilter || serverFilter.length === 0) return tools
-  const allowed = new Set(serverFilter.map((item) => item.toLowerCase()))
-  return tools.filter((tool) => {
-    return (
-      allowed.has(tool.providerAlias.toLowerCase()) ||
-      allowed.has(tool.providerDisplayName.toLowerCase()) ||
-      allowed.has(tool.providerKey.toLowerCase())
-    )
-  })
-}
-
 function searchKeyword(tools: McpCapabilityTool[], query: string, limit: number): McpCapabilityTool[] {
   const queryLower = query.toLowerCase()
   const scored = tools
@@ -210,15 +192,14 @@ function searchKeyword(tools: McpCapabilityTool[], query: string, limit: number)
         tool.providerAlias,
         tool.toolId,
         tool.toolName,
-        tool.scriptAlias,
         tool.description ?? ""
       ].map((value) => value.toLowerCase())
 
       const exactToolName = tool.toolName.toLowerCase() === queryLower
       const toolMatch = tool.toolName.toLowerCase().includes(queryLower)
       const providerMatch = values[0].includes(queryLower) || values[1].includes(queryLower)
-      const aliasMatch = values[2].includes(queryLower) || values[4].includes(queryLower)
-      const descriptionMatch = values[5].includes(queryLower)
+      const aliasMatch = values[2].includes(queryLower)
+      const descriptionMatch = values[4].includes(queryLower)
 
       if (!exactToolName && !toolMatch && !providerMatch && !aliasMatch && !descriptionMatch) {
         return null
@@ -254,7 +235,6 @@ function searchRegex(tools: McpCapabilityTool[], query: string, limit: number): 
       || regex.test(tool.providerAlias)
       || regex.test(tool.toolId)
       || regex.test(tool.toolName)
-      || regex.test(tool.scriptAlias)
       || regex.test(tool.description ?? "")
   }).slice(0, limit)
 }
@@ -267,18 +247,15 @@ export async function searchCapabilityTools(
   const visibility = options.visibility ?? "lazy"
   const tools = await service.listTools()
   const visibleTools = filterByVisibility(tools, visibility)
-  const filteredTools = applyServerFilter(visibleTools, options.serverFilter)
 
   switch (options.mode) {
     case "keyword":
-      return searchKeyword(filteredTools, query, options.topK)
+      return searchKeyword(visibleTools, query, options.topK)
     case "regex":
-      return searchRegex(filteredTools, query, options.topK)
+      return searchRegex(visibleTools, query, options.topK)
     case "bm25":
     default: {
-      const index = options.serverFilter?.length
-        ? buildSearchIndex(filteredTools)
-        : getSearchState(tools, visibility).index
+      const index = getSearchState(tools, visibility).index
       return index.search(query, options.topK)
     }
   }

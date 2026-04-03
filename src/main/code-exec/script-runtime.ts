@@ -2,7 +2,13 @@ import vm from "node:vm"
 import type { McpCapabilityTool, McpInvocationResult } from "../mcp/capability-types"
 import { createServerProxy } from "../mcp/server-proxy"
 import { safeJsonStringify, stringifyCodeExecOutput } from "../mcp/result-utils"
-import type { CodeExecHelperRequest, CodeExecHelperResult, CodeExecInvokeResponse, CodeExecMetaResponse } from "./types"
+import type {
+  CodeExecHelperRequest,
+  CodeExecHelperResult,
+  CodeExecInvokeResponse,
+  CodeExecMetaResponse,
+  CodeExecMcpCall
+} from "./types"
 
 type CodeExecStage = "compile" | "bootstrap" | "invoke" | "runtime"
 
@@ -113,7 +119,8 @@ async function executeUserCode(
   request: CodeExecHelperRequest,
   tools: McpCapabilityTool[],
   signal: AbortSignal,
-  logs: string[]
+  logs: string[],
+  mcpCalls: CodeExecMcpCall[]
 ): Promise<unknown> {
   const sandboxConsole = createConsole(logs)
 
@@ -121,6 +128,11 @@ async function executeUserCode(
     idOrAlias: string,
     args: Record<string, unknown>
   ): Promise<McpInvocationResult> => {
+    mcpCalls.push({
+      toolId: idOrAlias,
+      args
+    })
+
     const response = await postJson<CodeExecInvokeResponse>(
       `${request.bridgeUrl}/call`,
       request.token,
@@ -186,6 +198,7 @@ export async function runCodeExecScript(
   request: CodeExecHelperRequest
 ): Promise<CodeExecHelperResult> {
   const logs: string[] = []
+  const mcpCalls: CodeExecMcpCall[] = []
   const controller = new AbortController()
   const timeoutMessage = `Code execution timed out after ${request.timeoutMs}ms`
   const timeoutId = setTimeout(() => {
@@ -194,7 +207,7 @@ export async function runCodeExecScript(
 
   try {
     const tools = await loadTools(request, controller.signal)
-    const execution = executeUserCode(request, tools, controller.signal, logs)
+    const execution = executeUserCode(request, tools, controller.signal, logs, mcpCalls)
     const result = await Promise.race([
       execution,
       new Promise<never>((_, reject) => {
@@ -209,7 +222,10 @@ export async function runCodeExecScript(
     return {
       ok: true,
       output: stringifyCodeExecOutput(result),
-      logs
+      logs,
+      meta: {
+        mcpCalls
+      }
     }
   } catch (error) {
     if (error instanceof CodeExecStageError) {
@@ -218,7 +234,10 @@ export async function runCodeExecScript(
         output: stringifyCodeExecOutput({ stage: error.stage, error: error.message, logs }),
         logs,
         stage: error.stage,
-        error: error.message
+        error: error.message,
+        meta: {
+          mcpCalls
+        }
       }
     }
 
@@ -228,7 +247,10 @@ export async function runCodeExecScript(
       output: stringifyCodeExecOutput({ stage: "runtime", error: message, logs }),
       logs,
       stage: "runtime",
-      error: message
+      error: message,
+      meta: {
+        mcpCalls
+      }
     }
   } finally {
     clearTimeout(timeoutId)

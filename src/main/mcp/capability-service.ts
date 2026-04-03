@@ -237,9 +237,6 @@ class ManagedMcpCapabilityService implements McpCapabilityService {
     const toolId = maps.toolIds.get(idOrAlias)
     if (toolId) return toolId
 
-    const scriptAlias = maps.scriptAliases.get(idOrAlias)
-    if (scriptAlias) return scriptAlias
-
     return null
   }
 

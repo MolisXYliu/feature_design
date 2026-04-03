@@ -10,6 +10,8 @@ import {
   parseCodeExecOutputValue,
   replaceSavedCodeExecTool,
   resolveSavedCodeExecToolId,
+  setSavedCodeExecToolEnabled,
+  setSavedCodeExecToolLastPreviewParams,
   validateSavedCodeExecToolName,
   type SavedCodeExecTool
 } from "../code-exec/saved-tool-store"
@@ -17,7 +19,7 @@ import { CodeExecEngine } from "../code-exec/engine"
 import { LocalProcessRunner } from "../code-exec/runner"
 import type { CodeExecResult } from "../code-exec/types"
 import { getGlobalMcpCapabilityService } from "../mcp/capability-service"
-import { getOpenworkDir } from "../storage"
+import { getOpenworkDir, isCodeExecEnabled, setCodeExecEnabled } from "../storage"
 
 const DEFAULT_TIMEOUT_MS = 20_000
 const TIMEOUT_MIN = 1_000
@@ -45,6 +47,10 @@ export interface SavedCodeExecPreviewPayload {
 
 export interface SavedCodeExecPreviewResult extends CodeExecResult {
   parsedOutput?: unknown
+}
+
+export interface CodeExecToolSettings {
+  codeExecEnabled: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -121,15 +127,59 @@ async function runCodeExecPreview(
 
 export function registerCodeExecToolsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle("codeExecTools:list", async (): Promise<ManagedSavedCodeExecTool[]> => {
-    return listSavedCodeExecTools().map(toManagedSavedCodeExecTool)
+    return listSavedCodeExecTools({ includeDisabled: true }).map(toManagedSavedCodeExecTool)
   })
+
+  ipcMain.handle(
+    "codeExecTools:getSettings",
+    async (): Promise<CodeExecToolSettings> => ({
+      codeExecEnabled: isCodeExecEnabled()
+    })
+  )
+
+  ipcMain.handle(
+    "codeExecTools:setCodeExecEnabled",
+    async (_event, enabled: boolean): Promise<void> => {
+      setCodeExecEnabled(enabled)
+    }
+  )
+
+  ipcMain.handle(
+    "codeExecTools:setEnabled",
+    async (
+      _event,
+      { id, enabled }: { id: string; enabled: boolean }
+    ): Promise<ManagedSavedCodeExecTool> => {
+      if (!id?.trim()) {
+        throw new Error("工具 ID 不能为空")
+      }
+
+      const updated = setSavedCodeExecToolEnabled(id, enabled === true)
+      return toManagedSavedCodeExecTool(updated)
+    }
+  )
+
+  ipcMain.handle(
+    "codeExecTools:setLastPreviewParams",
+    async (_event, { id, params }: { id: string; params: Record<string, unknown> }): Promise<ManagedSavedCodeExecTool> => {
+      if (!id?.trim()) {
+        throw new Error("工具 ID 不能为空")
+      }
+      if (!isRecord(params)) {
+        throw new Error("params 必须是对象")
+      }
+
+      const updated = setSavedCodeExecToolLastPreviewParams(id, params)
+      return toManagedSavedCodeExecTool(updated)
+    }
+  )
 
   ipcMain.handle(
     "codeExecTools:update",
     async (_event, payload: SavedCodeExecToolUpdatePayload): Promise<ManagedSavedCodeExecTool> => {
       validateToolUpdatePayload(payload)
 
-      const current = getSavedCodeExecTool(payload.id)
+      const current = getSavedCodeExecTool(payload.id, { includeDisabled: true })
       if (!current) {
         throw new Error(`工具不存在: ${payload.id}`)
       }
@@ -138,13 +188,18 @@ export function registerCodeExecToolsHandlers(ipcMain: IpcMain): void {
       const nextToolId = resolveSavedCodeExecToolId(payload.toolName, {
         currentToolId: current.toolId
       })
+      const codeChanged = payload.code !== current.code
 
       let inputSchema = current.inputSchema
       let outputSchema = current.outputSchema
       let resultExample = current.resultExample
       let dependencies = parseCodeExecDependencies(payload.code)
 
-      if (typeof payload.previewOutput === "string") {
+      if (codeChanged && typeof payload.previewOutput !== "string") {
+        throw new Error("代码已修改，请先试运行成功后再保存")
+      }
+
+      if (codeChanged && typeof payload.previewOutput === "string") {
         const promotion = analyzeCodeExecForSavedToolPromotion({
           code: payload.code,
           params: payload.previewParams,
@@ -170,7 +225,8 @@ export function registerCodeExecToolsHandlers(ipcMain: IpcMain): void {
         dependencies,
         inputSchema,
         outputSchema,
-        resultExample
+        resultExample,
+        lastPreviewParams: payload.previewParams ?? current.lastPreviewParams
       })
 
       return toManagedSavedCodeExecTool(updated)

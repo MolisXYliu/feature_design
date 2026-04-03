@@ -3,8 +3,8 @@
  *
  * This module implements a three-tool architecture for handling large MCP tool libraries:
  * - search_tool: Search for lazily loaded MCP tools
- * - load_tool: Load tool schemas and script signatures
- * - mcp_call: Execute tools via indirect call
+ * - inspect_tool: Inspect tool schemas and script signatures
+ * - invoke_discovered_tool: Execute a discovered MCP tool or saved tool
  */
 
 import { tool } from "langchain"
@@ -45,27 +45,9 @@ async function invokeWithRetry(
   }
 }
 
-const searchToolSchema = z.object({
-  query: z.string().describe("Search query describing the MCP capability you need"),
-  top_k: z.number().optional().default(5).describe("Maximum number of results to return"),
-  mode: z.enum(["bm25", "keyword", "regex"]).optional().default("bm25").describe(
-    "Search mode: bm25 (semantic ranking), keyword (contains match), regex (pattern match)"
-  ),
-  server_filter: z.array(z.string()).optional().describe(
-    "Optional provider alias/display-name filters"
-  )
-})
-
-const loadToolSchema = z.object({
-  tool_ids: z.array(z.string()).describe("List of MCP tool IDs to inspect"),
-  usage: z.enum(["mcp_call", "code_exec"]).optional().default("mcp_call").describe(
-    "How the loaded tool info will be used. Use mcp_call for direct tool calls, or code_exec for script authoring hints."
-  )
-})
-
-const mcpCallSchema = z.object({
-  tool_id: z.string().describe("MCP tool ID of the tool to execute"),
-  tool_args: z.object({}).passthrough().describe("MCP tool args, refer to load_tool result")
+const invokeDiscoveredToolSchema = z.object({
+  tool_id: z.string().describe("Tool ID of the discovered MCP tool or saved tool to execute"),
+  tool_args: z.object({}).passthrough().describe("Tool args, refer to inspect_tool result")
 })
 
 interface ToolSearchContext {
@@ -73,8 +55,14 @@ interface ToolSearchContext {
   threadId?: string
 }
 
+interface ToolSearchOptions {
+  codeExecEnabled: boolean
+}
+
 type SearchToolEntry = {
   toolId: string
+  source: "mcp" | "saved_tool"
+  allowCallers: string[]
   description?: string
 }
 
@@ -111,30 +99,78 @@ async function getMissingSavedToolDependencies(
   if (dependencies.length === 0) return []
 
   const availableTools = await service.listTools()
-  const availableScriptAliases = new Set(availableTools.map((tool) => tool.scriptAlias))
-  return dependencies.filter((dependency) => !availableScriptAliases.has(dependency))
+  const availableToolIds = new Set(availableTools.map((tool) => tool.toolId))
+  return dependencies.filter((dependency) => !availableToolIds.has(dependency))
 }
 
-export function createSearchTool(service: McpCapabilityService) {
+function createSearchCallerSchema(codeExecEnabled: boolean) {
+  return z.object({
+    query: z.string().describe("Search query describing the discovered tool capability you need"),
+    top_k: z.number().optional().default(5).describe("Maximum number of results to return"),
+    mode: z.enum(["bm25", "keyword", "regex"]).optional().default("bm25").describe(
+      "Search mode: bm25 (semantic ranking), keyword (contains match), regex (pattern match)"
+    ),
+    caller: codeExecEnabled
+      ? z.enum(["invoke_discovered_tool", "code_exec"]).optional().default("invoke_discovered_tool").describe(
+        "Which caller this search is for. Use invoke_discovered_tool for lazy MCP tools and enabled saved tools. Use code_exec to search all enabled MCP tools that code_exec can call."
+      )
+      : z.enum(["invoke_discovered_tool"]).optional().default("invoke_discovered_tool").describe(
+        "Which caller this search is for. code_exec is disabled in this runtime, so invoke_discovered_tool is the only available caller."
+      )
+  })
+}
+
+function createInspectCallerSchema(codeExecEnabled: boolean) {
+  return z.object({
+    tool_ids: z.array(z.string()).describe("List of discovered tool IDs to inspect"),
+    caller: codeExecEnabled
+      ? z.enum(["invoke_discovered_tool", "code_exec"]).optional().default("invoke_discovered_tool").describe(
+        "Which caller this inspection is for. Use invoke_discovered_tool for direct invocation, or code_exec for script authoring hints."
+      )
+      : z.enum(["invoke_discovered_tool"]).optional().default("invoke_discovered_tool").describe(
+        "Which caller this inspection is for. code_exec is disabled in this runtime, so invoke_discovered_tool is the only available caller."
+      )
+  })
+}
+
+export function createSearchTool(service: McpCapabilityService, options: ToolSearchOptions) {
+  const allowMcpCallers = options.codeExecEnabled
+    ? ["invoke_discovered_tool", "code_exec"]
+    : ["invoke_discovered_tool"]
+
   return tool(
     async (input) => {
-      const mcpTools = await searchCapabilityTools(service, input.query, {
+      const caller = String(input.caller ?? "invoke_discovered_tool")
+      const isCodeExecCaller = options.codeExecEnabled && caller === "code_exec"
+      const mcpTools = (await searchCapabilityTools(service, input.query, {
         topK: input.top_k ?? 5,
         mode: input.mode ?? "bm25",
-        serverFilter: input.server_filter,
-        visibility: "lazy"
-      })
-      const savedTools = searchSavedCodeExecTools({
-        query: input.query,
-        topK: input.top_k ?? 5,
-        mode: input.mode ?? "bm25",
-        serverFilter: input.server_filter
-      })
+        visibility: isCodeExecCaller ? "all" : "lazy"
+      })).map((tool) => ({
+        toolId: tool.toolId,
+        source: "mcp" as const,
+        allowCallers: allowMcpCallers,
+        description: tool.description
+      }))
+      const savedTools = !options.codeExecEnabled || isCodeExecCaller
+        ? []
+        : searchSavedCodeExecTools({
+            query: input.query,
+            topK: input.top_k ?? 5,
+            mode: input.mode ?? "bm25"
+          }).map((tool) => ({
+            toolId: tool.toolId,
+            source: "saved_tool" as const,
+            allowCallers: ["invoke_discovered_tool"],
+            description: tool.description
+          }))
       const tools = mergeSearchResults(mcpTools, savedTools, input.top_k ?? 5)
 
       return JSON.stringify({
         tools: tools.map((tool) => ({
           tool_id: tool.toolId,
+          source: tool.source,
+          allow_callers: tool.allowCallers,
           description: (tool.description ?? "").slice(0, 200)
         }))
       }, null, 2)
@@ -142,28 +178,56 @@ export function createSearchTool(service: McpCapabilityService) {
     {
       name: "search_tool",
       description:
-        "Search for available lazy tools, including MCP tools and saved code_exec tools. Use this to discover provider-specific tools before calling load_tool, " +
-        "and then use mcp_call to invoke them, or code_exec when you need to compose MCP tools in a script.",
-      schema: searchToolSchema
+        options.codeExecEnabled
+          ? "Search for discovered tools by caller. For invoke_discovered_tool, this searches lazy MCP tools plus enabled saved tools. For code_exec, this searches all enabled MCP tools and excludes saved tools. Returns each tool's source and allow_callers."
+          : "Search for discovered tools for invoke_discovered_tool. This searches lazy MCP tools only and returns each tool's source and allow_callers.",
+      schema: createSearchCallerSchema(options.codeExecEnabled)
     }
   )
 }
 
-export function createLoadTool(service: McpCapabilityService) {
+export function createInspectTool(service: McpCapabilityService, options: ToolSearchOptions) {
+  const allowMcpCallers = options.codeExecEnabled
+    ? ["invoke_discovered_tool", "code_exec"]
+    : ["invoke_discovered_tool"]
+
   return tool(
     async (input) => {
+      const caller = String(input.caller ?? "invoke_discovered_tool")
       const loadedTools = await Promise.all(input.tool_ids.map(async (idOrAlias) => {
-        const savedTool = getSavedCodeExecTool(idOrAlias)
+        const savedTool = getSavedCodeExecTool(idOrAlias, { includeDisabled: true })
         if (savedTool) {
-          if (input.usage === "code_exec") {
+          if (!options.codeExecEnabled) {
             return {
               tool_id: savedTool.toolId,
+              source: "saved_tool",
+              allow_callers: ["invoke_discovered_tool"],
+              error: "Saved tools are disabled in settings."
+            }
+          }
+
+          if (!savedTool.enabled) {
+            return {
+              tool_id: savedTool.toolId,
+              source: "saved_tool",
+              allow_callers: ["invoke_discovered_tool"],
+              error: "Saved tool is disabled."
+            }
+          }
+
+          if (caller === "code_exec") {
+            return {
+              tool_id: savedTool.toolId,
+              source: "saved_tool",
+              allow_callers: ["invoke_discovered_tool"],
               error: "Saved code_exec tools cannot be called from code_exec. Load the underlying MCP tool instead."
             }
           }
 
           return {
             tool_id: savedTool.toolId,
+            source: "saved_tool",
+            allow_callers: ["invoke_discovered_tool"],
             schema: savedTool.inputSchema,
             output_schema: savedTool.outputSchema
           }
@@ -173,17 +237,21 @@ export function createLoadTool(service: McpCapabilityService) {
         if (!resolved) {
           return {
             tool_id: idOrAlias,
+            source: "mcp",
+            allow_callers: allowMcpCallers,
             error: "Tool not found"
           }
         }
 
         const loadedTool: Record<string, unknown> = {
           tool_id: resolved.toolId,
+          source: "mcp",
+          allow_callers: allowMcpCallers,
           schema: resolved.inputSchema,
           output_schema: resolved.outputSchema
         }
 
-        if (input.usage === "code_exec") {
+        if (caller === "code_exec") {
           const storedExample = getStoredToolExample(resolved)
           const hints = renderToolHints(resolved)
 
@@ -201,22 +269,41 @@ export function createLoadTool(service: McpCapabilityService) {
       }, null, 2)
     },
     {
-      name: "load_tool",
+      name: "inspect_tool",
       description:
-        "Load exact lazy-tool schemas for any available MCP tool or saved code_exec tool. " +
-        "Set usage=code_exec when you need MCP call examples and result samples for code_exec authoring.",
-      schema: loadToolSchema
+        options.codeExecEnabled
+          ? "Inspect the exact schema and examples for any discovered MCP tool or saved tool. Set caller=code_exec when you need canonical tool_id call examples and result samples for code_exec authoring."
+          : "Inspect the exact schema and examples for any discovered MCP tool. Enabled saved tools are hidden because code_exec is disabled in this runtime.",
+      schema: createInspectCallerSchema(options.codeExecEnabled)
     }
   )
 }
 
-export function createMcpCallTool(service: McpCapabilityService, context: ToolSearchContext) {
+export function createInvokeDiscoveredTool(
+  service: McpCapabilityService,
+  context: ToolSearchContext,
+  options: ToolSearchOptions
+) {
   const engine = new CodeExecEngine(new LocalProcessRunner(service))
 
   return tool(
     async (input) => {
-      const savedTool = getSavedCodeExecTool(input.tool_id)
+      const savedTool = getSavedCodeExecTool(input.tool_id, { includeDisabled: true })
       if (savedTool) {
+        if (!options.codeExecEnabled) {
+          return JSON.stringify({
+            ok: false,
+            error: "Saved tools are disabled in settings."
+          }, null, 2)
+        }
+
+        if (!savedTool.enabled) {
+          return JSON.stringify({
+            ok: false,
+            error: "Saved tool is disabled."
+          }, null, 2)
+        }
+
         const missingDependencies = await getMissingSavedToolDependencies(service, savedTool.dependencies)
         if (missingDependencies.length > 0) {
           const dependencyList = missingDependencies.join(", ")
@@ -280,30 +367,32 @@ export function createMcpCallTool(service: McpCapabilityService, context: ToolSe
       }
     },
     {
-      name: "mcp_call",
+      name: "invoke_discovered_tool",
       description:
-        "Execute a lazy MCP tool or saved code_exec tool by tool_id. Use search_tool and load_tool first so you know the exact schema.",
-      schema: mcpCallSchema
+        "Execute a discovered MCP tool or saved tool by tool_id. Use search_tool and inspect_tool first so you know the exact schema.",
+      schema: invokeDiscoveredToolSchema
     }
   )
 }
 
 export async function createToolSearchTools(
   service: McpCapabilityService,
-  context: ToolSearchContext
+  context: ToolSearchContext,
+  options?: Partial<ToolSearchOptions>
 ): Promise<unknown[]> {
+  const codeExecEnabled = options?.codeExecEnabled !== false
   const tools = await service.listTools()
-  const savedTools = listSavedCodeExecTools()
+  const savedTools = codeExecEnabled ? listSavedCodeExecTools() : []
   const lazyTools = tools.filter((tool) => tool.visibility === "lazy")
   if (tools.length === 0 && savedTools.length === 0) return []
 
   if (lazyTools.length === 0 && savedTools.length === 0) {
-    return [createLoadTool(service)]
+    return [createInspectTool(service, { codeExecEnabled })]
   }
 
   return [
-    createSearchTool(service),
-    createLoadTool(service),
-    createMcpCallTool(service, context)
+    createSearchTool(service, { codeExecEnabled }),
+    createInspectTool(service, { codeExecEnabled }),
+    createInvokeDiscoveredTool(service, context, { codeExecEnabled })
   ]
 }

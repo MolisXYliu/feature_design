@@ -2,8 +2,6 @@ import type { McpCapabilityTool } from "../mcp/capability-types"
 
 export interface CodeExecToolInput {
   code: string
-  params?: Record<string, unknown>
-  timeoutMs?: number
 }
 
 export interface CodeExecRequest {
@@ -14,12 +12,22 @@ export interface CodeExecRequest {
   threadId?: string
 }
 
+export interface CodeExecMcpCall {
+  toolId: string
+  args: Record<string, unknown>
+}
+
+export interface CodeExecExecutionMeta {
+  mcpCalls: CodeExecMcpCall[]
+}
+
 export interface CodeExecResult {
   ok: boolean
   output: string
   logs: string[]
   error?: string
   stage?: "compile" | "bootstrap" | "invoke" | "runtime"
+  meta?: CodeExecExecutionMeta
 }
 
 export interface CodeExecSession {

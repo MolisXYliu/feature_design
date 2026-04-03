@@ -1965,6 +1965,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             const isPrepareSaveCodeExecToolApproval = operation === "prepare_save_code_exec_tool"
             const isSaveCodeExecToolApproval = operation === "save_code_exec_tool"
             const isManualSaveCodeExecToolApproval = isSaveCodeExecToolApproval && Boolean(approval.savedToolMetadataError)
+            const approvalParams = approval.params ?? pendingApproval.tool_call?.args?.params ?? {}
+            const hasApprovalParams =
+              approvalParams &&
+              typeof approvalParams === "object" &&
+              !Array.isArray(approvalParams) &&
+              Object.keys(approvalParams as Record<string, unknown>).length > 0
             const isSaveToolApprovalInvalid =
               isSaveCodeExecToolApproval &&
               (
@@ -2052,12 +2058,14 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   {String(approval.code || pendingApproval.tool_call?.args?.code || "")}
                 </div>
                 <div className="grid gap-2 md:grid-cols-2">
-                  <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
-                    <div className="mb-1 text-[11px] font-medium text-muted-foreground">params</div>
-                    <pre className="whitespace-pre-wrap break-all font-mono">
-                      {JSON.stringify(approval.params ?? pendingApproval.tool_call?.args?.params ?? {}, null, 2)}
-                    </pre>
-                  </div>
+                  {hasApprovalParams && (
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">params</div>
+                      <pre className="whitespace-pre-wrap break-all font-mono">
+                        {JSON.stringify(approvalParams, null, 2)}
+                      </pre>
+                    </div>
+                  )}
                   <div className="rounded-md bg-muted/30 px-3 py-2 text-xs">
                     <div className="mb-1 text-[11px] font-medium text-muted-foreground">timeout</div>
                     <div className="font-mono">
