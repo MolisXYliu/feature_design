@@ -39,8 +39,10 @@ import type {
   RoutingTrace
 } from "./types"
 import { NoopTraceReporter } from "./types"
+import { app } from "electron"
 import { getLocalIP } from "../../net-utils"
 import { getUserInfo } from "../../storage"
+import { listAllSkills } from "../../ipc/skills"
 
 // ─────────────────────────────────────────────────────────
 // Global reporter registry
@@ -381,6 +383,21 @@ export class TraceCollector {
     const durationMs = Date.now() - new Date(this.startedAt).getTime()
     const totalToolCalls = this.steps.reduce((sum, s) => sum + s.toolCalls.length, 0)
 
+    // Resolve skill versions and merge into "name-version" format
+    let usedSkillsWithVersions = this.usedSkills
+    if (this.usedSkills.length > 0) {
+      try {
+        const allSkills = await listAllSkills()
+        const skillVersionMap = new Map(allSkills.map((s) => [s.name, s.version]))
+        usedSkillsWithVersions = this.usedSkills.map((name) => {
+          const version = skillVersionMap.get(name) ?? "v1.0.0"
+          return `${name}-${version}`
+        })
+      } catch (e) {
+        console.warn("[Tracer] Failed to resolve skill versions:", e)
+      }
+    }
+
     const trace: AgentTrace = {
       traceId: this.traceId,
       threadId: this.threadId,
@@ -392,13 +409,14 @@ export class TraceCollector {
       ...(this.modelName ? { modelName: this.modelName } : {}),
       userIp: getLocalIP(),
       userName: getUserInfo()?.userName,
+      appVersion: app.getVersion(),
       steps: this.steps,
       modelCalls: this.modelCalls,
       nodes: this.finalizeNodes(outcome, endedAt, errorMessage),
       totalToolCalls,
       outcome,
       ...(errorMessage ? { errorMessage } : {}),
-      usedSkills: this.usedSkills,
+      usedSkills: usedSkillsWithVersions,
       ...(this.routingTrace ? { metadata: { routingTrace: this.routingTrace } } : {})
     }
 

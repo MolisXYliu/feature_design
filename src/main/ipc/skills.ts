@@ -91,6 +91,7 @@ async function loadSkills(
           description: frontmatter.description || "",
           path: skillMdPath,
           source,
+          version: frontmatter.version || "v1.0.0",
           license: frontmatter.license || null,
           compatibility: frontmatter.compatibility || null,
           allowedTools: frontmatter["allowed-tools"]
@@ -129,18 +130,23 @@ async function listSkillFiles(skillDirPath: string): Promise<string[]> {
   return files
 }
 
+/** List all skills (built-in + custom), de-duplicated by name (custom wins). */
+export async function listAllSkills(): Promise<SkillMetadata[]> {
+  const [builtin, custom] = await Promise.all([
+    loadSkills(getSkillsDir(), "project"),
+    loadSkills(getCustomSkillsDir(), "user")
+  ])
+  const byName = new Map<string, SkillMetadata>()
+  for (const s of builtin) byName.set(s.name, s)
+  for (const s of custom) byName.set(s.name, s)
+  return Array.from(byName.values())
+}
+
 export function registerSkillsHandlers(ipcMain: IpcMain): void {
   console.log("[Skills] Registering skills handlers...")
 
   ipcMain.handle("skills:list", async (): Promise<SkillMetadata[]> => {
-    const [builtin, custom] = await Promise.all([
-      loadSkills(getSkillsDir(), "project"),
-      loadSkills(getCustomSkillsDir(), "user")
-    ])
-    const byName = new Map<string, SkillMetadata>()
-    for (const s of builtin) byName.set(s.name, s)
-    for (const s of custom) byName.set(s.name, s)
-    return Array.from(byName.values())
+    return listAllSkills()
   })
 
   ipcMain.handle("skills:getDisabled", async (): Promise<string[]> => {

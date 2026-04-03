@@ -192,7 +192,9 @@ export interface AgentTrace {
   outcome: TraceOutcome
   /** Any error message if outcome === 'error' */
   errorMessage?: string
-  /** Which skills were actually used during this run */
+  /** Application version from package.json */
+  appVersion?: string
+  /** Which skills were actually used during this run, format: "name-version" e.g. "scheduler-assistant-v1.0.0" */
   usedSkills: string[]
   /**
    * Optional free-form metadata.

@@ -563,7 +563,7 @@ function App(): React.JSX.Element {
             </>
           )}
           <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
-            <ClaudeCodePanel />
+            <ClaudeCodePanel visible={mainView === "claudecode"} />
           </main>
         </div>
       </div>

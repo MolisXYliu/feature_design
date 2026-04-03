@@ -373,6 +373,8 @@ export interface SkillMetadata {
   description: string
   path: string
   source: "user" | "project"
+  /** Skill version from SKILL.md frontmatter, defaults to "v1.0.0" */
+  version: string
   license?: string | null
   compatibility?: string | null
   metadata?: Record<string, string>
