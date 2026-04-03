@@ -47,12 +47,32 @@ function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
       blue: "#1565c0",
       magenta: "#7b1fa2",
       cyan: "#00838f",
-      white: "#b8b4ac"
+      white: "#b8b4ac",
+      brightBlack: "#545454",
+      brightRed: "#e05a50",
+      brightGreen: "#4caf50",
+      brightYellow: "#ff9800",
+      brightBlue: "#42a5f5",
+      brightMagenta: "#ab47bc",
+      brightCyan: "#26c6da",
+      brightWhite: "#8a8780"
     },
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true
     // #17: scrollbar: { width: 14 } 不是 xterm.js 有效选项，已移除
+  })
+  // Windows 兼容：Ctrl+V 粘贴、Ctrl+C 选中时复制
+  xterm.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown" || !(e.metaKey || e.ctrlKey)) return true
+    // Ctrl+V / Cmd+V → 交给浏览器原生粘贴
+    if (e.key === "v") return false
+    // Ctrl+C / Cmd+C → 有选中文本时复制，否则正常发送中断信号
+    if (e.key === "c" && xterm.hasSelection()) {
+      navigator.clipboard.writeText(xterm.getSelection()).catch(() => {})
+      return false
+    }
+    return true
   })
   const fitAddon = new FitAddon()
   xterm.loadAddon(fitAddon)
