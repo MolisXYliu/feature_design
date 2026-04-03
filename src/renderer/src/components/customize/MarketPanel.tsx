@@ -1193,15 +1193,6 @@ export function MarketPanel(): React.JSX.Element {
                     ) : (
                       <h3 className="text-lg font-semibold leading-tight">{selectedItem.name}</h3>
                     )}
-                    <div className="pt-1 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-                      <div className="flex items-center gap-1.5 mb-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                        <FileText className="size-3.5 shrink-0" />
-                        <span className="font-medium">功能描述</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
-                        {selectedItem.description}
-                      </p>
-                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
