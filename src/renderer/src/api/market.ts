@@ -59,6 +59,71 @@ export interface MarketUpdateResponse {
   s3_path: string
 }
 
+const USE_MARKET_MOCK_ON_ERROR =
+  String(import.meta.env.VITE_MARKET_MOCK_ON_ERROR ?? "false")
+    .trim()
+    .toLowerCase() === "true"
+
+const MOCK_CREATED_AT = "2026-01-01T00:00:00.000Z"
+const MARKET_MOCK_DATA: Record<MarketItemType, MarketItem[]> = {
+  skill: [
+    {
+      name: "mock-code-review",
+      chinese_name: "Mock 代码审查",
+      description: "用于本地调试的 Market Mock 数据：代码审查技能示例。",
+      filename: "mock-code-review.zip",
+      created_at: MOCK_CREATED_AT,
+      category: "开发效率",
+      featured: "官方推荐",
+      version: "1.0.0",
+      guidance: "这是 mock 数据，接口失败时用于兜底展示。"
+    },
+    {
+      name: "mock-api-docs",
+      chinese_name: "Mock API 文档助手",
+      description: "用于本地调试的 Market Mock 数据：API 文档生成技能示例。",
+      filename: "mock-api-docs.zip",
+      created_at: MOCK_CREATED_AT,
+      category: "文档",
+      featured: "热门",
+      version: "1.0.0"
+    }
+  ],
+  mcp: [
+    {
+      name: "mock-mcp-connector",
+      chinese_name: "Mock MCP 连接器",
+      description: "用于本地调试的 Market Mock 数据：MCP 连接器示例。",
+      filename: "mock-mcp-connector.json",
+      created_at: MOCK_CREATED_AT,
+      category: "连接器",
+      featured: "官方推荐",
+      version: "1.0.0"
+    }
+  ],
+  plugin: [
+    {
+      name: "mock-plugin-tools",
+      chinese_name: "Mock 插件工具集",
+      description: "用于本地调试的 Market Mock 数据：插件示例。",
+      filename: "mock-plugin-tools.zip",
+      created_at: MOCK_CREATED_AT,
+      category: "插件",
+      featured: "热门",
+      version: "1.0.0"
+    }
+  ]
+}
+
+function getMockMarketResponse(type: MarketItemType, error?: unknown): MarketApiResponse {
+  const reason = error instanceof Error ? error.message : String(error ?? "unknown error")
+  console.warn(`[marketApi] ${type} request failed, fallback to mock data. reason=${reason}`)
+  return {
+    success: true,
+    data: MARKET_MOCK_DATA[type]
+  }
+}
+
 // Updated API endpoints to match exact specification
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL + "/api/trajectories/marketplace" // Replace with actual API URL
 const ENDPOINTS = {
@@ -166,6 +231,9 @@ export const marketApi = {
       return result
     } catch (error) {
       console.error("Error fetching skills:", error)
+      if (USE_MARKET_MOCK_ON_ERROR) {
+        return getMockMarketResponse("skill", error)
+      }
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"
@@ -218,6 +286,9 @@ export const marketApi = {
       return result
     } catch (error) {
       console.error("Error fetching MCPs:", error)
+      if (USE_MARKET_MOCK_ON_ERROR) {
+        return getMockMarketResponse("mcp", error)
+      }
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"
@@ -270,6 +341,9 @@ export const marketApi = {
       return result
     } catch (error) {
       console.error("Error fetching plugins:", error)
+      if (USE_MARKET_MOCK_ON_ERROR) {
+        return getMockMarketResponse("plugin", error)
+      }
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error"

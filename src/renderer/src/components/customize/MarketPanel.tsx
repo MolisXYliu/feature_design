@@ -43,7 +43,9 @@ import { getMarketMockResponse } from "./MarketMockData"
 // Local storage helper functions for tracking user uploads
 const UPLOADED_ITEMS_KEY = "marketplace_uploaded_items"
 const USE_MARKET_MOCK_ON_ERROR =
-  String(import.meta.env.VITE_MARKET_MOCK_ON_ERROR || "false").toLowerCase() === "true"
+  String(import.meta.env.VITE_MARKET_MOCK_ON_ERROR || "false")
+    .trim()
+    .toLowerCase() === "true"
 
 interface UploadedItemRecord {
   name: string
