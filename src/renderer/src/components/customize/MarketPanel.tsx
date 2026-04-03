@@ -146,41 +146,52 @@ function MarketItemCard({
 
   return (
     <div
-      className="p-4 rounded-lg border border-gray-300 hover:shadow-lg transition-colors cursor-pointer"
+      className="p-4 rounded-xl border border-border/70 bg-background hover:bg-muted/20 hover:border-foreground/20 hover:shadow-sm transition-all duration-200 cursor-pointer"
       onClick={() => onOpenDetail(item)}
     >
       {/* Header: name + badges + actions */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex-1 min-w-0 mb-4">
+        <div className="flex-1 min-w-0 mb-2">
           <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-            <h3 className="font-semibold text-sm">{item.name}</h3>
-            {item.chinese_name && (
-              <span className="text-xs text-muted-foreground">（{item.chinese_name}）</span>
+            {item.chinese_name ? (
+              <h3 className="font-semibold text-base leading-tight text-foreground">
+                {item.chinese_name}
+                <span className="ml-1.5 text-foreground/90">({item.name})</span>
+              </h3>
+            ) : (
+              <h3 className="font-semibold text-base leading-tight text-foreground">{item.name}</h3>
+            )}
+            {item.category && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 bg-muted border border-border px-2 py-0.5 rounded-full">
+                <Tag className="size-3 text-muted-foreground shrink-0" />
+                {item.category}
+              </span>
             )}
             {isInstalled && (
-              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+              <span className="text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
                 <CheckCircle className="size-3" />
                 已安装
               </span>
             )}
           </div>
-          {item.category && (
-            <div className="flex items-center gap-1 mt-1">
-              <Tag className="size-3 text-primary shrink-0" />
-              <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                {item.category}
-              </span>
-            </div>
-          )}
         </div>
         <div className="flex items-center gap-1 ml-2 shrink-0" onClick={(e) => e.stopPropagation()}>
           {isDownloading || isUpdating ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
           ) : (
             <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
+                onClick={() => onOpenDetail(item)}
+              >
+                <FileText className="size-3 mr-1" />
+                查看详情
+              </Button>
               {isInstalled ? (
                 isFeatured ? (
-                  <span className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-2 py-1 rounded-full flex items-center gap-1">
+                  <span className="text-[11px] bg-amber-50 border border-amber-200 text-amber-700 px-2 py-1 rounded-full flex items-center gap-1">
                     <Zap className="size-3" />
                     自动保持最新
                   </span>
@@ -188,7 +199,7 @@ function MarketItemCard({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer"
+                    className="h-7 px-3 gap-1 bg-muted/50 hover:bg-muted cursor-pointer"
                     onClick={handleUpdateInstall}
                   >
                     <Zap className="size-3" />
@@ -210,7 +221,7 @@ function MarketItemCard({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                  className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50/70 cursor-pointer"
                   onClick={handleUninstall}
                   title="卸载"
                 >
@@ -256,23 +267,10 @@ function MarketItemCard({
         </div>
       </div>
 
-      {/* Description */}
-      <p className="text-xs text-muted-foreground mb-2 leading-relaxed">{item.description}</p>
-
-      {/* Guidance — supports line breaks and whitespace formatting */}
-      {item.guidance && (
-        <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 mb-3">
-          <div className="flex items-start gap-1.5">
-            <Lightbulb className="size-3 mt-0.5 shrink-0" />
-            <span className="whitespace-pre-wrap leading-relaxed break-all">{item.guidance}</span>
-          </div>
-        </div>
-      )}
-
       {/* Featured auto-update notice */}
       {isFeatured && isInstalled && (
-        <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
-          <Star className="size-3 shrink-0 text-yellow-500" />
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
+          <Star className="size-3 shrink-0 text-amber-500" />
           精品技能无需手动更新，系统将自动安装最新版本
         </div>
       )}
@@ -1182,33 +1180,43 @@ export function MarketPanel(): React.JSX.Element {
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
               <div className="space-y-2 xl:order-1 order-2">{renderDetailFilePanel()}</div>
 
-              <div className="xl:order-2 order-1 space-y-3 xl:sticky xl:top-4 shadow">
-                <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 space-y-3">
+              <div className="xl:order-2 order-1 space-y-3 xl:sticky xl:top-4">
+                <div className="rounded-2xl border border-border/70 bg-background p-4 space-y-3 shadow-sm">
                   <div className="space-y-1">
-                    <h3 className="text-base font-semibold leading-tight">{selectedItem.name}</h3>
-                    {selectedItem.chinese_name && (
-                      <p className="text-xs text-muted-foreground">
-                        （{selectedItem.chinese_name}）
-                      </p>
+                    {selectedItem.chinese_name ? (
+                      <h3 className="text-lg font-semibold leading-tight">
+                        {selectedItem.chinese_name}
+                        <span className="ml-2 text-foreground/90 text-base">
+                          ({selectedItem.name})
+                        </span>
+                      </h3>
+                    ) : (
+                      <h3 className="text-lg font-semibold leading-tight">{selectedItem.name}</h3>
                     )}
-                    <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">
-                      {selectedItem.description}
-                    </p>
+                    <div className="pt-1 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+                      <div className="flex items-center gap-1.5 mb-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                        <FileText className="size-3.5 shrink-0" />
+                        <span className="font-medium">功能描述</span>
+                      </div>
+                      <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+                        {selectedItem.description}
+                      </p>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     {selectedItem.category && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
                         <Tag className="size-3" />
                         {selectedItem.category}
                       </span>
                     )}
                     {selectedItem.version && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
                         <GitBranch className="size-3" />v{selectedItem.version}
                       </span>
                     )}
-                    <span className="inline-flex items-center gap-1 rounded-full bg-background border border-border px-2.5 py-1">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
                       <Calendar className="size-3" />
                       {new Date(selectedItem.created_at).toLocaleDateString("zh-CN")}
                     </span>
@@ -1307,9 +1315,12 @@ export function MarketPanel(): React.JSX.Element {
                 </div>
 
                 {selectedItem.guidance && (
-                  <div className="rounded-xl bg-background border border-border/70 p-3 text-sm text-muted-foreground">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/30 p-3 text-sm text-muted-foreground shadow-sm">
+                    <div className="flex items-center gap-2 mb-1 text-[10px] uppercase tracking-[0.08em] text-amber-700">
+                      <Lightbulb className="size-4 shrink-0" />
+                      <span className="font-medium">使用指引</span>
+                    </div>
                     <div className="flex items-start gap-2">
-                      <Lightbulb className="size-4 mt-0.5 shrink-0" />
                       <span className="whitespace-pre-wrap leading-relaxed break-all">
                         {selectedItem.guidance}
                       </span>
