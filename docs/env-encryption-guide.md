@@ -51,6 +51,53 @@ git push
 
 ---
 
+## 无脑方案（推荐，6 步走）
+
+遇到分支切换、merge、rebase 时 `.env` 相关报错，直接按下面做：
+
+1. 先禁用过滤器（disabled）：
+
+```bash
+npm run env:filter:disable
+```
+
+2. 合并 `main` 到当前分支：
+
+```bash
+git fetch origin
+git merge origin/main
+```
+
+3. 设置本地密钥（联系 `qyang` 获取密钥）：
+
+```bash
+mkdir -p ~/.cmbdevclaw
+printf '%s\n' '你的密钥' > ~/.cmbdevclaw/env.key
+chmod 600 ~/.cmbdevclaw/env.key
+```
+
+4. 重新 setup 过滤器：
+
+```bash
+npm run env:filter:setup
+```
+
+5. 重新加密入索引：
+
+```bash
+npm run env:encrypt:quick
+```
+
+6. 提交并推送：
+
+```bash
+git add .env
+git commit -m "chore: sync env encryption state"
+git push
+```
+
+---
+
 ## 常见问题（按命令处理）
 
 ### 1) 切分支/merge/rebase/rollback 报错 `Missing encryption key`
@@ -95,4 +142,3 @@ GitHub Actions 必须配置：
 
 - Secret 名称：`ENV_ENCRYPTION_KEY`
 - 值：与本地相同密钥
-
