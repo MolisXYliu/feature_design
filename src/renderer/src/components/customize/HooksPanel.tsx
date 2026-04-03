@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { useAppStore } from "@/lib/store"
 import type { HookConfig, HookEvent } from "@/types"
 import { AddHookDialog } from "./AddHookDialog"
 
@@ -204,6 +205,10 @@ function HookDetail(props: {
   const { hook, onToggleEnabled, onDelete, onEdit } = props
   const badge = EVENT_BADGE[hook.event]
   const isPrompt = hook.type === "prompt"
+  const { models } = useAppStore()
+  const modelName = hook.modelId
+    ? (models.find((m) => m.id === hook.modelId)?.name ?? hook.modelId)
+    : null
 
   return (
     <div className="p-6 space-y-6">
@@ -269,7 +274,7 @@ function HookDetail(props: {
                 {hook.prompt}
               </div>
             </div>
-            {hook.modelId && <DetailRow label="判决模型" value={hook.modelId} mono />}
+            {modelName && <DetailRow label="判决模型" value={modelName} />}
             <DetailRow
               label="超时回退"
               value={hook.fallback === "block" ? "严格（默认阻断）" : "宽松（默认放行）"}

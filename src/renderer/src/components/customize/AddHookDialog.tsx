@@ -10,6 +10,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { useAppStore } from "@/lib/store"
 import type { HookConfig, HookEvent, HookType, PromptHookFallback, HookUpsert } from "@/types"
 
 const HOOK_EVENTS: { value: HookEvent; label: string; description: string }[] = [
@@ -31,6 +32,11 @@ export function AddHookDialog(props: {
   editHook?: HookConfig | null
 }): React.JSX.Element {
   const { open, onOpenChange, onSuccess, editHook } = props
+  const { models, loadModels } = useAppStore()
+
+  useEffect(() => {
+    if (open && models.length === 0) loadModels()
+  }, [open, models.length, loadModels])
 
   const [hookType, setHookType] = useState<HookType>(editHook?.type ?? "command")
   const [event, setEvent] = useState<HookEvent>(editHook?.event ?? "PreToolUse")
@@ -239,16 +245,22 @@ export function AddHookDialog(props: {
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="hook-model" className="text-sm font-medium">判决模型 ID（可选）</label>
-                <Input
+                <label htmlFor="hook-model" className="text-sm font-medium">判决模型（可选）</label>
+                <select
                   id="hook-model"
-                  placeholder="留空使用默认模型"
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
-                  className="h-9"
-                />
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="">使用默认模型</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id} disabled={!m.available}>
+                      {m.name}{m.tier === "economy" ? " (轻量)" : ""}{!m.available ? " (不可用)" : ""}
+                    </option>
+                  ))}
+                </select>
                 <p className="text-xs text-muted-foreground">
-                  可指定轻量模型专用于 Hook 判决，与主对话模型解耦，降低延迟和成本
+                  建议选轻量模型专用于 Hook 判决，与主对话模型解耦，降低延迟和成本
                 </p>
               </div>
 
