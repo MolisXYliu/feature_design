@@ -6,7 +6,7 @@
 import { spawn as ptySpawn, IPty } from "node-pty"
 import { platform, homedir } from "os"
 import { existsSync } from "fs"
-import { join } from "path"
+import { join, basename } from "path"
 import { execSync } from "child_process"
 
 const activePtys = new Map<string, IPty>()
@@ -22,10 +22,13 @@ function getShell(): string {
   if (cachedShell) return cachedShell
   if (platform() === "win32") {
     // Git Bash：POSIX 兼容，ConPTY 正常，子进程 stdin 是真 TTY
+    // 1. 快速检查常见路径（便宜：只是 stat 调用）
     const candidates = [
       "C:\\Program Files\\Git\\bin\\bash.exe",
       "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-      // per-user 安装路径
+      "D:\\Program Files\\Git\\bin\\bash.exe",
+      "D:\\Program Files (x86)\\Git\\bin\\bash.exe",
+      "D:\\Git\\bin\\bash.exe",
       join(homedir(), "AppData", "Local", "Programs", "Git", "bin", "bash.exe"),
     ]
     for (const p of candidates) {
@@ -34,20 +37,49 @@ function getShell(): string {
         return cachedShell
       }
     }
-    // 兜底：where.exe 查找，过滤 System32\bash.exe（WSL 启动器）
+
+    // 2. where git 推导 bash 路径（git.exe 在 PATH 中的概率比 bash.exe 高）
     try {
-      const out = execSync("where bash.exe", {
+      const gitOut = execSync("where.exe git", {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000
       })
-      const found = out.trim().split(/\r?\n/).find(
+      const gitExe = gitOut.trim().split(/\r?\n/).find(
         (l) => !l.toLowerCase().includes("system32")
       )
-      if (found) {
-        cachedShell = found
-        return cachedShell
+      if (gitExe) {
+        const derivedBash = join(gitExe, "..", "..", "bin", "bash.exe")
+        if (existsSync(derivedBash)) {
+          cachedShell = derivedBash
+          return cachedShell
+        }
       }
     } catch {}
+
+    // 3. 注册表兜底（覆盖任意安装路径，git 不在 PATH 时仍可定位）
+    const regKeys = [
+      "HKLM\\SOFTWARE\\GitForWindows",
+      "HKCU\\SOFTWARE\\GitForWindows"
+    ]
+    for (const key of regKeys) {
+      try {
+        const regOut = execSync(
+          `reg query "${key}" /v InstallPath`,
+          { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }
+        )
+        const match = /InstallPath\s+REG_SZ\s+(.+)/i.exec(regOut)
+        if (match) {
+          const installDir = match[1].trim()
+          const regBash = join(installDir, "bin", "bash.exe")
+          if (existsSync(regBash)) {
+            cachedShell = regBash
+            return cachedShell
+          }
+          console.warn(`[PtyHost] Registry found Git at ${installDir} but bash.exe not found`)
+        }
+      } catch { /* key not found */ }
+    }
     throw new Error(
       "Git Bash not found. Please install Git for Windows: https://git-scm.com/download/win"
     )
@@ -63,6 +95,8 @@ function findNodeExe(): string {
   const candidates = [
     join("C:\\", "Program Files", "nodejs", "node.exe"),
     join("C:\\", "Program Files (x86)", "nodejs", "node.exe"),
+    join("D:\\", "Program Files", "nodejs", "node.exe"),
+    join("D:\\", "Program Files (x86)", "nodejs", "node.exe"),
     join(homedir(), "scoop", "apps", "nodejs", "current", "node.exe"),
     join(homedir(), ".volta", "bin", "node.exe"),
   ]
@@ -82,6 +116,7 @@ function findNodeExe(): string {
     const out = execSync("where node.exe", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000
     })
     const found = out.trim().split(/\r?\n/)[0]
     if (found) {
@@ -159,8 +194,13 @@ function handleCreate(msg: CreateMsg): void {
     const isJsFile = msg.claudePath.endsWith(".js")
     const env = { ...process.env, ...(msg.extraEnv || {}) } as Record<string, string>
 
-    // 构建启动命令
+    // Windows: 把我们找到的 bash.exe 路径告知 Claude Code，避免其内部检测失败
     const isWin = platform() === "win32"
+    if (isWin && !env.CLAUDE_CODE_GIT_BASH_PATH && basename(shell).toLowerCase().includes("bash")) {
+      env.CLAUDE_CODE_GIT_BASH_PATH = shell
+    }
+
+    // 构建启动命令
     let claudeCmd: string
     if (isJsFile) {
       if (isWin) {

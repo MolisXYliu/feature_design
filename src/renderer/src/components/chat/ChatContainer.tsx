@@ -49,6 +49,8 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
+import DisplayDiffTest from "./DisplayDiffTest"
+import { UpdateDialog } from "../update/UpdateDialog"
 import { toast } from "sonner"
 
 interface AgentStreamValues {
@@ -160,6 +162,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const loadingMessageCountRef = useRef(0)
   const [latestVersion, setLatestVersion] = useState("")
   const [modelContextLimit, setModelContextLimit] = useState<number | undefined>(undefined)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
 
   const [version, setVersion] = useState("")
 
@@ -1819,9 +1822,8 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
                         {/*版本check*/}
                         <button
-                          onClick={async () => {
-                            const viteappdownloadurl = import.meta.env.VITE_APP_DOWNLOAD_URL;
-                            handleCopyToClipboard(viteappdownloadurl);
+                          onClick={() => {
+                            setUpdateDialogOpen(true)
                           }}
                           type="button"
                           className={`group relative w-full rounded-xl ${
@@ -2313,6 +2315,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           </div>
         </form>
       </div>
+      <UpdateDialog open={updateDialogOpen} onOpenChange={setUpdateDialogOpen} />
     </div>
   )
 }

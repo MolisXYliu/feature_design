@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ChevronDown, ChevronRight, Code, Eye, FileText, Folder, Plus, Power, Search, Sparkles, Trash2, Upload, X } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Code,
+  Eye,
+  FileText,
+  Folder,
+  Plus,
+  Power,
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+  X
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -104,7 +118,9 @@ function UploadSkillDialog(props: {
         <div
           className={cn(
             "mt-4 border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
-            dragOver ? "border-primary bg-primary/5" : "border-muted-foreground/30 hover:border-muted-foreground/50",
+            dragOver
+              ? "border-primary bg-primary/5"
+              : "border-muted-foreground/30 hover:border-muted-foreground/50",
             uploading && "pointer-events-none opacity-60"
           )}
           onDrop={onDrop}
@@ -245,7 +261,8 @@ export function SkillsPanel(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    window.api.skills.getDisabled()
+    window.api.skills
+      .getDisabled()
       .then((list) => setDisabledSkills(new Set(list)))
       .catch(console.error)
   }, [])
@@ -268,9 +285,41 @@ export function SkillsPanel(): React.JSX.Element {
     const isPdf = ext === "pdf"
     const isHtml = ext === "html" || ext === "htm"
     const knownTextExts = new Set([
-      "md", "txt", "html", "htm", "css", "scss", "less", "js", "ts", "jsx", "tsx", "json",
-      "yaml", "yml", "xml", "csv", "svg", "sh", "bash", "py", "rb", "go", "rs", "java", "kt",
-      "c", "h", "cpp", "hpp", "sql", "graphql", "toml", "ini", "env", "log"
+      "md",
+      "txt",
+      "html",
+      "htm",
+      "css",
+      "scss",
+      "less",
+      "js",
+      "ts",
+      "jsx",
+      "tsx",
+      "json",
+      "yaml",
+      "yml",
+      "xml",
+      "csv",
+      "svg",
+      "sh",
+      "bash",
+      "py",
+      "rb",
+      "go",
+      "rs",
+      "java",
+      "kt",
+      "c",
+      "h",
+      "cpp",
+      "hpp",
+      "sql",
+      "graphql",
+      "toml",
+      "ini",
+      "env",
+      "log"
     ])
     const isKnownText = knownTextExts.has(ext)
 
@@ -316,28 +365,34 @@ export function SkillsPanel(): React.JSX.Element {
     return files
   }, [])
 
-  const onToggleSkill = useCallback(async (skill: SkillMetadata) => {
-    const wasExpanded = expandedSkillsRef.current.has(skill.name)
-    const next = new Set<string>()
-    if (!wasExpanded) next.add(skill.name)
-    setExpandedSkills(next)
+  const onToggleSkill = useCallback(
+    async (skill: SkillMetadata) => {
+      const wasExpanded = expandedSkillsRef.current.has(skill.name)
+      const next = new Set<string>()
+      if (!wasExpanded) next.add(skill.name)
+      setExpandedSkills(next)
 
-    if (!wasExpanded) {
-      const files = await ensureSkillFiles(skill)
-      const firstFile = defaultSkillFile(files)
-      if (firstFile) {
-        await loadFileContent(skill, firstFile)
-      } else {
-        setSelectedSkill(skill)
-        setSelectedFilePath(null)
-        setSelectedFileContent("该技能目录下没有可读取文件。")
+      if (!wasExpanded) {
+        const files = await ensureSkillFiles(skill)
+        const firstFile = defaultSkillFile(files)
+        if (firstFile) {
+          await loadFileContent(skill, firstFile)
+        } else {
+          setSelectedSkill(skill)
+          setSelectedFilePath(null)
+          setSelectedFileContent("该技能目录下没有可读取文件。")
+        }
       }
-    }
-  }, [ensureSkillFiles, loadFileContent])
+    },
+    [ensureSkillFiles, loadFileContent]
+  )
 
-  const onSelectFile = useCallback(async (skill: SkillMetadata, filePath: string) => {
-    await loadFileContent(skill, filePath)
-  }, [loadFileContent])
+  const onSelectFile = useCallback(
+    async (skill: SkillMetadata, filePath: string) => {
+      await loadFileContent(skill, filePath)
+    },
+    [loadFileContent]
+  )
 
   const toggleDirNode = useCallback((nodeId: string) => {
     setExpandedDirNodes((prev) => {
@@ -386,14 +441,26 @@ export function SkillsPanel(): React.JSX.Element {
   const builtinSkills = useMemo(() => skills.filter((s) => s.source === "project"), [skills])
   const customSkills = useMemo(() => skills.filter((s) => s.source === "user"), [skills])
 
-  const filterSkillsBySearch = useCallback((list: SkillMetadata[]) => {
-    const q = debouncedQuery.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((s) => s.name.toLowerCase().includes(q) || (s.description?.toLowerCase().includes(q) ?? false))
-  }, [debouncedQuery])
+  const filterSkillsBySearch = useCallback(
+    (list: SkillMetadata[]) => {
+      const q = debouncedQuery.trim().toLowerCase()
+      if (!q) return list
+      return list.filter(
+        (s) =>
+          s.name.toLowerCase().includes(q) || (s.description?.toLowerCase().includes(q) ?? false)
+      )
+    },
+    [debouncedQuery]
+  )
 
-  const filteredBuiltin = useMemo(() => filterSkillsBySearch(builtinSkills), [builtinSkills, filterSkillsBySearch])
-  const filteredCustom = useMemo(() => filterSkillsBySearch(customSkills), [customSkills, filterSkillsBySearch])
+  const filteredBuiltin = useMemo(
+    () => filterSkillsBySearch(builtinSkills),
+    [builtinSkills, filterSkillsBySearch]
+  )
+  const filteredCustom = useMemo(
+    () => filterSkillsBySearch(customSkills),
+    [customSkills, filterSkillsBySearch]
+  )
 
   return (
     <>
@@ -414,14 +481,22 @@ export function SkillsPanel(): React.JSX.Element {
                   <button
                     type="button"
                     className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded"
-                    onClick={() => { setSearchQuery(""); setDebouncedQuery("") }}
+                    onClick={() => {
+                      setSearchQuery("")
+                      setDebouncedQuery("")
+                    }}
                     aria-label="清���"
                   >
                     <X className="size-3" />
                   </button>
                 )}
               </div>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => setUploadDialogOpen(true)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 shrink-0"
+                onClick={() => setUploadDialogOpen(true)}
+              >
                 <Plus className="size-4" />
               </Button>
             </div>
@@ -474,7 +549,9 @@ export function SkillsPanel(): React.JSX.Element {
         onToggleEnabled={() => {
           if (selectedSkill) toggleSkillEnabled(selectedSkill.name)
         }}
-        onDelete={selectedSkill?.source === "user" ? () => handleDeleteSkill(selectedSkill) : undefined}
+        onDelete={
+          selectedSkill?.source === "user" ? () => handleDeleteSkill(selectedSkill) : undefined
+        }
       />
 
       <UploadSkillDialog
@@ -503,8 +580,17 @@ function SkillSection(props: {
   onSelectFile: (skill: SkillMetadata, filePath: string) => void
 }): React.JSX.Element {
   const {
-    title, skills, expandedSkills, skillFilesMap, selectedSkill, selectedFilePath,
-    expandedDirNodes, disabledSkills, onToggleSkill, onToggleDirNode, onSelectFile
+    title,
+    skills,
+    expandedSkills,
+    skillFilesMap,
+    selectedSkill,
+    selectedFilePath,
+    expandedDirNodes,
+    disabledSkills,
+    onToggleSkill,
+    onToggleDirNode,
+    onSelectFile
   } = props
   const [collapsed, setCollapsed] = useState(false)
 
@@ -515,39 +601,49 @@ function SkillSection(props: {
         onClick={() => setCollapsed((v) => !v)}
       >
         <div className="flex items-center gap-1">
-          {collapsed ? <ChevronRight className="size-3 text-muted-foreground" /> : <ChevronDown className="size-3 text-muted-foreground" />}
-          <span className="text-[11px] text-muted-foreground tracking-wider font-medium">{title}</span>
+          {collapsed ? (
+            <ChevronRight className="size-3 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="size-3 text-muted-foreground" />
+          )}
+          <span className="text-[11px] text-muted-foreground tracking-wider font-medium">
+            {title}
+          </span>
         </div>
-        <Badge variant="outline" className="text-[10px] h-4 px-1.5">{skills.length}</Badge>
+        <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+          {skills.length}
+        </Badge>
       </button>
-      {!collapsed && <div className="space-y-2">
-        {skills.length === 0 ? (
-          <p className="text-xs text-muted-foreground px-1 py-2">没有匹配的技能</p>
-        ) : (
-        skills.map((skill) => {
-          const expanded = expandedSkills.has(skill.name)
-          const files = skillFilesMap[skill.name] || []
-          const selected = selectedSkill?.name === skill.name
-          const disabled = disabledSkills.has(skill.name)
+      {!collapsed && (
+        <div className="space-y-2">
+          {skills.length === 0 ? (
+            <p className="text-xs text-muted-foreground px-1 py-2">没有匹配的技能</p>
+          ) : (
+            skills.map((skill) => {
+              const expanded = expandedSkills.has(skill.name)
+              const files = skillFilesMap[skill.name] || []
+              const selected = selectedSkill?.name === skill.name
+              const disabled = disabledSkills.has(skill.name)
 
-          return (
-            <SkillItem
-              key={skill.name}
-              skill={skill}
-              expanded={expanded}
-              selected={selected}
-              disabled={disabled}
-              files={files}
-              selectedFilePath={selectedFilePath}
-              expandedDirNodes={expandedDirNodes}
-              onToggleSkill={onToggleSkill}
-              onToggleDirNode={onToggleDirNode}
-              onSelectFile={onSelectFile}
-            />
-          )
-        })
-        )}
-      </div>}
+              return (
+                <SkillItem
+                  key={skill.name}
+                  skill={skill}
+                  expanded={expanded}
+                  selected={selected}
+                  disabled={disabled}
+                  files={files}
+                  selectedFilePath={selectedFilePath}
+                  expandedDirNodes={expandedDirNodes}
+                  onToggleSkill={onToggleSkill}
+                  onToggleDirNode={onToggleDirNode}
+                  onSelectFile={onSelectFile}
+                />
+              )
+            })
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -564,7 +660,18 @@ function SkillItem(props: {
   onToggleDirNode: (nodeId: string) => void
   onSelectFile: (skill: SkillMetadata, filePath: string) => void
 }): React.JSX.Element {
-  const { skill, expanded, selected, disabled, files, selectedFilePath, expandedDirNodes, onToggleSkill, onToggleDirNode, onSelectFile } = props
+  const {
+    skill,
+    expanded,
+    selected,
+    disabled,
+    files,
+    selectedFilePath,
+    expandedDirNodes,
+    onToggleSkill,
+    onToggleDirNode,
+    onSelectFile
+  } = props
 
   const treeNodes = useMemo(
     () => (expanded && files.length > 0 ? buildFileTree(skill.path, files) : []),
@@ -580,12 +687,26 @@ function SkillItem(props: {
         )}
         onClick={() => onToggleSkill(skill)}
       >
-        {expanded ? <ChevronDown className="size-3.5 text-muted-foreground shrink-0" /> : <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />}
+        {expanded ? (
+          <ChevronDown className="size-3.5 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
+        )}
         <Folder className="size-3.5 text-muted-foreground shrink-0" />
-        <span className={cn("text-sm truncate flex-1", disabled && "text-muted-foreground line-through")}>
+        <span
+          className={cn(
+            "text-sm truncate flex-1",
+            disabled && "text-muted-foreground line-through"
+          )}
+        >
           {skill.name}
         </span>
-        <Sparkles className={cn("size-3 shrink-0", disabled ? "text-muted-foreground/40" : "text-amber-500")} />
+        <Sparkles
+          className={cn(
+            "size-3 shrink-0",
+            disabled ? "text-muted-foreground/40" : "text-amber-500"
+          )}
+        />
       </button>
       {expanded && (
         <div className="border-t border-border/60 bg-muted/20">
@@ -617,7 +738,8 @@ function SkillFileTree(props: {
   onToggleDirNode: (nodeId: string) => void
   onSelectFile: (skill: SkillMetadata, filePath: string) => void
 }): React.JSX.Element {
-  const { nodes, level, skill, selectedFilePath, expandedDirNodes, onToggleDirNode, onSelectFile } = props
+  const { nodes, level, skill, selectedFilePath, expandedDirNodes, onToggleDirNode, onSelectFile } =
+    props
 
   return (
     <div>
@@ -674,7 +796,7 @@ function SkillFileTree(props: {
   )
 }
 
-function SkillDetail(props: {
+export function SkillDetail(props: {
   skill: SkillMetadata | null
   selectedFilePath: string | null
   content: string | null
@@ -686,6 +808,7 @@ function SkillDetail(props: {
   onToggleShowCode: () => void
   onToggleEnabled: () => void
   onDelete?: () => void
+  hideActions?: boolean
 }): React.JSX.Element {
   const {
     skill,
@@ -698,7 +821,8 @@ function SkillDetail(props: {
     isDisabled,
     onToggleShowCode,
     onToggleEnabled,
-    onDelete
+    onDelete,
+    hideActions = false
   } = props
 
   if (!skill) {
@@ -711,7 +835,9 @@ function SkillDetail(props: {
             </div>
             <h3 className="text-lg font-semibold text-foreground/80">Skills 技能</h3>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              技能是可复用的 AI 提示词模板，让 AI 按照预设的指令和步骤完成特定任务。应用内置了一些常用技能，你也可以上传自定义技能来扩展 AI 的工作流。
+              技能是可复用的 AI 提示词模板，让 AI
+              按照预设的指令和步骤完成特定任务。应用内置了一些常用技能，你也可以上传自定义技能来扩展
+              AI 的工作流。
             </p>
           </div>
 
@@ -719,23 +845,41 @@ function SkillDetail(props: {
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">技能的结构</p>
               <p className="text-[13px] text-muted-foreground leading-relaxed">
-                每个技能是一个文件夹，核心是 <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">SKILL.md</span> 文件，用来定义 AI 的行为指令——任务目标、执行步骤、输出格式等。技能分为<span className="font-medium text-foreground/60">内置技能</span>（随应用提供）和<span className="font-medium text-foreground/60">自定义技能</span>（用户上传），内置技能不可删除，自定义技能可随时管理。
+                每个技能是一个文件夹，核心是{" "}
+                <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">SKILL.md</span>{" "}
+                文件，用来定义 AI 的行为指令——任务目标、执行步骤、输出格式等。技能分为
+                <span className="font-medium text-foreground/60">内置技能</span>（随应用提供）和
+                <span className="font-medium text-foreground/60">自定义技能</span>
+                （用户上传），内置技能不可删除，自定义技能可随时管理。
               </p>
             </div>
 
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">如何添加和使用？</p>
               <ul className="text-[13px] text-muted-foreground space-y-2 leading-relaxed">
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">1.</span><span>点击 <span className="font-medium text-foreground/60">+</span> 按钮，支持上传 .md 或 .zip 格式的技能文件</span></li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">2.</span><span>上传后可在右侧预览文件内容，支持渲染和源码切换</span></li>
-                <li className="flex gap-2"><span className="text-foreground/40 shrink-0">3.</span><span>通过开关可随时启用或禁用某个技能</span></li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">1.</span>
+                  <span>
+                    点击 <span className="font-medium text-foreground/60">+</span> 按钮，支持上传
+                    .md 或 .zip 格式的技能文件
+                  </span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">2.</span>
+                  <span>上传后可在右侧预览文件内容，支持渲染和源码切换</span>
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-foreground/40 shrink-0">3.</span>
+                  <span>通过开关可随时启用或禁用某个技能</span>
+                </li>
               </ul>
             </div>
 
             <div className="rounded-xl border border-border/60 bg-muted/30 p-4 space-y-3">
               <p className="text-sm font-medium text-foreground/70">适用场景</p>
               <p className="text-[13px] text-muted-foreground leading-relaxed">
-                代码审查、文档生成、Bug 分析、数据处理、翻译润色……任何你需要 AI 反复执行的任务，都可以封装成技能来提升效率。你还可以从 Market 中下载大家分享的技能。
+                代码审查、文档生成、Bug 分析、数据处理、翻译润色……任何你需要 AI
+                反复执行的任务，都可以封装成技能来提升效率。你还可以从 Market 中下载大家分享的技能。
               </p>
             </div>
           </div>
@@ -761,32 +905,58 @@ function SkillDetail(props: {
       <div className="p-4 border-b border-border flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold truncate">{skill.name}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">{selectedFilePath ? selectedFilePath.replace(/\\/g, "/") : "未选择文件"}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">
+            {selectedFilePath ? selectedFilePath.replace(/\\/g, "/") : "未选择文件"}
+          </p>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {onDelete && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete}>
-              <Trash2 className="size-3" />
-              删除
+        {!hideActions && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={onDelete}
+              >
+                <Trash2 className="size-3" />
+                删除
+              </Button>
+            )}
+            <Button
+              variant={isDisabled ? "outline" : "default"}
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={onToggleEnabled}
+            >
+              <Power className="size-3" />
+              {isDisabled ? "已禁用" : "已启用"}
             </Button>
-          )}
-          <Button variant={isDisabled ? "outline" : "default"} size="sm" className="h-7 gap-1.5 text-xs" onClick={onToggleEnabled}>
-            <Power className="size-3" />
-            {isDisabled ? "已禁用" : "已启用"}
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
 
       <div className="px-4 py-3 border-b border-border">
-        <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
+        <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+          {description}
+        </p>
       </div>
 
       <div className="px-4 py-2 border-b border-border flex items-center gap-2">
-        <Button variant={showCode ? "ghost" : "secondary"} size="sm" className="h-7 gap-1.5 text-xs" onClick={() => showCode && onToggleShowCode()}>
+        <Button
+          variant={showCode ? "ghost" : "secondary"}
+          size="sm"
+          className="h-7 gap-1.5 text-xs"
+          onClick={() => showCode && onToggleShowCode()}
+        >
           <Eye className="size-3" />
           预览
         </Button>
-        <Button variant={showCode ? "secondary" : "ghost"} size="sm" className="h-7 gap-1.5 text-xs" onClick={() => !showCode && onToggleShowCode()}>
+        <Button
+          variant={showCode ? "secondary" : "ghost"}
+          size="sm"
+          className="h-7 gap-1.5 text-xs"
+          onClick={() => !showCode && onToggleShowCode()}
+        >
           <Code className="size-3" />
           源码
         </Button>
@@ -804,15 +974,28 @@ function SkillDetail(props: {
             </pre>
           ) : previewKind === "image" && binaryDataUrl ? (
             <div className="h-full w-full flex items-start justify-center">
-              <img src={binaryDataUrl} alt={selectedFilePath ?? "image preview"} className="max-w-full h-auto rounded-md border border-border" />
+              <img
+                src={binaryDataUrl}
+                alt={selectedFilePath ?? "image preview"}
+                className="max-w-full h-auto rounded-md border border-border"
+              />
             </div>
           ) : previewKind === "pdf" && binaryDataUrl ? (
             <div className="h-[80vh] min-h-[500px]">
-              <iframe title={selectedFilePath ?? "pdf preview"} src={binaryDataUrl} className="h-full w-full rounded-md border border-border bg-white" />
+              <iframe
+                title={selectedFilePath ?? "pdf preview"}
+                src={binaryDataUrl}
+                className="h-full w-full rounded-md border border-border bg-white"
+              />
             </div>
           ) : previewKind === "html" ? (
             <div className="h-[80vh] min-h-[500px] rounded-md border border-border overflow-hidden bg-white">
-              <iframe title={selectedFilePath ?? "html preview"} srcDoc={content ?? ""} className="h-full w-full" sandbox="" />
+              <iframe
+                title={selectedFilePath ?? "html preview"}
+                srcDoc={content ?? ""}
+                className="h-full w-full"
+                sandbox=""
+              />
             </div>
           ) : !isMarkdown ? (
             <pre className="text-xs font-mono whitespace-pre-wrap break-words leading-relaxed text-muted-foreground bg-muted/30 rounded-md p-3">

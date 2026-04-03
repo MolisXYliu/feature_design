@@ -14,7 +14,7 @@ import type {
   PluginMetadata,
   PluginManifest
 } from "../main/types"
-import {UserInfoConfig} from '../main/storage'
+import { UserInfoConfig } from "../main/storage"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
 import type {
   ManagedSavedCodeExecTool,
@@ -25,9 +25,9 @@ import type {
 
 interface ElectronAPI {
   openExternal: Promise
-  openLoginWindow:()=>void
-  closeLoginWindow:()=>void
-  onNotifyMsg: (callback: (msg:string)=>void)=>void
+  openLoginWindow: () => void
+  closeLoginWindow: () => void
+  onNotifyMsg: (callback: (msg: string) => void) => void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void
@@ -256,7 +256,10 @@ interface CustomAPI {
     ) => () => void
   }
   file: {
-    parse: (filePath: string, maxLength?: number) => Promise<{
+    parse: (
+      filePath: string,
+      maxLength?: number
+    ) => Promise<{
       success: boolean
       attachment?: {
         filename: string
@@ -278,10 +281,19 @@ interface CustomAPI {
     readBinary: (
       skillPath: string
     ) => Promise<{ success: boolean; content?: string; mimeType?: string; error?: string }>
-    listFiles: (skillPath: string) => Promise<{ success: boolean; files?: string[]; error?: string }>
+    listFiles: (
+      skillPath: string
+    ) => Promise<{ success: boolean; files?: string[]; error?: string }>
     getDisabled: () => Promise<string[]>
     setDisabled: (skillNames: string[]) => Promise<void>
-    upload: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
+    upload: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ) => Promise<{ success: boolean; skillName?: string; error?: string }>
+    extractMarkdownFromZip: (
+      buffer: ArrayBuffer,
+      fileName?: string
+    ) => Promise<{ success: boolean; filePath?: string; content?: string; error?: string }>
     delete: (skillPath: string) => Promise<{ success: boolean; error?: string }>
   }
   mcp: {
@@ -302,7 +314,12 @@ interface CustomAPI {
     deleteFile: (name: string) => Promise<void>
     getEnabled: () => Promise<boolean>
     setEnabled: (enabled: boolean) => Promise<void>
-    getStats: () => Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }>
+    getStats: () => Promise<{
+      fileCount: number
+      totalSize: number
+      indexSize: number
+      enabled: boolean
+    }>
     onChanged: (callback: () => void) => () => void
   }
   terminal: {
@@ -351,11 +368,16 @@ interface CustomAPI {
   }
   plugins: {
     list: () => Promise<PluginMetadata[]>
-    install: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; pluginName?: string; error?: string }>
+    install: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ) => Promise<{ success: boolean; pluginName?: string; error?: string }>
     installFromDir: () => Promise<{ success: boolean; pluginName?: string; error?: string }>
     delete: (id: string) => Promise<{ success: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
-    getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+    getDetail: (
+      id: string
+    ) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
   chatx: {
     getConfig: () => Promise<ChatXConfig>
@@ -382,7 +404,10 @@ interface CustomAPI {
       savedToolDescription?: string
     }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
-    onApprovalTimeout: (threadId: string, callback: (data: { requestId: string }) => void) => () => void
+    onApprovalTimeout: (
+      threadId: string,
+      callback: (data: { requestId: string }) => void
+    ) => () => void
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {
@@ -467,35 +492,43 @@ interface CustomAPI {
     onStreamStart: (cb: () => void) => () => void
     onStreamChunk: (cb: (payload: { chunk: string }) => void) => () => void
     onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void) => () => void
-    getCandidates: () => Promise<Array<{
+    getCandidates: () => Promise<
+      Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+    >
+    approve: (
       candidateId: string
-      action: "create" | "patch"
-      skillId: string
-      name: string
-      description: string
-      proposedContent: string
-      rationale: string
-      sourceTraceIds: string[]
-      generatedAt: string
-      status: "pending" | "approved" | "rejected"
-    }>>
-    approve: (candidateId: string) => Promise<{ success: boolean; skillId?: string; error?: string }>
+    ) => Promise<{ success: boolean; skillId?: string; error?: string }>
     reject: (candidateId: string) => Promise<{ success: boolean }>
     clear: () => Promise<void>
-    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<Array<{
-      traceId: string
-      threadId: string
-      startedAt: string
-      durationMs: number
-      userMessage: string
-      totalToolCalls: number
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalTokens: number
-      outcome: string
-      usedSkills: string[]
-    }>>
-    onAutoTriggered: (cb: (payload: { threadId: string; toolCallCount: number }) => void) => () => void
+    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<
+      Array<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        durationMs: number
+        userMessage: string
+        totalToolCalls: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalTokens: number
+        outcome: string
+        usedSkills: string[]
+      }>
+    >
+    onAutoTriggered: (
+      cb: (payload: { threadId: string; toolCallCount: number }) => void
+    ) => () => void
     getTraceDetail: (traceId: string) => Promise<{
       traceId: string
       threadId: string
@@ -592,6 +625,59 @@ interface CustomAPI {
   routing: {
     getMode: () => Promise<"auto" | "pinned">
     setMode: (mode: "auto" | "pinned") => Promise<void>
+  }
+  update: {
+    check: () => Promise<
+      | { hasUpdate: false }
+      | {
+        hasUpdate: true
+        version: string
+        updateType: string
+        releaseNotes: string
+        size: number
+        mandatory: boolean
+        currentStatus?: string
+        currentProgress?: {
+          percent: number
+          transferred: number
+          total: number
+          speed: string
+          phase: "downloading" | "verifying" | "extracting"
+          message: string
+        } | null
+        currentError?: string | null
+      }
+    >
+    download: () => Promise<{ success: boolean }>
+    install: () => Promise<void>
+    dismiss: () => Promise<{ success: boolean }>
+    rollback: () => Promise<void>
+    getStatus: () => Promise<{
+      status: string
+      update: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean } | null
+      progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      } | null
+      errorMessage: string | null
+      canRollback: boolean
+    }>
+    getStartupResult: () => Promise<{ updatedFrom?: string; updatedTo?: string }>
+    onAvailable: (callback: (info: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean; autoDownloading?: boolean }) => void) => () => void
+    onProgress: (callback: (progress: {
+      percent: number
+      transferred: number
+      total: number
+      speed: string
+      phase: "downloading" | "verifying" | "extracting"
+      message: string
+    }) => void) => () => void
+    onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => () => void
+    onError: (callback: (err: { message: string; silent?: boolean }) => void) => () => void
   }
 }
 

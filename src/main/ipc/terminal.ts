@@ -84,12 +84,17 @@ function getPtyHostPath(): string {
   }
 }
 
+let ptyHostReadyPromise: Promise<void> | null = null
+
 function ensurePtyHost(): ChildProcess {
   if (isShuttingDown) throw new Error("Application is shutting down")
   if (ptyHost && !ptyHost.killed) return ptyHost
 
   const hostPath = getPtyHostPath()
   console.log(`[Terminal] Spawning Pty Host: ${hostPath}`)
+
+  let resolveReady: () => void
+  ptyHostReadyPromise = new Promise<void>((resolve) => { resolveReady = resolve })
 
   ptyHost = fork(hostPath, [], {
     stdio: ["pipe", "pipe", "pipe", "ipc"],
@@ -99,6 +104,7 @@ function ensurePtyHost(): ChildProcess {
   ptyHost.on("message", (msg: { type: string; id?: string; data?: string; exitCode?: number; error?: string }) => {
     if (msg.type === "ready") {
       console.log("[Terminal] Pty Host ready")
+      resolveReady!()
       return
     }
 
@@ -146,6 +152,7 @@ function ensurePtyHost(): ChildProcess {
       }
     }
     ptyHost = null
+    ptyHostReadyPromise = null
     ptyWindows.clear()
     // #3 fix: reject 所有等待中的创建请求
     for (const [, pending] of pendingCreates) {
@@ -227,6 +234,18 @@ export function registerTerminalHandlers(ipcMain: IpcMain): void {
         ensureWindowCleanup(window)
 
         const claudePath = getClaudePath()
+
+        // Ensure Pty Host is ready before sending create message
+        ensurePtyHost()
+        if (ptyHostReadyPromise) {
+          await Promise.race([
+            ptyHostReadyPromise,
+            new Promise<void>((_, reject) => setTimeout(() => {
+              ptyHostReadyPromise = null
+              reject(new Error("Pty Host ready timed out"))
+            }, 10_000))
+          ])
+        }
 
         // P1 fix: 等待子进程确认创建成功
         const createPromise = new Promise<void>((resolve, reject) => {

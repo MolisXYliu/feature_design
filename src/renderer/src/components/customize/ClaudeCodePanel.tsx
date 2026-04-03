@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react"
-import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2, TriangleAlert } from "lucide-react"
+import { Terminal as TerminalIcon, RotateCcw, Square, FolderOpen, Plus, X, Loader2, TriangleAlert, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Terminal } from "@xterm/xterm"
@@ -47,19 +47,40 @@ function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
       blue: "#1565c0",
       magenta: "#7b1fa2",
       cyan: "#00838f",
-      white: "#faf9f6"
+      white: "#b8b4ac",
+      brightBlack: "#545454",
+      brightRed: "#e05a50",
+      brightGreen: "#4caf50",
+      brightYellow: "#ff9800",
+      brightBlue: "#42a5f5",
+      brightMagenta: "#ab47bc",
+      brightCyan: "#26c6da",
+      brightWhite: "#8a8780"
     },
     cursorBlink: true,
     scrollback: 5000,
-    allowProposedApi: true
+    allowProposedApi: true,
+    minimumContrastRatio: 4.5
     // #17: scrollbar: { width: 14 } 不是 xterm.js 有效选项，已移除
+  })
+  // Windows 兼容：Ctrl+V 粘贴、Ctrl+C 选中时复制
+  xterm.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown" || !(e.metaKey || e.ctrlKey)) return true
+    // Ctrl+V / Cmd+V → 交给浏览器原生粘贴
+    if (e.key === "v") return false
+    // Ctrl+C / Cmd+C → 有选中文本时复制，否则正常发送中断信号
+    if (e.key === "c" && xterm.hasSelection()) {
+      navigator.clipboard.writeText(xterm.getSelection()).catch(() => {})
+      return false
+    }
+    return true
   })
   const fitAddon = new FitAddon()
   xterm.loadAddon(fitAddon)
   return { xterm, fitAddon }
 }
 
-export function ClaudeCodePanel(): React.JSX.Element {
+export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const sessionsRef = useRef<Map<string, Session>>(new Map())
   const [sessionIds, setSessionIds] = useState<string[]>([])
@@ -71,7 +92,7 @@ export function ClaudeCodePanel(): React.JSX.Element {
   const [mountError, setMountError] = useState<string | null>(null)
 
   // 加载模型列表（仅打包环境）
-  useEffect(() => {
+  const refreshModels = useCallback((resetSelection = false) => {
     if (!isPackaged) return
     window.api.models.getCustomConfigs().then((configs) => {
       const list = configs.map((c) => ({
@@ -80,9 +101,22 @@ export function ClaudeCodePanel(): React.JSX.Element {
         model: c.model
       }))
       setModels(list)
-      if (list.length > 0) setSelectedModelId(list[0].id)
+      if (list.length === 0) {
+        setSelectedModelId("")
+      } else if (resetSelection || !selectedModelId || !list.some((m) => m.id === selectedModelId)) {
+        setSelectedModelId(list[0].id)
+      }
     }).catch(console.error)
-  }, [])
+  }, [selectedModelId])
+
+  useEffect(() => {
+    refreshModels(true)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 切到 Claude Code 页面时刷新模型列表
+  useEffect(() => {
+    if (visible) refreshModels()
+  }, [visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const getSession = useCallback((id: string) => sessionsRef.current.get(id), [])
   const pendingResizeRef = useRef(false)
@@ -645,17 +679,20 @@ export function ClaudeCodePanel(): React.JSX.Element {
             </div>
           </div>
           {isPackaged && models.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">模型：</span>
-              <select
-                value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
-                className="h-8 px-2 rounded-md border border-border bg-background text-sm"
-              >
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
+            <div className="flex items-center gap-2.5">
+              <span className="text-sm text-muted-foreground/70">模型配置</span>
+              <div className="relative inline-flex items-center">
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  className="appearance-none h-10 pl-4 pr-9 rounded-xl border border-border/40 bg-muted/30 text-sm text-foreground/80 shadow-[0_1px_3px_rgba(0,0,0,0.04)] backdrop-blur-sm hover:bg-muted/50 hover:border-border/60 hover:shadow-[0_2px_8px_rgba(0,0,0,0.06)] active:scale-[0.97] focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-border/60 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}{m.model !== m.name ? `  ·  ${m.model}` : ""}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 size-3.5 text-muted-foreground/50" />
+              </div>
             </div>
           )}
           <Button onClick={() => { setMountError(null); createSessionWithDir() }} className="gap-2" disabled={creating}>

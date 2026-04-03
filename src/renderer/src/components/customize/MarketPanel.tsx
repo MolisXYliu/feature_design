@@ -17,7 +17,8 @@ import {
   Edit,
   Calendar,
   FileText,
-  Lightbulb
+  Lightbulb,
+  ArrowLeft
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,14 +32,20 @@ import {
   DialogFooter
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import type { McpConnectorConfig, PluginManifest, PluginMetadata, SkillMetadata } from "@/types"
 import { UniversalUploadDialog } from "./UniversalUploadDialog"
+import { SkillDetail } from "./SkillsPanel"
+import { MCPConnectorDetail } from "./MCPConnectorDetail"
+import { PluginDetailPanel } from "./PluginsPanel"
 import { marketApi, MarketApiResponse, MarketItem, MarketItemType } from "../../api/market"
 import { getMarketMockResponse } from "./MarketMockData"
 
 // Local storage helper functions for tracking user uploads
 const UPLOADED_ITEMS_KEY = "marketplace_uploaded_items"
 const USE_MARKET_MOCK_ON_ERROR =
-  String(import.meta.env.VITE_MARKET_MOCK_ON_ERROR || "false").toLowerCase() === "true"
+  String(import.meta.env.VITE_MARKET_MOCK_ON_ERROR || "false")
+    .trim()
+    .toLowerCase() === "true"
 
 interface UploadedItemRecord {
   name: string
@@ -95,6 +102,7 @@ const localStorageHelper = {
 
 interface MarketItemCardProps {
   item: MarketItem
+  onOpenDetail: (item: MarketItem) => void
   onDelete: (item: MarketItem) => void
   onUpdate: (item: MarketItem) => void
   onDownload: (item: MarketItem, downloadToLocal?: boolean) => void
@@ -107,6 +115,7 @@ interface MarketItemCardProps {
 
 function MarketItemCard({
   item,
+  onOpenDetail,
   onDelete,
   onUpdate,
   onDownload,
@@ -136,39 +145,53 @@ function MarketItemCard({
   const isFeatured = item.featured === "精品"
 
   return (
-    <div className="p-4 rounded-lg border border-gray-300 hover:shadow-lg transition-colors">
+    <div
+      className="p-4 rounded-xl border border-border/70 bg-background hover:bg-muted/20 hover:border-foreground/20 hover:shadow-sm transition-all duration-200 cursor-pointer"
+      onClick={() => onOpenDetail(item)}
+    >
       {/* Header: name + badges + actions */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex-1 min-w-0 mb-4">
+        <div className="flex-1 min-w-0 mb-2">
           <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-            <h3 className="font-semibold text-sm">{item.name}</h3>
-            {item.chinese_name && (
-              <span className="text-xs text-muted-foreground">（{item.chinese_name}）</span>
+            {item.chinese_name ? (
+              <h3 className="font-semibold text-base leading-tight text-foreground">
+                {item.chinese_name}
+                <span className="ml-1.5 text-foreground/90">({item.name})</span>
+              </h3>
+            ) : (
+              <h3 className="font-semibold text-base leading-tight text-foreground">{item.name}</h3>
+            )}
+            {item.category && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 bg-muted border border-border px-2 py-0.5 rounded-full">
+                <Tag className="size-3 text-muted-foreground shrink-0" />
+                {item.category}
+              </span>
             )}
             {isInstalled && (
-              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+              <span className="text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
                 <CheckCircle className="size-3" />
                 已安装
               </span>
             )}
           </div>
-          {item.category && (
-            <div className="flex items-center gap-1 mt-1">
-              <Tag className="size-3 text-primary shrink-0" />
-              <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                {item.category}
-              </span>
-            </div>
-          )}
         </div>
-        <div className="flex items-center gap-1 ml-2 shrink-0">
+        <div className="flex items-center gap-1 ml-2 shrink-0" onClick={(e) => e.stopPropagation()}>
           {isDownloading || isUpdating ? (
             <div className="size-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
           ) : (
             <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-auto px-2 gap-1 cursor-pointer"
+                onClick={() => onOpenDetail(item)}
+              >
+                <FileText className="size-3 mr-1" />
+                查看详情
+              </Button>
               {isInstalled ? (
                 isFeatured ? (
-                  <span className="text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-2 py-1 rounded-full flex items-center gap-1">
+                  <span className="text-[11px] bg-amber-50 border border-amber-200 text-amber-700 px-2 py-1 rounded-full flex items-center gap-1">
                     <Zap className="size-3" />
                     自动保持最新
                   </span>
@@ -176,7 +199,7 @@ function MarketItemCard({
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-3 gap-1 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 cursor-pointer"
+                    className="h-7 px-3 gap-1 bg-muted/50 hover:bg-muted cursor-pointer"
                     onClick={handleUpdateInstall}
                   >
                     <Zap className="size-3" />
@@ -196,9 +219,9 @@ function MarketItemCard({
               )}
               {isInstalled && !isFeatured && (
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-7 w-auto px-2 gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+                  className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50/70 cursor-pointer"
                   onClick={handleUninstall}
                   title="卸载"
                 >
@@ -207,7 +230,7 @@ function MarketItemCard({
                 </Button>
               )}
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={handleLocalDownload}
@@ -220,7 +243,7 @@ function MarketItemCard({
           {(item.canDelete || (item.ip && ip && item.ip === ip)) && (
             <>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 className="h-7 w-auto px-2 gap-1 cursor-pointer"
                 onClick={() => onUpdate(item)}
@@ -230,9 +253,9 @@ function MarketItemCard({
                 编辑
               </Button>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                className="h-7 w-auto px-2 gap-1 cursor-pointer"
+                className="h-7 w-auto px-2 gap-1 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 cursor-pointer"
                 onClick={() => onDelete(item)}
                 title="删除"
               >
@@ -244,23 +267,10 @@ function MarketItemCard({
         </div>
       </div>
 
-      {/* Description */}
-      <p className="text-xs text-muted-foreground mb-2 leading-relaxed">{item.description}</p>
-
-      {/* Guidance — supports line breaks and whitespace formatting */}
-      {item.guidance && (
-        <div className="text-xs text-muted-foreground border-l-2 border-border pl-2 mb-3">
-          <div className="flex items-start gap-1.5">
-            <Lightbulb className="size-3 mt-0.5 shrink-0" />
-            <span className="whitespace-pre-wrap leading-relaxed">{item.guidance}</span>
-          </div>
-        </div>
-      )}
-
       {/* Featured auto-update notice */}
       {isFeatured && isInstalled && (
-        <div className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
-          <Star className="size-3 shrink-0 text-yellow-500" />
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 mb-2 flex items-center gap-1.5">
+          <Star className="size-3 shrink-0 text-amber-500" />
           精品技能无需手动更新，系统将自动安装最新版本
         </div>
       )}
@@ -302,6 +312,28 @@ function MarketItemCard({
   )
 }
 
+type DetailViewMode = "list" | "detail"
+type SkillPreviewKind = "text" | "html" | "image" | "pdf"
+
+interface PluginDetailData {
+  skills: string[]
+  mcpServers: string[]
+  manifest: PluginManifest | null
+}
+
+function getFileExt(filename: string): string {
+  const idx = filename.lastIndexOf(".")
+  if (idx < 0) return ""
+  return filename.slice(idx + 1).toLowerCase()
+}
+
+function isAllowedDetailFile(type: MarketItemType, filename: string): boolean {
+  const ext = getFileExt(filename)
+  if (type === "skill") return ext === "zip" || ext === "md"
+  if (type === "plugin") return ext === "zip"
+  return ext === "json"
+}
+
 export function MarketPanel(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<MarketItemType>("skill")
   const [searchQuery, setSearchQuery] = useState("")
@@ -333,9 +365,66 @@ export function MarketPanel(): React.JSX.Element {
     type: "skill"
   })
   const [reloadToken, setReloadToken] = useState(0)
+  const [detailMode, setDetailMode] = useState<DetailViewMode>("list")
+  const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [skillDetailSkill, setSkillDetailSkill] = useState<SkillMetadata | null>(null)
+  const [skillDetailSelectedFile, setSkillDetailSelectedFile] = useState<string | null>(null)
+  const [skillDetailContent, setSkillDetailContent] = useState<string | null>(null)
+  const [skillDetailPreviewKind, setSkillDetailPreviewKind] = useState<SkillPreviewKind>("text")
+  const [skillDetailBinaryBase64, setSkillDetailBinaryBase64] = useState<string | null>(null)
+  const [skillDetailBinaryMimeType, setSkillDetailBinaryMimeType] = useState<string | null>(null)
+  const [skillDetailShowCode, setSkillDetailShowCode] = useState(false)
+  const [mcpDetailConnector, setMcpDetailConnector] = useState<McpConnectorConfig | null>(null)
+  const [pluginDetailPlugin, setPluginDetailPlugin] = useState<PluginMetadata | null>(null)
+  const [pluginDetailData, setPluginDetailData] = useState<PluginDetailData | null>(null)
   const installedSkillsRef = useRef<string[]>([])
   const installedMcpsRef = useRef<string[]>([])
   const installedPluginsRef = useRef<string[]>([])
+
+  const getItemKey = (item: MarketItem) => item.id || item.name
+
+  const resetDetailState = () => {
+    setSkillDetailSkill(null)
+    setSkillDetailSelectedFile(null)
+    setSkillDetailContent(null)
+    setSkillDetailPreviewKind("text")
+    setSkillDetailBinaryBase64(null)
+    setSkillDetailBinaryMimeType(null)
+    setSkillDetailShowCode(false)
+    setMcpDetailConnector(null)
+    setPluginDetailPlugin(null)
+    setPluginDetailData(null)
+  }
+
+  const loadSkillPreviewFromInstallFile = async (filename: string, blob: Blob) => {
+    setSkillDetailSelectedFile(filename)
+    setSkillDetailContent(null)
+    setSkillDetailBinaryBase64(null)
+    setSkillDetailBinaryMimeType(null)
+
+    const ext = getFileExt(filename)
+    if (ext === "md") {
+      setSkillDetailPreviewKind("text")
+      const text = await blob.text()
+      setSkillDetailContent(text)
+      return
+    }
+    if (ext === "zip") {
+      setSkillDetailPreviewKind("text")
+      const arrayBuffer = await blob.arrayBuffer()
+      const extracted = await window.api.skills.extractMarkdownFromZip(arrayBuffer, filename)
+      if (extracted.success && extracted.content) {
+        setSkillDetailSelectedFile(extracted.filePath || "SKILL.md")
+        setSkillDetailContent(extracted.content)
+      } else {
+        setSkillDetailContent(extracted.error || "Zip 中未找到可预览的 markdown 文件。")
+      }
+      return
+    }
+    setSkillDetailPreviewKind("text")
+    setSkillDetailContent(`文件类型 .${ext || "未知"} 已通过安装接口获取，当前不支持直接内容预览。`)
+  }
 
   const triggerReload = () => {
     setReloadToken((prev) => prev + 1)
@@ -608,6 +697,12 @@ export function MarketPanel(): React.JSX.Element {
     loadData()
   }, [activeTab, reloadToken])
 
+  useEffect(() => {
+    setDetailMode("list")
+    setSelectedItemKey(null)
+    resetDetailState()
+  }, [activeTab])
+
   const getCurrentData = () => {
     switch (activeTab) {
       case "skill":
@@ -621,11 +716,111 @@ export function MarketPanel(): React.JSX.Element {
     }
   }
 
-  const filteredData = getCurrentData().filter(
+  const currentData = getCurrentData()
+  const selectedItem =
+    selectedItemKey !== null
+      ? currentData.find((item) => getItemKey(item) === selectedItemKey) || null
+      : null
+
+  const loadDetailDataForItem = async (item: MarketItem) => {
+    setDetailLoading(true)
+    resetDetailState()
+    try {
+      const installFile = await marketApi.fetchInstallFile(item.name, activeTab)
+      const installFilename = installFile.filename || item.filename || `${item.name}`
+
+      if (!isAllowedDetailFile(activeTab, installFilename)) {
+        throw new Error(
+          activeTab === "skill"
+            ? "Skill 详情文件仅支持 .zip 或 .md"
+            : activeTab === "plugin"
+              ? "Plugin 详情文件仅支持 .zip"
+              : "MCP 详情文件仅支持 .json"
+        )
+      }
+
+      if (activeTab === "skill") {
+        setSkillDetailSkill({
+          name: item.name,
+          description: item.description || "Market skill",
+          path: installFilename,
+          source: "user"
+        })
+        await loadSkillPreviewFromInstallFile(installFilename, installFile.blob)
+      } else if (activeTab === "mcp") {
+        const text = await installFile.blob.text()
+        const parsed = JSON.parse(text)
+        const mcpServerConfig = parsed?.mcpServers
+          ? Object.values(parsed.mcpServers)[0]
+          : parsed?.url
+            ? parsed
+            : null
+
+        if (!mcpServerConfig || typeof mcpServerConfig !== "object") {
+          throw new Error("MCP 文件内容不合法，无法解析连接器信息")
+        }
+
+        const config = mcpServerConfig as Record<string, unknown>
+        const url = typeof config.url === "string" ? config.url : ""
+        setMcpDetailConnector({
+          id: item.name,
+          name: typeof config.name === "string" ? config.name : item.name,
+          url,
+          enabled: false,
+          lazyLoad: false,
+          createdAt: item.created_at,
+          updatedAt: item.created_at
+        })
+      } else if (activeTab === "plugin") {
+        setPluginDetailPlugin({
+          id: item.name,
+          name: item.name,
+          version: item.version || "unknown",
+          description: item.description || "",
+          author: item.user_id ? `用户 ${item.user_id}` : "未知作者",
+          path: installFilename,
+          enabled: false,
+          skillCount: 0,
+          mcpServerCount: 0,
+          createdAt: item.created_at,
+          updatedAt: item.created_at
+        })
+        setPluginDetailData({
+          skills: [],
+          mcpServers: [],
+          manifest: {
+            name: item.name,
+            version: item.version,
+            description: item.description,
+            author: item.user_id ? `用户 ${item.user_id}` : undefined
+          }
+        })
+      }
+    } catch (detailError) {
+      console.error("Failed to load detail data:", detailError)
+      setError(detailError instanceof Error ? detailError.message : "加载详情失败")
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  const filteredData = currentData.filter(
     (item) =>
       item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.description.toLowerCase().includes(searchQuery.toLowerCase())
   )
+
+  const openItemDetail = async (item: MarketItem) => {
+    setSelectedItemKey(getItemKey(item))
+    setDetailMode("detail")
+    await loadDetailDataForItem(item)
+  }
+
+  const backToList = () => {
+    setDetailMode("list")
+    setSelectedItemKey(null)
+    resetDetailState()
+  }
 
   const handleDelete = (item: MarketItem) => {
     setDeleteDialog({ open: true, item })
@@ -694,6 +889,10 @@ export function MarketPanel(): React.JSX.Element {
           case "plugin":
             setPluginsData((prev) => prev.filter((item) => (item.id || item.name) !== itemId))
             break
+        }
+
+        if (selectedItemKey === itemId) {
+          backToList()
         }
       }
     } catch (error) {
@@ -864,98 +1063,335 @@ export function MarketPanel(): React.JSX.Element {
     triggerReload()
   }
 
+  const renderDetailFilePanel = () => {
+    if (!selectedItem) return null
+    if (detailLoading) {
+      return <div className="text-sm text-muted-foreground py-6">文件详情加载中...</div>
+    }
+
+    if (activeTab === "skill") {
+      if (!skillDetailSkill) {
+        return (
+          <div className="text-sm text-muted-foreground py-6">
+            暂未获取到 Skill 文件详情（通过安装接口拉取）。
+          </div>
+        )
+      }
+      return (
+        <div className="border border-border rounded-lg ">
+          <SkillDetail
+            skill={skillDetailSkill}
+            selectedFilePath={skillDetailSelectedFile}
+            content={skillDetailContent}
+            previewKind={skillDetailPreviewKind}
+            binaryBase64={skillDetailBinaryBase64}
+            binaryMimeType={skillDetailBinaryMimeType}
+            showCode={skillDetailShowCode}
+            isDisabled={false}
+            onToggleShowCode={() => setSkillDetailShowCode((v) => !v)}
+            onToggleEnabled={() => undefined}
+            hideActions
+          />
+        </div>
+      )
+    }
+
+    if (activeTab === "mcp") {
+      if (!mcpDetailConnector) {
+        return (
+          <div className="text-sm text-muted-foreground py-6">
+            暂未获取到 MCP 文件详情（通过安装接口拉取）。
+          </div>
+        )
+      }
+      return (
+        <div className=" border border-border rounded-lg ">
+          <MCPConnectorDetail
+            connector={mcpDetailConnector}
+            onToggleEnabled={() => undefined}
+            onToggleLazyLoad={() => undefined}
+            onDelete={() => undefined}
+            onEdit={() => undefined}
+            hideActions
+            testByUrlOnly
+          />
+        </div>
+      )
+    }
+
+    if (!pluginDetailPlugin) {
+      return (
+        <div className="text-sm text-muted-foreground py-6">
+          暂未获取到 Plugin 文件详情（通过安装接口拉取）。
+        </div>
+      )
+    }
+    return (
+      <div className="border border-border rounded-lg">
+        <PluginDetailPanel
+          plugin={pluginDetailPlugin}
+          detail={pluginDetailData}
+          onToggleEnabled={() => undefined}
+          onDelete={() => undefined}
+          hideActions
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <ShoppingBag className="size-5" />
-            <h2 className="font-semibold">公共市场</h2>
+            <h2 className="font-semibold">
+              {detailMode === "detail" && selectedItem ? `${selectedItem.name} 详情` : "公共市场"}
+            </h2>
           </div>
-          <Button size="sm" onClick={handleUploadClick} className="flex items-center gap-2">
-            <Plus className="size-4" />
-            {activeTab === "skill" ? "上传技能" : activeTab === "mcp" ? "上传连接器" : "上传插件"}
-          </Button>
+          {detailMode === "list" ? (
+            <Button size="sm" onClick={handleUploadClick} className="flex items-center gap-2">
+              <Plus className="size-4" />
+              {activeTab === "skill" ? "上传技能" : activeTab === "mcp" ? "上传连接器" : "上传插件"}
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={backToList} className="gap-2">
+              <ArrowLeft className="size-4" />
+              返回列表
+            </Button>
+          )}
         </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-          <Input
-            placeholder="搜索公共市场里的工具"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
-        </div>
+        {detailMode === "list" && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            <Input
+              placeholder="搜索公共市场里的工具"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        )}
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(value as MarketItemType)}
-        className="flex-1 flex flex-col overflow-hidden"
-      >
-        <div className="px-4 pt-3">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="skill" className="text-xs">
-              <Sparkles className="size-3 mr-1" />
-              Skills
-            </TabsTrigger>
-            <TabsTrigger value="mcp" className="text-xs">
-              <Plug className="size-3 mr-1" />
-              MCPs
-            </TabsTrigger>
-            <TabsTrigger value="plugin" className="text-xs">
-              <Puzzle className="size-3 mr-1" />
-              Plugins
-            </TabsTrigger>
-          </TabsList>
-        </div>
+      {detailMode === "detail" && selectedItem ? (
+        <ScrollArea className="flex-1">
+          <div className="p-5">
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+              <div className="space-y-2 xl:order-1 order-2">{renderDetailFilePanel()}</div>
 
-        <div className="flex-1 overflow-hidden">
-          <TabsContent value={activeTab} className="mt-0 h-full">
-            <ScrollArea className="h-full">
-              <div className="p-4 space-y-10">
-                {loading ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">加载中...</div>
-                ) : error ? (
-                  <div className="text-center py-8">
-                    <div className="text-red-500 text-sm mb-2">❌ {error}</div>
+              <div className="xl:order-2 order-1 space-y-3 xl:sticky xl:top-4">
+                <div className="rounded-2xl border border-border/70 bg-background p-4 space-y-3 shadow-sm">
+                  <div className="space-y-1">
+                    {selectedItem.chinese_name ? (
+                      <h3 className="text-lg font-semibold leading-tight">
+                        {selectedItem.chinese_name}
+                        <span className="ml-2 text-foreground/90 text-base">
+                          ({selectedItem.name})
+                        </span>
+                      </h3>
+                    ) : (
+                      <h3 className="text-lg font-semibold leading-tight">{selectedItem.name}</h3>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    {selectedItem.category && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
+                        <Tag className="size-3" />
+                        {selectedItem.category}
+                      </span>
+                    )}
+                    {selectedItem.version && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
+                        <GitBranch className="size-3" />v{selectedItem.version}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center gap-1 rounded-full bg-muted border border-border px-2.5 py-1 text-foreground/80">
+                      <Calendar className="size-3" />
+                      {new Date(selectedItem.created_at).toLocaleDateString("zh-CN")}
+                    </span>
+                    {selectedItem.installed && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 px-2.5 py-1">
+                        <CheckCircle className="size-3" />
+                        已安装
+                      </span>
+                    )}
+                    {selectedItem.featured === "精品" && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 text-yellow-800 px-2.5 py-1">
+                        <Star className="size-3" />
+                        精品
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {selectedItem.installed ? (
+                      selectedItem.featured === "精品" ? (
+                        <span className="col-span-2 text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 px-3 py-2 rounded-lg inline-flex items-center gap-1">
+                          <Zap className="size-3" />
+                          自动保持最新
+                        </span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                          onClick={() => handleUpdateInstall(selectedItem)}
+                          disabled={updatingItems.has(getItemKey(selectedItem))}
+                        >
+                          <Zap className="size-3" />
+                          更新安装
+                        </Button>
+                      )
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5"
+                        onClick={() => handleDownload(selectedItem, false)}
+                        disabled={downloadingItems.has(getItemKey(selectedItem))}
+                      >
+                        <Zap className="size-3" />
+                        安装
+                      </Button>
+                    )}
+                    {selectedItem.installed && selectedItem.featured !== "精品" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
+                        onClick={() => handleUninstall(selectedItem)}
+                      >
+                        <Trash2 className="size-3" />
+                        卸载
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        setError(null)
-                        // Trigger reload explicitly
-                        triggerReload()
-                      }}
+                      className="h-8 gap-1.5"
+                      onClick={() => handleDownload(selectedItem, true)}
+                      disabled={downloadingItems.has(getItemKey(selectedItem))}
                     >
-                      重试
+                      <HardDrive className="size-3" />
+                      下载
                     </Button>
+                    {(selectedItem.canDelete ||
+                      (selectedItem.ip &&
+                        localStorage.getItem("localIp") &&
+                        selectedItem.ip === localStorage.getItem("localIp"))) && (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => handleUpdate(selectedItem)}
+                        >
+                          <Edit className="size-3" />
+                          编辑
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDelete(selectedItem)}
+                        >
+                          <Trash2 className="size-3" />
+                          删除
+                        </Button>
+                      </>
+                    )}
                   </div>
-                ) : filteredData.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">
-                    {searchQuery ? "未找到匹配的项目" : "暂无可用项目"}
+                </div>
+
+                {selectedItem.guidance && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/30 p-3 text-sm text-muted-foreground shadow-sm">
+                    <div className="flex items-center gap-2 mb-1 text-[10px] uppercase tracking-[0.08em] text-amber-700">
+                      <Lightbulb className="size-4 shrink-0" />
+                      <span className="font-medium">使用指引</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="whitespace-pre-wrap leading-relaxed break-all">
+                        {selectedItem.guidance}
+                      </span>
+                    </div>
                   </div>
-                ) : (
-                  filteredData.map((item) => (
-                    <MarketItemCard
-                      key={item.id}
-                      item={item}
-                      onDelete={handleDelete}
-                      onUpdate={handleUpdate}
-                      onDownload={handleDownload}
-                      onUpdateInstall={handleUpdateInstall} // 修正：使用正确的handleUpdateInstall函数
-                      onUninstall={handleUninstall} // 传递卸载回调
-                      isDownloading={downloadingItems.has(item.id || item.name)}
-                      isInstalled={item.installed} // 传递已安装状态
-                      isUpdating={updatingItems.has(item.id || item.name)} // 修正：使用updatingItems而不是downloadingItems
-                    />
-                  ))
                 )}
               </div>
-            </ScrollArea>
-          </TabsContent>
-        </div>
-      </Tabs>
+            </div>
+          </div>
+        </ScrollArea>
+      ) : (
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as MarketItemType)}
+          className="flex-1 flex flex-col overflow-hidden"
+        >
+          <div className="px-4 pt-3">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="skill" className="text-xs">
+                <Sparkles className="size-3 mr-1" />
+                Skills
+              </TabsTrigger>
+              <TabsTrigger value="mcp" className="text-xs">
+                <Plug className="size-3 mr-1" />
+                MCPs
+              </TabsTrigger>
+              <TabsTrigger value="plugin" className="text-xs">
+                <Puzzle className="size-3 mr-1" />
+                Plugins
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+          <div className="flex-1 overflow-hidden">
+            <TabsContent value={activeTab} className="mt-0 h-full">
+              <ScrollArea className="h-full">
+                <div className="p-4 space-y-10">
+                  {loading ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">加载中...</div>
+                  ) : error ? (
+                    <div className="text-center py-8">
+                      <div className="text-red-500 text-sm mb-2">❌ {error}</div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setError(null)
+                          triggerReload()
+                        }}
+                      >
+                        重试
+                      </Button>
+                    </div>
+                  ) : filteredData.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      {searchQuery ? "未找到匹配的项目" : "暂无可用项目"}
+                    </div>
+                  ) : (
+                    filteredData.map((item) => (
+                      <MarketItemCard
+                        key={item.id}
+                        item={item}
+                        onOpenDetail={openItemDetail}
+                        onDelete={handleDelete}
+                        onUpdate={handleUpdate}
+                        onDownload={handleDownload}
+                        onUpdateInstall={handleUpdateInstall}
+                        onUninstall={handleUninstall}
+                        isDownloading={downloadingItems.has(item.id || item.name)}
+                        isInstalled={item.installed}
+                        isUpdating={updatingItems.has(item.id || item.name)}
+                      />
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          </div>
+        </Tabs>
+      )}
 
       <Dialog
         open={deleteDialog.open}

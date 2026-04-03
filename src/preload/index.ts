@@ -16,21 +16,21 @@ import type {
   ChatXConfig
 } from "../main/types"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
+import { UserInfoConfig } from "../main/storage"
 import type {
   ManagedSavedCodeExecTool,
   SavedCodeExecPreviewPayload,
   SavedCodeExecPreviewResult,
   SavedCodeExecToolUpdatePayload
 } from "../main/ipc/code-exec-tools"
-import {UserInfoConfig} from '../main/storage'
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
-  openLoginWindow:()=>ipcRenderer.invoke('open-login-window'),
-  closeLoginWindow:()=>ipcRenderer.invoke('close-login-window'),
-  onNotifyMsg: (callback: (msg:string)=>void)=>{
-    ipcRenderer.on('notify-login-msg', (_event, data) => {
+  openLoginWindow: () => ipcRenderer.invoke("open-login-window"),
+  closeLoginWindow: () => ipcRenderer.invoke("close-login-window"),
+  onNotifyMsg: (callback: (msg: string) => void) => {
+    ipcRenderer.on("notify-login-msg", (_event, data) => {
       callback(data)
     })
   },
@@ -155,9 +155,13 @@ const api = {
       return ipcRenderer.invoke("threads:generateTitle", message)
     },
     onThreadsChanged: (callback: () => void): (() => void) => {
-      const handler = (): void => { callback() }
+      const handler = (): void => {
+        callback()
+      }
       ipcRenderer.on("threads:changed", handler)
-      return () => { ipcRenderer.removeListener("threads:changed", handler) }
+      return () => {
+        ipcRenderer.removeListener("threads:changed", handler)
+      }
     }
   },
   models: {
@@ -205,7 +209,9 @@ const api = {
         }>
       >
     },
-    getCustomConfig: (id?: string): Promise<{
+    getCustomConfig: (
+      id?: string
+    ): Promise<{
       id: string
       name: string
       baseUrl: string
@@ -521,7 +527,9 @@ const api = {
     ): Promise<{ success: boolean; content?: string; mimeType?: string; error?: string }> => {
       return ipcRenderer.invoke("skills:readBinary", skillPath)
     },
-    listFiles: (skillPath: string): Promise<{ success: boolean; files?: string[]; error?: string }> => {
+    listFiles: (
+      skillPath: string
+    ): Promise<{ success: boolean; files?: string[]; error?: string }> => {
       return ipcRenderer.invoke("skills:listFiles", skillPath)
     },
     getDisabled: (): Promise<string[]> => {
@@ -530,8 +538,17 @@ const api = {
     setDisabled: (skillNames: string[]): Promise<void> => {
       return ipcRenderer.invoke("skills:setDisabled", skillNames)
     },
-    upload: (buffer: ArrayBuffer, fileName: string): Promise<{ success: boolean; skillName?: string; error?: string }> => {
+    upload: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ): Promise<{ success: boolean; skillName?: string; error?: string }> => {
       return ipcRenderer.invoke("skills:upload", { buffer, fileName })
+    },
+    extractMarkdownFromZip: (
+      buffer: ArrayBuffer,
+      fileName?: string
+    ): Promise<{ success: boolean; filePath?: string; content?: string; error?: string }> => {
+      return ipcRenderer.invoke("skills:extractMarkdownFromZip", { buffer, fileName })
     },
     delete: (skillPath: string): Promise<{ success: boolean; error?: string }> => {
       return ipcRenderer.invoke("skills:delete", skillPath)
@@ -596,37 +613,50 @@ const api = {
     cancel: (id: string): Promise<void> => ipcRenderer.invoke("scheduledTasks:cancel", id),
     isRunning: (id: string): Promise<boolean> => ipcRenderer.invoke("scheduledTasks:isRunning", id),
     onChanged: (callback: () => void): (() => void) => {
-      const handler = (): void => { callback() }
+      const handler = (): void => {
+        callback()
+      }
       ipcRenderer.on("scheduledTasks:changed", handler)
-      return () => { ipcRenderer.removeListener("scheduledTasks:changed", handler) }
+      return () => {
+        ipcRenderer.removeListener("scheduledTasks:changed", handler)
+      }
     },
     listenToStream: (
       threadId: string,
       callback: (event: { type: string; [key: string]: unknown }) => void
     ): (() => void) => {
       const channel = `scheduler:stream:${threadId}`
-      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => { callback(data) }
+      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => {
+        callback(data)
+      }
       ipcRenderer.on(channel, handler)
-      return () => { ipcRenderer.removeListener(channel, handler) }
+      return () => {
+        ipcRenderer.removeListener(channel, handler)
+      }
     }
   },
   memory: {
     listFiles: (): Promise<Array<{ name: string; size: number; modifiedAt: string }>> =>
       ipcRenderer.invoke("memory:listFiles"),
-    readFile: (name: string): Promise<string> =>
-      ipcRenderer.invoke("memory:readFile", name),
-    deleteFile: (name: string): Promise<void> =>
-      ipcRenderer.invoke("memory:deleteFile", name),
-    getEnabled: (): Promise<boolean> =>
-      ipcRenderer.invoke("memory:getEnabled"),
+    readFile: (name: string): Promise<string> => ipcRenderer.invoke("memory:readFile", name),
+    deleteFile: (name: string): Promise<void> => ipcRenderer.invoke("memory:deleteFile", name),
+    getEnabled: (): Promise<boolean> => ipcRenderer.invoke("memory:getEnabled"),
     setEnabled: (enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("memory:setEnabled", enabled),
-    getStats: (): Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }> =>
-      ipcRenderer.invoke("memory:getStats"),
+    getStats: (): Promise<{
+      fileCount: number
+      totalSize: number
+      indexSize: number
+      enabled: boolean
+    }> => ipcRenderer.invoke("memory:getStats"),
     onChanged: (callback: () => void): (() => void) => {
-      const handler = (): void => { callback() }
+      const handler = (): void => {
+        callback()
+      }
       ipcRenderer.on("memory:changed", handler)
-      return () => { ipcRenderer.removeListener("memory:changed", handler) }
+      return () => {
+        ipcRenderer.removeListener("memory:changed", handler)
+      }
     }
   },
   heartbeat: {
@@ -638,27 +668,33 @@ const api = {
       ipcRenderer.invoke("heartbeat:getContent") as Promise<string>,
     saveContent: (content: string): Promise<void> =>
       ipcRenderer.invoke("heartbeat:saveContent", content) as Promise<void>,
-    runNow: (): Promise<void> =>
-      ipcRenderer.invoke("heartbeat:runNow") as Promise<void>,
-    cancel: (): Promise<void> =>
-      ipcRenderer.invoke("heartbeat:cancel") as Promise<void>,
+    runNow: (): Promise<void> => ipcRenderer.invoke("heartbeat:runNow") as Promise<void>,
+    cancel: (): Promise<void> => ipcRenderer.invoke("heartbeat:cancel") as Promise<void>,
     isRunning: (): Promise<boolean> =>
       ipcRenderer.invoke("heartbeat:isRunning") as Promise<boolean>,
     resetConfig: (): Promise<HeartbeatConfig> =>
       ipcRenderer.invoke("heartbeat:resetConfig") as Promise<HeartbeatConfig>,
     onChanged: (callback: () => void): (() => void) => {
-      const handler = (): void => { callback() }
+      const handler = (): void => {
+        callback()
+      }
       ipcRenderer.on("heartbeat:changed", handler)
-      return () => { ipcRenderer.removeListener("heartbeat:changed", handler) }
+      return () => {
+        ipcRenderer.removeListener("heartbeat:changed", handler)
+      }
     },
     listenToStream: (
       threadId: string,
       callback: (event: { type: string; [key: string]: unknown }) => void
     ): (() => void) => {
       const channel = `heartbeat:stream:${threadId}`
-      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => { callback(data) }
+      const handler = (_: unknown, data: { type: string; [key: string]: unknown }): void => {
+        callback(data)
+      }
       ipcRenderer.on(channel, handler)
-      return () => { ipcRenderer.removeListener(channel, handler) }
+      return () => {
+        ipcRenderer.removeListener(channel, handler)
+      }
     }
   },
   skillEvolution: {
@@ -674,19 +710,24 @@ const api = {
         context: unknown
       }) => void
     ): (() => void) => {
-      const handler = (_: unknown, req: {
-        threadId?: string
-        requestId: string
-        summary: string
-        toolCallCount: number
-        mode: "mode_a_rule" | "mode_b_llm"
-        recommendationReason?: string
-        context: unknown
-      }): void => {
+      const handler = (
+        _: unknown,
+        req: {
+          threadId?: string
+          requestId: string
+          summary: string
+          toolCallCount: number
+          mode: "mode_a_rule" | "mode_b_llm"
+          recommendationReason?: string
+          context: unknown
+        }
+      ): void => {
         callback(req)
       }
       ipcRenderer.on("skill:intentRequest", handler)
-      return () => { ipcRenderer.removeListener("skill:intentRequest", handler) }
+      return () => {
+        ipcRenderer.removeListener("skill:intentRequest", handler)
+      }
     },
     intentResponse: (requestId: string, accepted: boolean): Promise<void> =>
       ipcRenderer.invoke("skill:intentResponse", { requestId, accepted }) as Promise<void>,
@@ -721,9 +762,13 @@ const api = {
           description: string
           content: string
         }
-      ): void => { callback(req) }
+      ): void => {
+        callback(req)
+      }
       ipcRenderer.on("skill:confirmRequest", handler)
-      return () => { ipcRenderer.removeListener("skill:confirmRequest", handler) }
+      return () => {
+        ipcRenderer.removeListener("skill:confirmRequest", handler)
+      }
     },
     confirmResponse: (requestId: string, approved: boolean): Promise<void> =>
       ipcRenderer.invoke("skill:confirmResponse", { requestId, approved }) as Promise<void>,
@@ -736,50 +781,76 @@ const api = {
         text: string
       }) => void
     ): (() => void) => {
-      const handler = (_: unknown, evt: {
-        threadId?: string
-        phase: "start" | "token" | "done" | "error"
-        text: string
-      }): void => {
+      const handler = (
+        _: unknown,
+        evt: {
+          threadId?: string
+          phase: "start" | "token" | "done" | "error"
+          text: string
+        }
+      ): void => {
         callback(evt)
       }
       ipcRenderer.on("skill:generating", handler)
-      return () => { ipcRenderer.removeListener("skill:generating", handler) }
+      return () => {
+        ipcRenderer.removeListener("skill:generating", handler)
+      }
     }
   },
   plugins: {
     list: (): Promise<PluginMetadata[]> =>
       ipcRenderer.invoke("plugins:list") as Promise<PluginMetadata[]>,
-    install: (buffer: ArrayBuffer, fileName: string): Promise<{ success: boolean; pluginName?: string; error?: string }> =>
-      ipcRenderer.invoke("plugins:install", { buffer, fileName }) as Promise<{ success: boolean; pluginName?: string; error?: string }>,
+    install: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ): Promise<{ success: boolean; pluginName?: string; error?: string }> =>
+      ipcRenderer.invoke("plugins:install", { buffer, fileName }) as Promise<{
+        success: boolean
+        pluginName?: string
+        error?: string
+      }>,
     installFromDir: (): Promise<{ success: boolean; pluginName?: string; error?: string }> =>
-      ipcRenderer.invoke("plugins:installFromDir") as Promise<{ success: boolean; pluginName?: string; error?: string }>,
+      ipcRenderer.invoke("plugins:installFromDir") as Promise<{
+        success: boolean
+        pluginName?: string
+        error?: string
+      }>,
     delete: (id: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke("plugins:delete", id) as Promise<{ success: boolean; error?: string }>,
     setEnabled: (id: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("plugins:setEnabled", { id, enabled }) as Promise<void>,
-    getDetail: (id: string): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
-      ipcRenderer.invoke("plugins:getDetail", id) as Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+    getDetail: (
+      id: string
+    ): Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }> =>
+      ipcRenderer.invoke("plugins:getDetail", id) as Promise<{
+        skills: string[]
+        mcpServers: string[]
+        manifest: PluginManifest | null
+      }>
   },
   chatx: {
     getConfig: (): Promise<ChatXConfig> =>
       ipcRenderer.invoke("chatx:get-config") as Promise<ChatXConfig>,
     saveConfig: (updates: Partial<ChatXConfig>): Promise<void> =>
       ipcRenderer.invoke("chatx:save-config", updates) as Promise<void>,
-    restart: (): Promise<void> =>
-      ipcRenderer.invoke("chatx:restart") as Promise<void>,
+    restart: (): Promise<void> => ipcRenderer.invoke("chatx:restart") as Promise<void>,
     cancelByThread: (threadId: string): Promise<boolean> =>
       ipcRenderer.invoke("chatx:cancel-by-thread", threadId) as Promise<boolean>
   },
   sandbox: {
     getMode: (): Promise<"none" | "unelevated" | "readonly" | "elevated"> =>
-      ipcRenderer.invoke("sandbox:getMode") as Promise<"none" | "unelevated" | "readonly" | "elevated">,
+      ipcRenderer.invoke("sandbox:getMode") as Promise<
+        "none" | "unelevated" | "readonly" | "elevated"
+      >,
     setMode: (mode: "none" | "unelevated" | "readonly" | "elevated"): Promise<void> =>
       ipcRenderer.invoke("sandbox:setMode", mode) as Promise<void>,
     checkElevatedSetup: (): Promise<{ setupComplete: boolean }> =>
       ipcRenderer.invoke("sandbox:checkElevatedSetup") as Promise<{ setupComplete: boolean }>,
     runElevatedSetup: (workspacePaths?: string[]): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke("sandbox:runElevatedSetup", workspacePaths) as Promise<{ success: boolean; error?: string }>,
+      ipcRenderer.invoke("sandbox:runElevatedSetup", workspacePaths) as Promise<{
+        success: boolean
+        error?: string
+      }>,
     getYoloMode: (): Promise<boolean> =>
       ipcRenderer.invoke("sandbox:getYoloMode") as Promise<boolean>,
     setYoloMode: (yolo: boolean): Promise<void> =>
@@ -791,28 +862,31 @@ const api = {
       ipcRenderer.invoke("sandbox:completeNux", mode) as Promise<void>,
     // Approval rules management
     getApprovalRules: (): Promise<Array<{ pattern: string; decision: string }>> =>
-      ipcRenderer.invoke("sandbox:getApprovalRules") as Promise<Array<{ pattern: string; decision: string }>>,
+      ipcRenderer.invoke("sandbox:getApprovalRules") as Promise<
+        Array<{ pattern: string; decision: string }>
+      >,
     deleteApprovalRule: (pattern: string): Promise<void> =>
       ipcRenderer.invoke("sandbox:deleteApprovalRule", pattern) as Promise<void>,
     // Approval decision from renderer → main
     sendApprovalDecision: (decision: {
       requestId: string
       type: string
-      tool_call_id: string
+      tool_call_id: string,
       savedToolName?: string
       savedToolDescription?: string
     }): void => {
       ipcRenderer.send("sandbox:approvalDecision", decision)
     },
     // Listen for approval requests from main → renderer
-    onApprovalRequest: (
-      threadId: string,
-      callback: (request: unknown) => void
-    ): (() => void) => {
+    onApprovalRequest: (threadId: string, callback: (request: unknown) => void): (() => void) => {
       const channel = `approval:request:${threadId}`
-      const handler = (_: unknown, data: unknown): void => { callback(data) }
+      const handler = (_: unknown, data: unknown): void => {
+        callback(data)
+      }
       ipcRenderer.on(channel, handler)
-      return () => { ipcRenderer.removeListener(channel, handler) }
+      return () => {
+        ipcRenderer.removeListener(channel, handler)
+      }
     },
     // Listen for approval timeout notifications from main → renderer
     onApprovalTimeout: (
@@ -820,14 +894,22 @@ const api = {
       callback: (data: { requestId: string }) => void
     ): (() => void) => {
       const channel = `approval:timeout:${threadId}`
-      const handler = (_: unknown, data: { requestId: string }): void => { callback(data) }
+      const handler = (_: unknown, data: { requestId: string }): void => {
+        callback(data)
+      }
       ipcRenderer.on(channel, handler)
-      return () => { ipcRenderer.removeListener(channel, handler) }
+      return () => {
+        ipcRenderer.removeListener(channel, handler)
+      }
     },
     onChanged: (callback: () => void): (() => void) => {
-      const handler = (): void => { callback() }
+      const handler = (): void => {
+        callback()
+      }
       ipcRenderer.on("sandbox:changed", handler)
-      return () => { ipcRenderer.removeListener("sandbox:changed", handler) }
+      return () => {
+        ipcRenderer.removeListener("sandbox:changed", handler)
+      }
     }
   },
   optimizer: {
@@ -885,15 +967,18 @@ const api = {
         candidateCount?: number
       }) => void
     ): (() => void) => {
-      const handler = (_: unknown, payload: unknown) => cb(payload as {
-        runId: string
-        traceId: string
-        index: number
-        total: number
-        status: "pending" | "running" | "completed" | "failed"
-        message?: string
-        candidateCount?: number
-      })
+      const handler = (_: unknown, payload: unknown) =>
+        cb(
+          payload as {
+            runId: string
+            traceId: string
+            index: number
+            total: number
+            status: "pending" | "running" | "completed" | "failed"
+            message?: string
+            candidateCount?: number
+          }
+        )
       ipcRenderer.on("optimizer:runProgress", handler)
       return () => ipcRenderer.removeListener("optimizer:runProgress", handler)
     },
@@ -911,24 +996,14 @@ const api = {
     },
     /** Listen to optimizer LLM stream end. */
     onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void): (() => void) => {
-      const handler = (_: unknown, payload: unknown) => cb(payload as { success: boolean; error?: string })
+      const handler = (_: unknown, payload: unknown) =>
+        cb(payload as { success: boolean; error?: string })
       ipcRenderer.on("optimizer:streamEnd", handler)
       return () => ipcRenderer.removeListener("optimizer:streamEnd", handler)
     },
     /** Get current in-memory candidates */
-    getCandidates: (): Promise<Array<{
-      candidateId: string
-      action: "create" | "patch"
-      skillId: string
-      name: string
-      description: string
-      proposedContent: string
-      rationale: string
-      sourceTraceIds: string[]
-      generatedAt: string
-      status: "pending" | "approved" | "rejected"
-    }>> =>
-      ipcRenderer.invoke("optimizer:candidates") as Promise<Array<{
+    getCandidates: (): Promise<
+      Array<{
         candidateId: string
         action: "create" | "patch"
         skillId: string
@@ -939,31 +1014,42 @@ const api = {
         sourceTraceIds: string[]
         generatedAt: string
         status: "pending" | "approved" | "rejected"
-      }>>,
+      }>
+    > =>
+      ipcRenderer.invoke("optimizer:candidates") as Promise<
+        Array<{
+          candidateId: string
+          action: "create" | "patch"
+          skillId: string
+          name: string
+          description: string
+          proposedContent: string
+          rationale: string
+          sourceTraceIds: string[]
+          generatedAt: string
+          status: "pending" | "approved" | "rejected"
+        }>
+      >,
     /** Approve a candidate — writes the skill to disk */
-    approve: (candidateId: string): Promise<{ success: boolean; skillId?: string; error?: string }> =>
-      ipcRenderer.invoke("optimizer:approve", { candidateId }) as Promise<{ success: boolean; skillId?: string; error?: string }>,
+    approve: (
+      candidateId: string
+    ): Promise<{ success: boolean; skillId?: string; error?: string }> =>
+      ipcRenderer.invoke("optimizer:approve", { candidateId }) as Promise<{
+        success: boolean
+        skillId?: string
+        error?: string
+      }>,
     /** Reject a candidate */
     reject: (candidateId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke("optimizer:reject", { candidateId }) as Promise<{ success: boolean }>,
     /** Clear all candidates */
-    clear: (): Promise<void> =>
-      ipcRenderer.invoke("optimizer:clear") as Promise<void>,
+    clear: (): Promise<void> => ipcRenderer.invoke("optimizer:clear") as Promise<void>,
     /** List recent traces (metadata only) */
-    getTraces: (opts?: { threadId?: string; limit?: number }): Promise<Array<{
-      traceId: string
-      threadId: string
-      startedAt: string
-      durationMs: number
-      userMessage: string
-      totalToolCalls: number
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalTokens: number
-      outcome: string
-      usedSkills: string[]
-    }>> =>
-      ipcRenderer.invoke("optimizer:traces", opts) as Promise<Array<{
+    getTraces: (opts?: {
+      threadId?: string
+      limit?: number
+    }): Promise<
+      Array<{
         traceId: string
         threadId: string
         startedAt: string
@@ -975,17 +1061,36 @@ const api = {
         totalTokens: number
         outcome: string
         usedSkills: string[]
-      }>>,
+      }>
+    > =>
+      ipcRenderer.invoke("optimizer:traces", opts) as Promise<
+        Array<{
+          traceId: string
+          threadId: string
+          startedAt: string
+          durationMs: number
+          userMessage: string
+          totalToolCalls: number
+          totalInputTokens: number
+          totalOutputTokens: number
+          totalTokens: number
+          outcome: string
+          usedSkills: string[]
+        }>
+      >,
     /** Listen for auto-triggered skill evolution (main process fires this after threshold) */
     onAutoTriggered: (
       cb: (payload: { threadId: string; toolCallCount: number }) => void
     ): (() => void) => {
-      const handler = (_: unknown, payload: unknown) => cb(payload as { threadId: string; toolCallCount: number })
+      const handler = (_: unknown, payload: unknown) =>
+        cb(payload as { threadId: string; toolCallCount: number })
       ipcRenderer.on("optimizer:autoTriggered", handler)
       return () => ipcRenderer.removeListener("optimizer:autoTriggered", handler)
     },
     /** Get full trace detail (steps + tool calls) by traceId */
-    getTraceDetail: (traceId: string): Promise<{
+    getTraceDetail: (
+      traceId: string
+    ): Promise<{
       traceId: string
       threadId: string
       startedAt: string
@@ -1115,7 +1220,9 @@ const api = {
           }>
         }>
       } | null>,
-    deleteTraces: (traceIds: string[]): Promise<{
+    deleteTraces: (
+      traceIds: string[]
+    ): Promise<{
       deletedIds: string[]
       failed: Array<{ traceId: string; error: string }>
     }> =>
@@ -1164,6 +1271,90 @@ const api = {
   routing: {
     getMode: (): Promise<"auto" | "pinned"> => ipcRenderer.invoke("routing:getMode"),
     setMode: (mode: "auto" | "pinned"): Promise<void> => ipcRenderer.invoke("routing:setMode", mode)
+  },
+  update: {
+    check: (): Promise<
+      | { hasUpdate: false }
+      | {
+          hasUpdate: true
+          version: string
+          updateType: string
+          releaseNotes: string
+          size: number
+          mandatory: boolean
+          currentStatus?: string
+          currentProgress?: {
+            percent: number
+            transferred: number
+            total: number
+            speed: string
+            phase: "downloading" | "verifying" | "extracting"
+            message: string
+          } | null
+          currentError?: string | null
+        }
+    > => ipcRenderer.invoke("update:check"),
+    download: (): Promise<{ success: boolean }> => ipcRenderer.invoke("update:download"),
+    install: (): Promise<void> => ipcRenderer.invoke("update:install"),
+    dismiss: (): Promise<{ success: boolean }> => ipcRenderer.invoke("update:dismiss"),
+    rollback: (): Promise<void> => ipcRenderer.invoke("update:rollback"),
+    getStatus: (): Promise<{
+      status: string
+      update: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean } | null
+      progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      } | null
+      errorMessage: string | null
+      canRollback: boolean
+    }> => ipcRenderer.invoke("update:get-status"),
+    getStartupResult: (): Promise<{ updatedFrom?: string; updatedTo?: string }> =>
+      ipcRenderer.invoke("update:get-startup-result"),
+    onAvailable: (
+      callback: (info: {
+        version: string
+        updateType: string
+        releaseNotes: string
+        size: number
+        mandatory: boolean
+        autoDownloading?: boolean
+      }) => void
+    ) => {
+      const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void =>
+        callback(info)
+      ipcRenderer.on("update:available", wrapper)
+      return () => ipcRenderer.removeListener("update:available", wrapper)
+    },
+    onProgress: (
+      callback: (progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      }) => void
+    ) => {
+      const wrapper = (_event: unknown, progress: Parameters<typeof callback>[0]): void =>
+        callback(progress)
+      ipcRenderer.on("update:progress", wrapper)
+      return () => ipcRenderer.removeListener("update:progress", wrapper)
+    },
+    onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => {
+      const wrapper = (_event: unknown, info: Parameters<typeof callback>[0]): void =>
+        callback(info)
+      ipcRenderer.on("update:downloaded", wrapper)
+      return () => ipcRenderer.removeListener("update:downloaded", wrapper)
+    },
+    onError: (callback: (err: { message: string; silent?: boolean }) => void) => {
+      const wrapper = (_event: unknown, err: Parameters<typeof callback>[0]): void => callback(err)
+      ipcRenderer.on("update:error", wrapper)
+      return () => ipcRenderer.removeListener("update:error", wrapper)
+    }
   }
 }
 
