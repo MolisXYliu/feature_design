@@ -82,10 +82,10 @@ chmod 600 ~/.cmbdevclaw/env.key
 npm run env:filter:setup
 ```
 
-5. 重新加密入索引：
+5. 解密：
 
 ```bash
-npm run env:encrypt:quick
+npm run env:decrypt:quick
 ```
 
 6. 提交并推送：
