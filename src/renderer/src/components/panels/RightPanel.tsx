@@ -2112,7 +2112,10 @@ function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () =
     }
   }
 
-  const renderHookCard = (hook: HookConfig): React.JSX.Element => (
+  const renderHookCard = (hook: HookConfig): React.JSX.Element => {
+    const isPrompt = hook.type === "prompt"
+    const summary = isPrompt ? (hook.prompt ?? "") : (hook.command ?? "")
+    return (
     <div
       key={hook.id}
       className={cn("p-3 rounded-sm border border-border", !hook.enabled && "opacity-60")}
@@ -2121,6 +2124,11 @@ function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () =
         <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0", EVENT_BADGE_COLORS[hook.event] ?? "bg-muted text-muted-foreground")}>
           {hook.event}
         </span>
+        {isPrompt && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-violet-500/15 text-violet-600 dark:text-violet-400">
+            策略
+          </span>
+        )}
         {hook.matcher && hook.matcher !== "*" && (
           <span className="text-[10px] text-muted-foreground shrink-0 font-mono">{hook.matcher}</span>
         )}
@@ -2132,9 +2140,12 @@ function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () =
           <Power className={cn("size-3", hook.enabled ? "text-status-nominal" : "text-muted-foreground")} />
         </button>
       </div>
-      <p className="text-xs text-muted-foreground mt-1.5 font-mono break-all line-clamp-2">{hook.command}</p>
+      <p className={cn(
+        "text-xs text-muted-foreground mt-1.5 break-all line-clamp-2",
+        isPrompt ? "italic" : "font-mono"
+      )}>{summary}</p>
     </div>
-  )
+  )}
 
   return (
     <div className="p-3 space-y-2">
