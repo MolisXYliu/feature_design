@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
 import type { HookConfig, HookEvent } from "@/types"
-import { AddHookDialog } from "./AddHookDialog"
+import { AddHookDialog, COMMON_TOOLS } from "./AddHookDialog"
 
 const EVENT_BADGE: Record<HookEvent, { label: string; className: string }> = {
   PreToolUse:   { label: "调用前", className: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
@@ -264,7 +264,10 @@ function HookDetail(props: {
       {/* Details */}
       <div className="space-y-4">
         <DetailRow label="事件类型" value={badge.label} />
-        {hook.matcher && <DetailRow label="工具匹配" value={hook.matcher} mono />}
+        {hook.matcher && (() => {
+          const preset = COMMON_TOOLS.find((t) => t.value !== "custom" && t.value === hook.matcher)
+          return <DetailRow label="工具匹配" value={preset ? `${preset.label}（${hook.matcher}）` : hook.matcher} mono={!preset} />
+        })()}
 
         {isPrompt ? (
           <>

@@ -13,6 +13,21 @@ import { cn } from "@/lib/utils"
 import { useAppStore } from "@/lib/store"
 import type { HookConfig, HookEvent, HookType, PromptHookFallback, HookUpsert } from "@/types"
 
+// ── 常用工具选项 ──────────────────────────────────────────────────────────────
+export const COMMON_TOOLS: { value: string; label: string; description: string }[] = [
+  { value: "*",          label: "所有工具",     description: "匹配任意工具调用" },
+  { value: "execute",    label: "执行命令",     description: "Shell / PowerShell 命令执行（execute）" },
+  { value: "write_file", label: "写入文件",     description: "创建或覆盖文件内容（write_file）" },
+  { value: "edit_file",  label: "编辑文件",     description: "局部替换文件内容（edit_file）" },
+  { value: "read_file",  label: "读取文件",     description: "读取文件内容（read_file）" },
+  { value: "memory_search", label: "搜索记忆",  description: "检索长期记忆（memory_search）" },
+  { value: "memory_get", label: "读取记忆",     description: "读取记忆文件（memory_get）" },
+  { value: "manage_scheduler", label: "调度任务", description: "创建/修改定时任务（manage_scheduler）" },
+  { value: "manage_skill",   label: "技能管理", description: "加载/卸载技能（manage_skill）" },
+  { value: "custom",     label: "自定义…",      description: "手动输入工具名称" },
+]
+const CUSTOM_SENTINEL = "custom"
+
 const HOOK_EVENTS: { value: HookEvent; label: string; description: string }[] = [
   { value: "PreToolUse", label: "工具调用前", description: "在工具执行前触发，拦截后可阻止执行，阻断原因会反馈给 Agent 使其自适应调整" },
   { value: "PostToolUse", label: "工具调用后", description: "在工具执行后触发，stdout 会追加到 Agent 下一轮上下文，外部系统状态可参与 AI 推理" },
@@ -41,6 +56,13 @@ export function AddHookDialog(props: {
   const [hookType, setHookType] = useState<HookType>(editHook?.type ?? "command")
   const [event, setEvent] = useState<HookEvent>(editHook?.event ?? "PreToolUse")
   const [matcher, setMatcher] = useState(editHook?.matcher ?? "")
+  // matcher mode: preset value or "custom" for manual input
+  const initMatcherMode = (h: HookConfig | null | undefined): string => {
+    const m = h?.matcher ?? ""
+    if (!m) return "*"
+    return COMMON_TOOLS.some((t) => t.value !== CUSTOM_SENTINEL && t.value === m) ? m : CUSTOM_SENTINEL
+  }
+  const [matcherMode, setMatcherMode] = useState<string>(initMatcherMode(editHook))
   // command fields
   const [command, setCommand] = useState(editHook?.command ?? "")
   // prompt fields
@@ -56,7 +78,9 @@ export function AddHookDialog(props: {
     if (h) {
       setHookType(h.type ?? "command")
       setEvent(h.event)
-      setMatcher(h.matcher ?? "")
+      const mm = initMatcherMode(h)
+      setMatcherMode(mm)
+      setMatcher(mm === CUSTOM_SENTINEL ? (h.matcher ?? "") : "")
       setCommand(h.command ?? "")
       setPrompt(h.prompt ?? "")
       setModelId(h.modelId ?? "")
@@ -65,6 +89,7 @@ export function AddHookDialog(props: {
     } else {
       setHookType("command")
       setEvent("PreToolUse")
+      setMatcherMode("*")
       setMatcher("")
       setCommand("")
       setPrompt("")
@@ -73,7 +98,7 @@ export function AddHookDialog(props: {
       setTimeout_("10000")
     }
     setError(null)
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (open) populateFromHook(editHook)
@@ -106,7 +131,10 @@ export function AddHookDialog(props: {
         timeout: Math.min(60000, Math.max(1000, parseInt(timeout, 10) || 10000)),
         enabled: editHook ? editHook.enabled : true
       }
-      if (showMatcher && matcher.trim()) config.matcher = matcher.trim()
+      if (showMatcher) {
+        const resolvedMatcher = matcherMode === CUSTOM_SENTINEL ? matcher.trim() : matcherMode
+        if (resolvedMatcher && resolvedMatcher !== "*") config.matcher = resolvedMatcher
+      }
 
       if (hookType === "command") {
         config.command = command.trim()
@@ -198,17 +226,32 @@ export function AddHookDialog(props: {
           {/* Matcher */}
           {showMatcher && (
             <div className="space-y-2">
-              <label htmlFor="hook-matcher" className="text-sm font-medium">工具匹配（可选）</label>
-              <Input
-                id="hook-matcher"
-                placeholder="execute, write_file, * 或留空匹配所有"
-                value={matcher}
-                onChange={(e) => setMatcher(e.target.value)}
-                className="h-9"
-              />
+              <label htmlFor="hook-matcher-select" className="text-sm font-medium">工具匹配</label>
+              <select
+                id="hook-matcher-select"
+                value={matcherMode}
+                onChange={(e) => {
+                  setMatcherMode(e.target.value)
+                  if (e.target.value !== CUSTOM_SENTINEL) setMatcher("")
+                }}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {COMMON_TOOLS.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
               <p className="text-xs text-muted-foreground">
-                指定要匹配的工具名称，留空则匹配所有工具调用
+                {COMMON_TOOLS.find((t) => t.value === matcherMode)?.description ?? ""}
               </p>
+              {matcherMode === CUSTOM_SENTINEL && (
+                <Input
+                  placeholder="输入工具名称，如 execute"
+                  value={matcher}
+                  onChange={(e) => setMatcher(e.target.value)}
+                  className="h-9 font-mono"
+                  autoFocus
+                />
+              )}
             </div>
           )}
 
