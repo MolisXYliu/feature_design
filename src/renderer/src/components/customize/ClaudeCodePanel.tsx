@@ -59,7 +59,8 @@ function createXterm(): { xterm: Terminal; fitAddon: FitAddon } {
     },
     cursorBlink: true,
     scrollback: 5000,
-    allowProposedApi: true
+    allowProposedApi: true,
+    minimumContrastRatio: 4.5
     // #17: scrollbar: { width: 14 } 不是 xterm.js 有效选项，已移除
   })
   // Windows 兼容：Ctrl+V 粘贴、Ctrl+C 选中时复制
