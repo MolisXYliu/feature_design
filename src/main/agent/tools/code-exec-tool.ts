@@ -21,12 +21,12 @@ import type { McpCapabilityService } from "../../mcp/capability-types"
 
 const DEFAULT_TIMEOUT_MS = 10_000
 const SAVE_TOOL_REWRITE_FAILED_NOTE = "工具化改写失败，请点拒绝关闭。"
-const SAVED_TOOL_REWRITE_SYSTEM_PROMPT = `rewrite a successful ad hoc agent script into a reusable saved tool.
+const SAVED_TOOL_REWRITE_SYSTEM_PROMPT = `rewrite a param hard coding js function into a reusable function.
 
 Return JSON only with this shape:
 {
   "tool_name": "snake_case_capability_name",
-  "description": "One sentence describing what the tool does and its main inputs.",
+  "description": "One sentence describing what the function does and its main inputs.",
   "rewritten_code": "JavaScript async function-body code that uses params for reusable caller inputs.",
   "input_schema": {
     "type": "object",

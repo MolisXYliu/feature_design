@@ -15,13 +15,21 @@ import {
   getSavedCodeExecTool,
   listSavedCodeExecTools,
   parseCodeExecOutputValue,
-  searchSavedCodeExecTools
+  type SavedCodeExecTool
 } from "../../code-exec/saved-tool-store"
-import type { McpCapabilityService, McpInvocationResult } from "../../mcp/capability-types"
+import type { McpCapabilityService, McpInvocationResult, McpCapabilityTool } from "../../mcp/capability-types"
 import { getMcpErrorMessage, getUsefulMcpResultData } from "../../mcp/result-utils"
-import { searchCapabilityTools } from "../../mcp/tool-catalog"
 import { renderToolHints } from "../../mcp/type-hints"
 import { getStoredToolExample } from "../../mcp/tool-example-store"
+import {
+  buildMcpToolSearchDoc,
+  buildSavedToolSearchDoc,
+  findExactToolIdOrNameMatches,
+  matchesExactSearchValue,
+  searchToolDocs,
+  type ToolSearchDoc,
+  type ToolSearchCaller
+} from "./tool-search/search-strategy"
 
 async function invokeWithRetry(
   service: McpCapabilityService,
@@ -62,34 +70,110 @@ interface ToolSearchOptions {
 type SearchToolEntry = {
   toolId: string
   source: "mcp" | "saved_tool"
-  allowCallers: string[]
+  allowCallers: ToolSearchCaller[]
   description?: string
 }
 
-function mergeSearchResults(
-  primary: SearchToolEntry[],
-  secondary: SearchToolEntry[],
-  limit: number
-): SearchToolEntry[] {
-  const ranked = new Map<string, { tool: SearchToolEntry; score: number }>()
+interface SearchDocCacheEntry {
+  snapshot: string
+  docs: ToolSearchDoc[]
+}
 
-  const addRankedItems = (items: SearchToolEntry[]): void => {
-    items.forEach((tool, index) => {
-      const score = Math.max(items.length - index, 1)
-      const existing = ranked.get(tool.toolId)
-      if (!existing || score > existing.score) {
-        ranked.set(tool.toolId, { tool, score })
-      }
-    })
+function buildMcpSearchSnapshot(tools: McpCapabilityTool[]): string {
+  return JSON.stringify(tools.map((tool) => ([
+    tool.capabilityId,
+    tool.toolId,
+    tool.toolName,
+    tool.providerDisplayName,
+    tool.providerAlias,
+    tool.description ?? "",
+    tool.visibility
+  ])))
+}
+
+function buildSavedToolSearchSnapshot(tools: SavedCodeExecTool[]): string {
+  return JSON.stringify(tools.map((tool) => ([
+    tool.toolId,
+    tool.description,
+    tool.dependencies
+  ])))
+}
+
+function getCachedMcpSearchDocs(
+  cache: SearchDocCacheEntry,
+  tools: McpCapabilityTool[],
+  allowMcpCallers: ToolSearchCaller[]
+): ToolSearchDoc[] {
+  const snapshot = buildMcpSearchSnapshot(tools)
+  if (cache.snapshot === snapshot) return cache.docs
+
+  cache.snapshot = snapshot
+  cache.docs = tools.map((tool) => buildMcpToolSearchDoc(tool, { allowCallers: allowMcpCallers }))
+  return cache.docs
+}
+
+function getCachedSavedToolSearchDocs(
+  cache: SearchDocCacheEntry,
+  tools: SavedCodeExecTool[]
+): ToolSearchDoc[] {
+  const snapshot = buildSavedToolSearchSnapshot(tools)
+  if (cache.snapshot === snapshot) return cache.docs
+
+  cache.snapshot = snapshot
+  cache.docs = tools.map((tool) => buildSavedToolSearchDoc(tool))
+  return cache.docs
+}
+
+function toMcpSearchToolEntry(
+  tool: McpCapabilityTool,
+  allowCallers: ToolSearchCaller[]
+): SearchToolEntry {
+  return {
+    toolId: tool.toolId,
+    source: "mcp",
+    allowCallers,
+    description: tool.description
+  }
+}
+
+function toSavedSearchToolEntry(tool: SavedCodeExecTool): SearchToolEntry {
+  return {
+    toolId: tool.toolId,
+    source: "saved_tool",
+    allowCallers: ["invoke_discovered_tool"],
+    description: tool.description
+  }
+}
+
+function findExactSearchMatches(
+  query: string,
+  searchableMcpTools: McpCapabilityTool[],
+  fallbackMcpTools: McpCapabilityTool[],
+  savedTools: SavedCodeExecTool[],
+  allowMcpCallers: ToolSearchCaller[],
+  maxResults: number
+): SearchToolEntry[] {
+  const exactMatches = new Map<string, SearchToolEntry>()
+
+  const addMcpMatches = (tools: McpCapabilityTool[]): void => {
+    for (const tool of findExactToolIdOrNameMatches(tools, query)) {
+      exactMatches.set(tool.toolId, toMcpSearchToolEntry(tool, allowMcpCallers))
+    }
   }
 
-  addRankedItems(primary)
-  addRankedItems(secondary)
+  const addSavedToolMatches = (): void => {
+    for (const tool of savedTools) {
+      if (!matchesExactSearchValue(tool.toolId, query)) continue
+      exactMatches.set(tool.toolId, toSavedSearchToolEntry(tool))
+    }
+  }
 
-  return Array.from(ranked.values())
-    .sort((left, right) => right.score - left.score || left.tool.toolId.localeCompare(right.tool.toolId))
-    .slice(0, limit)
-    .map((item) => item.tool)
+  addMcpMatches(searchableMcpTools)
+  addSavedToolMatches()
+  if (exactMatches.size > 0) return Array.from(exactMatches.values()).slice(0, maxResults)
+
+  addMcpMatches(fallbackMcpTools)
+  return Array.from(exactMatches.values()).slice(0, maxResults)
 }
 
 async function getMissingSavedToolDependencies(
@@ -105,11 +189,10 @@ async function getMissingSavedToolDependencies(
 
 function createSearchCallerSchema(codeExecEnabled: boolean) {
   return z.object({
-    query: z.string().describe("Search query describing the discovered tool capability you need"),
-    top_k: z.number().optional().default(5).describe("Maximum number of results to return"),
-    mode: z.enum(["bm25", "keyword", "regex"]).optional().default("bm25").describe(
-      "Search mode: bm25 (semantic ranking), keyword (contains match), regex (pattern match)"
+    query: z.string().describe(
+      "Standardized search query describing the capability you need. Prefer provider + resource + action + qualifiers with full words, for example: 'github pull request list', 'github pull request read details', 'notion database query'. Prefix a term with + when it must be present, for example 'github +issue create'. Avoid short abbreviations like 'pr' when a full phrase is available. Deferred tools appear by exact tool_id in <available-deferred-tools> messages."
     ),
+    max_results: z.number().optional().default(5).describe("Maximum number of results to return"),
     caller: codeExecEnabled
       ? z.enum(["invoke_discovered_tool", "code_exec"]).optional().default("invoke_discovered_tool").describe(
         "Which caller this search is for. Use invoke_discovered_tool for lazy MCP tools and enabled saved tools. Use code_exec to search all enabled MCP tools that code_exec can call."
@@ -134,37 +217,64 @@ function createInspectCallerSchema(codeExecEnabled: boolean) {
 }
 
 export function createSearchTool(service: McpCapabilityService, options: ToolSearchOptions) {
-  const allowMcpCallers = options.codeExecEnabled
+  const allowMcpCallers: ToolSearchCaller[] = options.codeExecEnabled
     ? ["invoke_discovered_tool", "code_exec"]
     : ["invoke_discovered_tool"]
+  const lazyMcpDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
+  const allMcpDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
+  const savedToolDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
 
   return tool(
     async (input) => {
       const caller = String(input.caller ?? "invoke_discovered_tool")
       const isCodeExecCaller = options.codeExecEnabled && caller === "code_exec"
-      const mcpTools = (await searchCapabilityTools(service, input.query, {
-        topK: input.top_k ?? 5,
-        mode: input.mode ?? "bm25",
-        visibility: isCodeExecCaller ? "all" : "lazy"
-      })).map((tool) => ({
-        toolId: tool.toolId,
-        source: "mcp" as const,
-        allowCallers: allowMcpCallers,
-        description: tool.description
-      }))
+      const allMcpTools = await service.listTools()
+      const searchableMcpTools = allMcpTools.filter((tool) => isCodeExecCaller || tool.visibility === "lazy")
+      const fallbackMcpTools = isCodeExecCaller
+        ? []
+        : allMcpTools.filter((tool) => tool.visibility !== "lazy")
       const savedTools = !options.codeExecEnabled || isCodeExecCaller
         ? []
-        : searchSavedCodeExecTools({
-            query: input.query,
-            topK: input.top_k ?? 5,
-            mode: input.mode ?? "bm25"
-          }).map((tool) => ({
-            toolId: tool.toolId,
-            source: "saved_tool" as const,
-            allowCallers: ["invoke_discovered_tool"],
-            description: tool.description
+        : listSavedCodeExecTools()
+      const exactMatches = findExactSearchMatches(
+        input.query,
+        searchableMcpTools,
+        fallbackMcpTools,
+        savedTools,
+        allowMcpCallers,
+        input.max_results ?? 5
+      )
+
+      if (exactMatches.length > 0) {
+        return JSON.stringify({
+          tools: exactMatches.map((tool) => ({
+            tool_id: tool.toolId,
+            source: tool.source,
+            allow_callers: tool.allowCallers,
+            description: (tool.description ?? "").slice(0, 200)
           }))
-      const tools = mergeSearchResults(mcpTools, savedTools, input.top_k ?? 5)
+        }, null, 2)
+      }
+
+      const mcpDocs = getCachedMcpSearchDocs(
+        isCodeExecCaller ? allMcpDocCache : lazyMcpDocCache,
+        searchableMcpTools,
+        allowMcpCallers
+      )
+      const savedDocs = savedTools.length > 0
+        ? getCachedSavedToolSearchDocs(savedToolDocCache, savedTools)
+        : []
+
+      const tools: SearchToolEntry[] = searchToolDocs(
+        [...mcpDocs, ...savedDocs],
+        input.query,
+        input.max_results ?? 5
+      ).map((doc) => ({
+        toolId: doc.toolId,
+        source: doc.source,
+        allowCallers: doc.allowCallers,
+        description: doc.description
+      }))
 
       return JSON.stringify({
         tools: tools.map((tool) => ({
@@ -179,15 +289,15 @@ export function createSearchTool(service: McpCapabilityService, options: ToolSea
       name: "search_tool",
       description:
         options.codeExecEnabled
-          ? "Search for discovered tools by caller. For invoke_discovered_tool, this searches lazy MCP tools plus enabled saved tools. For code_exec, this searches all enabled MCP tools and excludes saved tools. Returns each tool's source and allow_callers."
-          : "Search for discovered tools for invoke_discovered_tool. This searches lazy MCP tools only and returns each tool's source and allow_callers.",
+          ? "Search for discovered tools by caller. Write normalized queries using provider + resource + action + qualifiers, and prefer full words over abbreviations, for example 'github pull request list' or 'github pull request read details' instead of 'github pr list'. Prefix a term with + when it must be present, for example 'github +issue create'. Deferred tools appear by exact tool_id in <available-deferred-tools> messages. For invoke_discovered_tool, this searches lazy MCP tools plus enabled saved tools. For code_exec, this searches all enabled MCP tools and excludes saved tools. Returns each tool's source and allow_callers."
+          : "Search for discovered tools for invoke_discovered_tool. Write normalized queries using provider + resource + action + qualifiers, and prefer full words over abbreviations, for example 'github pull request list' instead of 'github pr list'. Prefix a term with + when it must be present, for example 'github +issue create'. Deferred tools appear by exact tool_id in <available-deferred-tools> messages. This searches lazy MCP tools only and returns each tool's source and allow_callers.",
       schema: createSearchCallerSchema(options.codeExecEnabled)
     }
   )
 }
 
 export function createInspectTool(service: McpCapabilityService, options: ToolSearchOptions) {
-  const allowMcpCallers = options.codeExecEnabled
+  const allowMcpCallers: ToolSearchCaller[] = options.codeExecEnabled
     ? ["invoke_discovered_tool", "code_exec"]
     : ["invoke_discovered_tool"]
 
@@ -384,9 +494,15 @@ export async function createToolSearchTools(
   const tools = await service.listTools()
   const savedTools = codeExecEnabled ? listSavedCodeExecTools() : []
   const lazyTools = tools.filter((tool) => tool.visibility === "lazy")
-  if (tools.length === 0 && savedTools.length === 0) return []
+  const hasMcpTools = tools.length > 0
+  const hasLazyTools = lazyTools.length > 0
+  const hasSavedTools = savedTools.length > 0
+  const needsDeferredBridge = hasLazyTools || hasSavedTools
+  const shouldInjectInspectTool = needsDeferredBridge || (codeExecEnabled && hasMcpTools)
 
-  if (lazyTools.length === 0 && savedTools.length === 0) {
+  if (!shouldInjectInspectTool) return []
+
+  if (!needsDeferredBridge) {
     return [createInspectTool(service, { codeExecEnabled })]
   }
 

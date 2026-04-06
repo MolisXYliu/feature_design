@@ -155,9 +155,9 @@ Some tools are available but not loaded in your immediate context. This includes
 To use these tools, follow this 3-step process:
 
 1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", mode="bm25", caller="invoke_discovered_tool")\`
-   - \`query\`: Describe the capability you need (e.g., "github issues", "web search", "database query")
-   - \`mode\`: "bm25" (recommended), "keyword", or "regex"
+   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_discovered_tool")\`
+   - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" or "github pull request read details" rather than "github pr list".
+   - \`max_results\`: Maximum number of candidate tools to return
    - \`caller\`: "invoke_discovered_tool" (default) searches lazy MCP tools plus enabled saved tools; "code_exec" searches all enabled MCP tools and excludes saved tools
    - Returns matching tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
 
@@ -182,7 +182,7 @@ To use these tools, follow this 3-step process:
 # User asks: "Create a GitHub issue for this bug"
 
 # Step 1: Search for GitHub tools
-search_tool(query="github create issue", mode="bm25", caller="invoke_discovered_tool")
+search_tool(query="github create issue", max_results=5, caller="invoke_discovered_tool")
 # Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool", "code_exec"], description: "Create a new issue..." }]
 
 # Step 2: Inspect the schema
@@ -207,9 +207,9 @@ Some MCP tools are available but not loaded in your immediate context. These too
 To use these tools, follow this 3-step process:
 
 1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", mode="bm25", caller="invoke_discovered_tool")\`
-   - \`query\`: Describe the capability you need (e.g., "github issues", "web search", "database query")
-   - \`mode\`: "bm25" (recommended), "keyword", or "regex"
+   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_discovered_tool")\`
+   - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" rather than "github pr list".
+   - \`max_results\`: Maximum number of candidate tools to return
    - \`caller\`: always use "invoke_discovered_tool" in this runtime
    - Returns matching lazy MCP tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
 
@@ -234,7 +234,7 @@ To use these tools, follow this 3-step process:
 # User asks: "Create a GitHub issue for this bug"
 
 # Step 1: Search for GitHub tools
-search_tool(query="github create issue", mode="bm25", caller="invoke_discovered_tool")
+search_tool(query="github create issue", max_results=5, caller="invoke_discovered_tool")
 # Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool"], description: "Create a new issue..." }]
 
 # Step 2: Inspect the schema
@@ -248,7 +248,7 @@ invoke_discovered_tool(tool_id="github__create_issue", tool_args={ title: "Bug: 
 Always search first when you need lazy MCP tool capabilities.
 `
 
-export const CODE_EXEC_SYSTEM_PROMPT = `
+export const CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY = `
 
 ## Multiple Tool Call using code
 
@@ -262,6 +262,9 @@ Before writing a \`code_exec\` script:
 Call MCP tools with:
 - \`await mcp.$call("provider__tool_name", args)\`
 
+Execution guidance:
+- Do **not** use \`Promise.all(...)\`; await them one by one in order.
+
 Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
 - success: \`{ ok: true, data: ... }\`
 - failure: \`{ ok: false, error: "..." }\`
@@ -269,3 +272,40 @@ Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
 Do not call saved code_exec tools from inside \`code_exec\`.
 Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
 `
+
+export const CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY = `
+
+## Multiple Tool Call using code
+
+Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding.
+
+Before writing a \`code_exec\` script:
+1. Identify the MCP tools already present in the current tool list
+2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
+3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
+
+Call MCP tools with:
+- \`await mcp.$call("provider__tool_name", args)\`
+
+Execution guidance:
+- Do **not** use \`Promise.all(...)\`; await them one by one in order.
+
+Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
+- success: \`{ ok: true, data: ... }\`
+- failure: \`{ ok: false, error: "..." }\`
+
+Do not call saved code_exec tools from inside \`code_exec\`.
+Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
+`
+
+export function renderAvailableDeferredToolsPrompt(toolIds: string[]): string {
+  if (toolIds.length === 0) return ""
+
+  const uniqueSortedToolIds = Array.from(new Set(toolIds))
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+
+  if (uniqueSortedToolIds.length === 0) return ""
+
+  return `\n<available-deferred-tools>\n${uniqueSortedToolIds.join("\n")}\n</available-deferred-tools>\n`
+}

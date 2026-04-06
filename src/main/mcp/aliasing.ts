@@ -32,17 +32,15 @@ function ensureIdentifier(value: string, fallback: string): string {
   return /^[0-9]/.test(base) ? `_${base}` : base
 }
 
-function toLowerCamelCase(value: string, fallback: string): string {
+function toOptionalLowerCamelCase(value: string): string {
   const tokens = splitIntoTokens(value)
-  if (tokens.length === 0) return fallback
+  if (tokens.length === 0) return ""
 
   const [first, ...rest] = tokens
-  const normalized = [
+  return ensureIdentifier([
     first.toLowerCase(),
     ...rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-  ].join("")
-
-  return ensureIdentifier(normalized, fallback)
+  ].join(""), "")
 }
 
 function toSnakeCase(value: string, fallback: string): string {
@@ -66,7 +64,7 @@ function makeUniqueAlias(baseAlias: string, used: Set<string>, fallback: string)
 }
 
 export function toMcpToolId(providerAlias: string, displayMethodAlias: string): string {
-  return `${providerAlias}__${displayMethodAlias}`
+  return providerAlias ? `${providerAlias}__${displayMethodAlias}` : displayMethodAlias
 }
 
 export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilityTool[] {
@@ -78,10 +76,15 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
   ).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
 
   for (const [providerKey, providerDisplayName] of uniqueProviders) {
-    const baseAlias = toLowerCamelCase(providerDisplayName, "provider")
+    const optionalAlias = toOptionalLowerCamelCase(providerDisplayName)
+    if (!optionalAlias) {
+      providerAliasByKey.set(providerKey, "")
+      continue
+    }
+
     providerAliasByKey.set(
       providerKey,
-      makeUniqueAlias(baseAlias, usedProviderAliases, "provider")
+      makeUniqueAlias(optionalAlias, usedProviderAliases, optionalAlias)
     )
   }
 
@@ -98,7 +101,7 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
   const resolved = new Map<string, McpCapabilityTool>()
 
   for (const [providerKey, providerTools] of Array.from(toolsByProvider.entries()).sort(([left], [right]) => left.localeCompare(right))) {
-    const providerAlias = providerAliasByKey.get(providerKey) ?? "provider"
+    const providerAlias = providerAliasByKey.get(providerKey) ?? ""
     const usedDisplayAliases = new Set<string>()
 
     for (const seed of [...providerTools].sort((left, right) => {

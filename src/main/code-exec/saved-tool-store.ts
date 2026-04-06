@@ -2,7 +2,6 @@ import { createHash } from "crypto"
 import { existsSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import { getOpenworkDir } from "../storage"
-import type { McpToolSearchMode } from "../mcp/tool-catalog"
 
 const SAVED_CODE_EXEC_TOOLS_VERSION = 1
 const SAVED_TOOL_PREFIX = "saved__"
@@ -347,78 +346,6 @@ export function resolveSavedCodeExecToolId(
   return candidate
 }
 
-function scoreKeyword(text: string, query: string, toolId: string): number {
-  const textLower = text.toLowerCase()
-  const queryLower = query.toLowerCase().trim()
-  if (!queryLower) return 0
-
-  if (toolId.toLowerCase() === queryLower) return 100
-  if (toolId.toLowerCase().includes(queryLower)) return 80
-  if (textLower.includes(queryLower)) return 40
-  return 0
-}
-
-function tokenizeForSearch(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/[_-]/g, " ")
-    .split(/[\s.,;:!?()[\]{}"'`/\\]+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-}
-
-function scoreBm25ish(text: string, query: string): number {
-  const tokens = tokenizeForSearch(text)
-  const queryTokens = tokenizeForSearch(query)
-  if (tokens.length === 0 || queryTokens.length === 0) return 0
-
-  let score = 0
-  for (const token of queryTokens) {
-    const matches = tokens.filter((item) => item === token).length
-    score += matches * 10
-    if (matches === 0 && text.toLowerCase().includes(token)) {
-      score += 3
-    }
-  }
-
-  if (text.toLowerCase().includes(query.toLowerCase().trim())) {
-    score += 15
-  }
-
-  return score
-}
-
-function buildSearchText(tool: SavedCodeExecTool): string {
-  return [
-    tool.toolId,
-    tool.description,
-    ...tool.dependencies,
-    "saved",
-    "code_exec",
-    "保存",
-    "脚本",
-    "工具"
-  ].join(" ")
-}
-
-function scoreSavedTool(tool: SavedCodeExecTool, query: string, mode: McpToolSearchMode): number {
-  const text = buildSearchText(tool)
-  switch (mode) {
-    case "keyword":
-      return scoreKeyword(text, query, tool.toolId)
-    case "regex":
-      try {
-        return new RegExp(query, "i").test(text) ? 50 : 0
-      } catch {
-        return scoreKeyword(text, query, tool.toolId)
-      }
-    case "bm25":
-    default:
-      return scoreBm25ish(text, query)
-  }
-}
-
 export function parseCodeExecOutputValue(output: string): unknown {
   const trimmed = output.trim()
   if (!trimmed) return ""
@@ -613,21 +540,4 @@ export function setSavedCodeExecToolLastPreviewParams(
   store.entries[index] = nextEntry
   saveStore(store)
   return nextEntry
-}
-
-export function searchSavedCodeExecTools(input: {
-  query: string
-  topK: number
-  mode: McpToolSearchMode
-  includeDisabled?: boolean
-}): SavedCodeExecTool[] {
-  return listSavedCodeExecTools({ includeDisabled: input.includeDisabled })
-    .map((tool) => ({
-      tool,
-      score: scoreSavedTool(tool, input.query, input.mode)
-    }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.tool.toolId.localeCompare(right.tool.toolId))
-    .slice(0, input.topK)
-    .map((item) => item.tool)
 }

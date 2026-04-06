@@ -47,10 +47,12 @@ import { pipeline } from "stream/promises"
 import { app, BrowserWindow } from "electron"
 import {
   BASE_SYSTEM_PROMPT,
-  CODE_EXEC_SYSTEM_PROMPT,
+  CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY,
+  CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY,
   MEMORY_SYSTEM_PROMPT,
   LAZY_MCP_SYSTEM_PROMPT,
-  LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
+  LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY,
+  renderAvailableDeferredToolsPrompt
 } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
 import { createMemorySearchTool, createMemoryGetTool } from "../memory/tools"
@@ -60,6 +62,7 @@ import { getThread } from "../db/index"
 import { createPlaywrightTool } from "./tools/playwright-tool"
 import { createToolSearchTools } from "./tools/tool-search-tool"
 import { createCodeExecTool } from "./tools/code-exec-tool"
+import { listSavedCodeExecTools } from "../code-exec/saved-tool-store"
 import { getWindowsSandboxMode, getYoloMode, getEnabledHooks, isCodeExecEnabled } from "../storage"
 import { ApprovalStore } from "./approval-store"
 import { ToolOrchestrator } from "./tool-orchestrator"
@@ -861,6 +864,7 @@ The workspace root is: ${workspacePath}`
   const allMcpTools = await capabilityService.listTools()
   const eagerMcpMetadata = allMcpTools.filter((tool) => tool.visibility === "eager")
   const lazyMcpMetadata = allMcpTools.filter((tool) => tool.visibility === "lazy")
+  const deferredSavedTools = codeExecEnabled ? listSavedCodeExecTools() : []
   const mcpTools = createEagerMcpTools(capabilityService, eagerMcpMetadata)
   const toolSearchTools = await createToolSearchTools(capabilityService, {
     workspacePath,
@@ -923,10 +927,10 @@ The workspace root is: ${workspacePath}`
   wrapToolErrors(extraTools)
   wrapToolErrors(memoryTools as any[])
 
+  const hasSearchTool = toolSearchTools.some((tool) => (tool as { name?: string }).name === "search_tool")
+  const hasInspectTool = toolSearchTools.some((tool) => (tool as { name?: string }).name === "inspect_tool")
 
-  if (toolSearchTools.some((tool) => (tool as { name?: string }).name === "search_tool")) {
-    console.log("[Runtime] Added tool search tools")
-    systemPrompt += codeExecEnabled ? LAZY_MCP_SYSTEM_PROMPT : LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
+  if (toolSearchTools.length > 0) {
     wrapToolErrors(toolSearchTools as any[])
   }
 
@@ -940,9 +944,24 @@ The workspace root is: ${workspacePath}`
       approvalStore,
       requestApproval
     }))
-    systemPrompt += CODE_EXEC_SYSTEM_PROMPT
+    systemPrompt += hasSearchTool
+      ? CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY
+      : CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY
   }
 
+  if (hasSearchTool) {
+    console.log("[Runtime] Added deferred tool discovery tools")
+    systemPrompt += codeExecEnabled ? LAZY_MCP_SYSTEM_PROMPT : LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
+  } else if (hasInspectTool) {
+    console.log("[Runtime] Added inspect_tool for eager MCP code_exec support")
+  }
+
+  const deferredToolIds = [
+    ...lazyMcpMetadata.map((tool) => tool.toolId),
+    ...deferredSavedTools.map((tool) => tool.toolId)
+  ]
+
+  systemPrompt += renderAvailableDeferredToolsPrompt(deferredToolIds)
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
