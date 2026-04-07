@@ -80,6 +80,9 @@
       "target": "nsis",
       "icon": "build/icon.ico"
     },
+    "linux": {
+      "target": "dir"
+    },
     "extraResources": [
       {
         "from": "resources/bin",

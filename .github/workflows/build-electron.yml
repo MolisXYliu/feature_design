@@ -80,6 +80,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Remove chrome-sandbox (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          # 删除沙箱文件，避免 SUID sandbox 权限问题
+          find dist -name "chrome-sandbox" -type f -delete || true
+          echo "chrome-sandbox removed from Linux build"
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
