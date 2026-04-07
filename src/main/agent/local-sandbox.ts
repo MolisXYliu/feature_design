@@ -214,6 +214,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // Rust
       ["CARGO_HOME", path.win32.join(realTempDir, "sandbox-cargo-home")],
       ["RUSTUP_HOME", path.win32.join(realTempDir, "sandbox-rustup-home")],
+      // cargo uses libgit2→libcurl→SChannel for git dependencies; force system git (which
+      // we've already patched with GIT_CONFIG_COUNT to use OpenSSL) instead of libgit2.
+      ["CARGO_GIT_FETCH_WITH_CLI", "true"],
+      // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
+      // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
+      ["CURL_SSL_BACKEND", "openssl"],
       // .NET
       ["NUGET_PACKAGES", path.win32.join(realTempDir, "sandbox-nuget-packages")],
       // Ruby
@@ -309,6 +315,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // Rust
       ["CARGO_HOME", path.win32.join(tempDir, "sandbox-cargo-home")],
       ["RUSTUP_HOME", path.win32.join(tempDir, "sandbox-rustup-home")],
+      // cargo uses libgit2→libcurl→SChannel for git dependencies; force system git (which
+      // we've already patched with GIT_CONFIG_COUNT to use OpenSSL) instead of libgit2.
+      ["CARGO_GIT_FETCH_WITH_CLI", "true"],
+      // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
+      // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
+      ["CURL_SSL_BACKEND", "openssl"],
       // .NET
       ["NUGET_PACKAGES", path.win32.join(tempDir, "sandbox-nuget-packages")],
       // Ruby
