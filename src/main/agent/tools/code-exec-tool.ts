@@ -48,7 +48,11 @@ Rules:
 - Do not mention code_exec, saved tools, JavaScript, wrappers, or promotion in tool_name or description.`
 
 const codeExecSchema = z.object({
-  code: z.string().describe("JavaScript async function-body code for one ad hoc script run. Declare local variables directly inside the code, then call MCP tools with mcp.$call(tool_id, args). Example: const targetUrl = \"https://www.example.com\"; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\"mcp__chrome__chrome_navigate\", navigateArgs);")
+  code: z
+    .string()
+    .describe(
+      'JavaScript async function-body code for one ad hoc run. Put run-specific constants directly in the body, call MCP tools with await mcp.$call(tool_id, args), and return a JSON-serializable value. Example: const args = { limit: 5 }; const result = await mcp.$call("mcp__provider__tool_name", args); if (!result.ok) throw new Error(result.error); return { data: result.data };'
+    )
 })
 
 interface CodeExecToolContext {
@@ -445,13 +449,10 @@ export function createCodeExecTool(context: CodeExecToolContext) {
     {
       name: "code_exec",
       description:
-        "Run a JavaScript script body that can call only MCP tools through mcp.$call(tool_id, args). " +
-        "This tool only accepts a single code string for ad hoc execution. Write any run-specific local constants directly inside the script body. " +
-        "Do not attempt to call built-in agent tools or Node.js APIs from inside the script. " +
-        "The tool always returns a single string result. " +
-        "Example input: {\n" +
-        "  \"code\": \"const targetUrl = \\\"https://www.example.com\\\"; const textContent = true; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\\\"mcp__chrome__chrome_navigate\\\", navigateArgs); if (!navigateResult.ok) { throw new Error(\\\"mcp__chrome__chrome_navigate failed: \\\" + navigateResult.error); } const contentArgs = { textContent }; const contentResult = await mcp.$call(\\\"mcp__chrome__chrome_get_web_content\\\", contentArgs); if (!contentResult.ok) { throw new Error(\\\"mcp__chrome__chrome_get_web_content failed: \\\" + contentResult.error); } return { opened_url: targetUrl, navigate_result: navigateResult.data, page_content: contentResult.data };\"\n" +
-        "}",
+        "Run a JavaScript async function body for one ad hoc MCP workflow. " +
+        "Call MCP tools only through mcp.$call(tool_id, args), and write any run-specific constants directly inside the script body. " +
+        "The script may return any JSON-serializable value; the tool serializes that value into the string result. " +
+        "Do not call tools in the script whose tool_id prefix is not mcp__, and do not use Node.js APIs.",
       schema: codeExecSchema
     }
   )

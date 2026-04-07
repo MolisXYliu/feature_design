@@ -47,11 +47,8 @@ import { pipeline } from "stream/promises"
 import { app, BrowserWindow } from "electron"
 import {
   BASE_SYSTEM_PROMPT,
-  CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY,
-  CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY,
   MEMORY_SYSTEM_PROMPT,
-  LAZY_MCP_SYSTEM_PROMPT,
-  LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY,
+  renderInjectedToolUsagePrompt,
   renderAvailableDeferredToolsPrompt
 } from "./system-prompt"
 import { getMemoryStore, closeMemoryStore } from "../memory/store"
@@ -927,9 +924,6 @@ The workspace root is: ${workspacePath}`
   wrapToolErrors(extraTools)
   wrapToolErrors(memoryTools as any[])
 
-  const hasSearchTool = toolSearchTools.some((tool) => (tool as { name?: string }).name === "search_tool")
-  const hasInspectTool = toolSearchTools.some((tool) => (tool as { name?: string }).name === "inspect_tool")
-
   if (toolSearchTools.length > 0) {
     wrapToolErrors(toolSearchTools as any[])
   }
@@ -944,16 +938,6 @@ The workspace root is: ${workspacePath}`
       approvalStore,
       requestApproval
     }))
-    systemPrompt += hasSearchTool
-      ? CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY
-      : CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY
-  }
-
-  if (hasSearchTool) {
-    console.log("[Runtime] Added deferred tool discovery tools")
-    systemPrompt += codeExecEnabled ? LAZY_MCP_SYSTEM_PROMPT : LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY
-  } else if (hasInspectTool) {
-    console.log("[Runtime] Added inspect_tool for eager MCP code_exec support")
   }
 
   const deferredToolIds = [
@@ -961,14 +945,38 @@ The workspace root is: ${workspacePath}`
     ...deferredSavedTools.map((tool) => tool.toolId)
   ]
 
+  const finalTools = [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools]
+  const hasNamedTool = (name: string): boolean => {
+    return finalTools.some((tool) => (tool as { name?: string }).name === name)
+  }
+  const hasSearchTool = hasNamedTool("search_tool")
+  const hasInspectTool = hasNamedTool("inspect_tool")
+  const hasInvokeDeferredTool = hasNamedTool("invoke_deferred_tool")
+  const hasCodeExecTool = hasNamedTool("code_exec")
+
+  if (hasSearchTool && hasInspectTool && hasInvokeDeferredTool) {
+    console.log("[Runtime] Added deferred tool workflow prompt")
+  } else if (hasInspectTool) {
+    console.log("[Runtime] Added inspect_tool prompt")
+  }
+  if (hasCodeExecTool) {
+    console.log("[Runtime] Added code_exec prompt")
+  }
+
+  systemPrompt += renderInjectedToolUsagePrompt({
+    hasSearchTool,
+    hasInspectTool,
+    hasInvokeDeferredTool,
+    hasCodeExecTool
+  })
   systemPrompt += renderAvailableDeferredToolsPrompt(deferredToolIds)
+  console.log("[System prompts", systemPrompt)
   const triggerTokens = Math.floor(maxTokens * 0.75)
   const keepTokens = Math.max(Math.floor(maxTokens * 0.08), 4_000)
   const toolEvictLimit = Math.min(6_000, Math.max(Math.floor(maxTokens * 0.05), 3_000))
   const trimForSummary = Math.min(12_000, Math.floor(maxTokens * 0.25))
   console.log("[Runtime] Context window:", maxTokens, "→ summarization trigger:", triggerTokens, "→ keep:", keepTokens, "→ tool evict limit:", toolEvictLimit, "→ trim for summary:", trimForSummary, "→ max output bytes:", maxOutputBytes)
 
-  const finalTools = [...mcpTools, ...memoryTools, ...extraTools, ...toolSearchTools]
   backend.setGitWorkflowCommitOnly(false)
   console.log("[Runtime] Final tool list:", finalTools.map((t) => (t as { name?: string }).name ?? "(unnamed)"))
 

@@ -144,173 +144,87 @@ Your memory files are stored as Markdown in the memory directory. You can update
 - Never store API keys, passwords, or credentials in memory files
 `
 
-export const LAZY_MCP_SYSTEM_PROMPT = `
+const DEFERRED_TOOLS_WORKFLOW_PROMPT = `
+## Deferred Tools Workflow
 
-## Lazy-Loaded Tools
+Use this workflow ONLY when you plan to call a tool from \`<available-deferred-tools>\`.
 
-Some tools are available but not loaded in your immediate context. This includes lazy MCP tools and enabled saved code_exec tools. These tools must be discovered and loaded on-demand.
+Deferred tools are listed in \`<available-deferred-tools>\` by \`tool_id\` only (they do not include full schemas or descriptions). You CANNOT invoke a deferred tool until you fetch its exact schema.
 
-### Tool Discovery Workflow
+Follow this strict sequence:
 
-To use these tools, follow this 3-step process:
-
-1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_deferred_tool")\`
-   - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" or "github pull request read details" rather than "github pr list".
-   - \`max_results\`: Maximum number of candidate tools to return
-   - \`caller\`: "invoke_deferred_tool" (default) searches lazy MCP tools plus enabled saved tools; "code_exec" searches all enabled MCP tools and excludes saved tools and all non-MCP tools
-   - Returns matching tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
-
-2. **Inspect tool schema** using \`inspect_tool\`:
-   \`inspect_tool(tool_ids=["mcp__provider__tool_name"], caller="invoke_deferred_tool")\`
-   - Returns the tool's parameter schema so you know what arguments to provide
-
-3. **Execute the tool** using \`invoke_deferred_tool\`:
-   \`invoke_deferred_tool(tool_id="mcp__provider__tool_name", tool_args={...})\`
-   - Execute the tool with the required parameters
-
-### When to Use
-
-- When you need capabilities beyond the built-in tools (file operations, shell, etc.)
-- When the user mentions external services (GitHub, databases, web APIs, etc.)
-- When you encounter a task that might benefit from specialized tools
-- If an eager MCP tool is already present in the current tool list, call it directly instead of going through \`search_tool\`
-
-### Example
-
-\`\`\`
-# User asks: "Create a GitHub issue for this bug"
-
-# Step 1: Search for GitHub tools
-search_tool(query="github create issue", max_results=5, caller="invoke_deferred_tool")
-# Returns: [{ tool_id: "mcp__github__create_issue", source: "mcp", allow_callers: ["invoke_deferred_tool", "code_exec"], description: "Create a new issue..." }]
-
-# Step 2: Inspect the schema
-inspect_tool(tool_ids=["mcp__github__create_issue"], caller="invoke_deferred_tool")
-# Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
-
-# Step 3: Execute
-invoke_deferred_tool(tool_id="mcp__github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
-\`\`\`
-
-Always search first when you need lazy tool capabilities.
+1. **Identify:** Check the \`<available-deferred-tools>\` list.
+   - If the exact \`tool_id\` is obvious for your task, proceed to Step 2.
+   - If the task is complex, or you need to choose among similar tools, call \`search_tool\` first to find the best \`tool_id\`.
+2. **Inspect:** Call \`inspect_tool\` with the chosen \`tool_id\`.
+3. **Wait & Review:** You MUST wait for the observation from \`inspect_tool\`. Do not guess or hallucinate the parameters. Once received, review the schema and description to ensure it fits your needs.
+4. **Invoke:** Finally, call \`invoke_deferred_tool\` using the exact parameters defined in the schema.
 `
 
-export const LAZY_MCP_SYSTEM_PROMPT_MCP_ONLY = `
+const INSPECT_TOOL_ONLY_PROMPT = `
 
-## Lazy-Loaded Tools
+## Tool Inspection
 
-Some MCP tools are available but not loaded in your immediate context. These tools must be discovered and loaded on-demand.
-
-### Tool Discovery Workflow
-
-To use these tools, follow this 3-step process:
-
-1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_deferred_tool")\`
-   - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" rather than "github pr list".
-   - \`max_results\`: Maximum number of candidate tools to return
-   - \`caller\`: always use "invoke_deferred_tool" in this runtime
-   - Returns matching lazy MCP tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
-
-2. **Inspect tool schema** using \`inspect_tool\`:
-   \`inspect_tool(tool_ids=["mcp__provider__tool_name"], caller="invoke_deferred_tool")\`
-   - Returns the tool's parameter schema so you know what arguments to provide
-
-3. **Execute the tool** using \`invoke_deferred_tool\`:
-   \`invoke_deferred_tool(tool_id="mcp__provider__tool_name", tool_args={...})\`
-   - Execute the tool with the required parameters
-
-### When to Use
-
-- When you need capabilities beyond the built-in tools (file operations, shell, etc.)
-- When the user mentions external services (GitHub, databases, web APIs, etc.)
-- When you encounter a task that might benefit from specialized tools
-- If an eager MCP tool is already present in the current tool list, call it directly instead of going through \`search_tool\`
-
-### Example
-
-\`\`\`
-# User asks: "Create a GitHub issue for this bug"
-
-# Step 1: Search for GitHub tools
-search_tool(query="github create issue", max_results=5, caller="invoke_deferred_tool")
-# Returns: [{ tool_id: "mcp__github__create_issue", source: "mcp", allow_callers: ["invoke_deferred_tool"], description: "Create a new issue..." }]
-
-# Step 2: Inspect the schema
-inspect_tool(tool_ids=["mcp__github__create_issue"], caller="invoke_deferred_tool")
-# Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
-
-# Step 3: Execute
-invoke_deferred_tool(tool_id="mcp__github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
-\`\`\`
-
-Always search first when you need lazy MCP tool capabilities.
+Use \`inspect_tool\` to fetch full schema details and description for tools whose ids or definitions are already available in your current context before planning calls or writing \`code_exec\`.
 `
 
-export const CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY = `
+const CODE_EXEC_BASE_PROMPT = `
 
-## Multiple Tool Call using code
+## Code Execution Workflow
 
-Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding. For a single tool call, prefer \`inspect_tool\` plus \`invoke_deferred_tool\`.
+Use \`code_exec\` ONLY when a task requires orchestrating multiple MCP tools, using control flow (e.g., loops, conditionals), or complex reshaping of MCP results.
+**Do NOT use \`code_exec\` for simple, single-tool invocations.**
 
-Before writing a \`code_exec\` script:
-1. Use \`search_tool(..., caller="code_exec")\` when you need to discover MCP tools that may not appear in the context
-2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
-3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
+To write and execute code successfully, you must strictly follow this sequence:
 
-For \`caller="code_exec"\`:
-- \`inspect_tool\` is MCP-only.
-- Do not inspect or plan around built-in tools, filesystem tools, browser tools, memory tools, scheduler tools, task tools, or saved code_exec tools.
-
-Call MCP tools with:
-- \`await mcp.$call("mcp__provider__tool_name", args)\`
-
-Inside \`code_exec\`, only call MCP tools through \`mcp.$call(...)\`.
-Do not attempt to call built-in tools or Node.js APIs from \`code_exec\`.
-
-Execution guidance:
-- Do **not** use \`Promise.all(...)\`; await them one by one in order.
-
-Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
-- success: \`{ ok: true, data: ... }\`
-- failure: \`{ ok: false, error: "..." }\`
-
-Do not call saved code_exec tools from inside \`code_exec\`.
-Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
+1. **Search (If needed):** The \`<available-deferred-tools>\` list only provides \`tool_id\`s without descriptions. If it is not entirely obvious which \`tool_id\`s are appropriate for your task, use \`search_tool\` with a relevant query to find them.
+2. **Inspect:** Call \`inspect_tool(..., caller="code_exec")\` for EACH targeted tool you plan to use in your script (this applies to BOTH deferred MCP tools and normal MCP tools, as you need their specific \`code_exec\` hints). Do not inspect unnecessary tools.
+3. **Wait:** You MUST wait for the observation. Do not write any code until you have received the exact schemas and \`code_exec\` hints for all required tools.
+4. **Execute:** Call \`code_exec\` to run your orchestration script.
+   - Strictly follow the \`code_exec\` hints obtained in Step 3.
+   - Implement basic error handling in your code to gracefully manage potential tool failures.
 `
 
-export const CODE_EXEC_SYSTEM_PROMPT_EAGER_ONLY = `
+function joinPromptSections(sections: string[]): string {
+  const normalizedSections = sections
+    .map((section) => section.trim())
+    .filter(Boolean)
 
-## Multiple Tool Call using code
+  if (normalizedSections.length === 0) return ""
+  return `\n${normalizedSections.join("\n\n")}\n`
+}
 
-Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding.
+export function renderInjectedToolUsagePrompt(options: {
+  hasSearchTool: boolean
+  hasInspectTool: boolean
+  hasInvokeDeferredTool: boolean
+  hasCodeExecTool: boolean
+}): string {
+  const sections: string[] = []
+  const hasDeferredWorkflow = options.hasSearchTool && options.hasInspectTool && options.hasInvokeDeferredTool
 
-Before writing a \`code_exec\` script:
-1. Identify the MCP tools already present in the current tool list
-2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
-3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
+  if (hasDeferredWorkflow) {
+    sections.push(DEFERRED_TOOLS_WORKFLOW_PROMPT)
+  } else if (options.hasInspectTool) {
+    sections.push(INSPECT_TOOL_ONLY_PROMPT)
+  }
 
-For \`caller="code_exec"\`:
-- \`inspect_tool\` is MCP-only.
-- Do not inspect or plan around built-in tools, filesystem tools, browser tools, memory tools, scheduler tools, task tools, or saved code_exec tools.
+  if (options.hasCodeExecTool) {
+    const codeExecLines = [
+      CODE_EXEC_BASE_PROMPT.trim(),
+      hasDeferredWorkflow
+        ? "- Some MCP tools may appear only as tool_ids in `<available-deferred-tools>`. Those deferred tools are not ready to call inside `code_exec` until `inspect_tool(..., caller=\"code_exec\")` returns their schema."
+        : "- Some MCP tools already have full schemas available in your current context. Inspect the exact ones you plan to call before writing code.",
+      hasDeferredWorkflow
+        ? "- If the exact deferred `tool_id` is obvious, inspect it directly. Use `search_tool(..., caller=\"code_exec\")` only when you need help choosing the right MCP tool_id."
+        : "- For a single tool call, prefer direct invocation.",
+      "- After `inspect_tool` returns the schema and `code_exec.call_example`, call the MCP tool inside `code_exec` with `await mcp.$call(tool_id, args)`."
+    ]
+    sections.push(codeExecLines.join("\n"))
+  }
 
-Call MCP tools with:
-- \`await mcp.$call("mcp__provider__tool_name", args)\`
-
-Inside \`code_exec\`, only call MCP tools through \`mcp.$call(...)\`.
-Do not attempt to call built-in tools or Node.js APIs from \`code_exec\`.
-
-Execution guidance:
-- Do **not** use \`Promise.all(...)\`; await them one by one in order.
-
-Each \`await mcp.$call(tool_id, args)\` call returns a compact object:
-- success: \`{ ok: true, data: ... }\`
-- failure: \`{ ok: false, error: "..." }\`
-
-Do not call saved code_exec tools from inside \`code_exec\`.
-Treat the provided \`code\` as the body of an async function. Use \`return\` to produce the final result string or object.
-`
+  return joinPromptSections(sections)
+}
 
 export function renderAvailableDeferredToolsPrompt(toolIds: string[]): string {
   if (toolIds.length === 0) return ""

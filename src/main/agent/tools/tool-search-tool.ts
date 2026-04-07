@@ -54,8 +54,13 @@ async function invokeWithRetry(
 }
 
 const invokeDeferredToolSchema = z.object({
-  tool_id: z.string().describe("Tool ID of the deferred MCP tool or saved tool to execute"),
-  tool_args: z.object({}).passthrough().describe("Tool args, refer to inspect_tool result")
+  tool_id: z
+    .string()
+    .describe("Exact discovered tool_id for the deferred MCP tool or saved tool to execute"),
+  tool_args: z
+    .object({})
+    .passthrough()
+    .describe("Tool arguments matching inspect_tool.loaded_tools[].schema")
 })
 
 interface ToolSearchContext {
@@ -190,12 +195,12 @@ async function getMissingSavedToolDependencies(
 function createSearchCallerSchema(codeExecEnabled: boolean) {
   return z.object({
     query: z.string().describe(
-      "Standardized search query describing the capability you need. Prefer provider + resource + action + qualifiers with full words, for example: 'github pull request list', 'github pull request read details', 'notion database query'. Prefix a term with + when it must be present, for example 'github +issue create'. Avoid short abbreviations like 'pr' when a full phrase is available. Deferred tools appear by exact tool_id in <available-deferred-tools> messages."
+      "Exact tool_id or normalized capability phrase. Prefer provider + resource + action + optional qualifier, for example: 'github issue create', 'github pull request list', or 'notion database query'. Prefer full words over abbreviations. Prefix a required term with +, for example 'github +issue create'. When using invoke_deferred_tool, check <available-deferred-tools> first and search only if the right deferred tool_id is not obvious from that list."
     ),
     max_results: z.number().optional().default(5).describe("Maximum number of results to return"),
     caller: codeExecEnabled
       ? z.enum(["invoke_deferred_tool", "code_exec"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this search is for. Use invoke_deferred_tool for lazy MCP tools and enabled saved tools. Use code_exec to search all enabled MCP tools that code_exec can call. Non-MCP and built-in tools are never eligible for code_exec."
+        "Which caller this search is for. Use invoke_deferred_tool to rank or resolve candidates from the deferred-tool inventory. Use code_exec to search MCP tools only."
       )
       : z.enum(["invoke_deferred_tool"]).optional().default("invoke_deferred_tool").describe(
         "Which caller this search is for. code_exec is disabled in this runtime, so invoke_deferred_tool is the only available caller."
@@ -205,10 +210,10 @@ function createSearchCallerSchema(codeExecEnabled: boolean) {
 
 function createInspectCallerSchema(codeExecEnabled: boolean) {
   return z.object({
-    tool_ids: z.array(z.string()).describe("List of discovered tool IDs to inspect"),
+    tool_ids: z.array(z.string()).describe("Exact discovered tool_ids to inspect"),
     caller: codeExecEnabled
       ? z.enum(["invoke_deferred_tool", "code_exec"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this inspection is for. Use invoke_deferred_tool for direct invocation, or code_exec for MCP-only script authoring hints."
+        "Which caller this inspection is for. Use invoke_deferred_tool for direct invocation, or code_exec for MCP-only authoring hints."
       )
       : z.enum(["invoke_deferred_tool"]).optional().default("invoke_deferred_tool").describe(
         "Which caller this inspection is for. code_exec is disabled in this runtime, so invoke_deferred_tool is the only available caller."
@@ -289,8 +294,8 @@ export function createSearchTool(service: McpCapabilityService, options: ToolSea
       name: "search_tool",
       description:
         options.codeExecEnabled
-          ? "Search for discovered tools by caller. Write normalized queries using provider + resource + action + qualifiers, and prefer full words over abbreviations, for example 'github pull request list' or 'github pull request read details' instead of 'github pr list'. Prefix a term with + when it must be present, for example 'github +issue create'. Deferred tools appear by exact tool_id in <available-deferred-tools> messages. For invoke_deferred_tool, this searches lazy MCP tools plus enabled saved tools. For code_exec, this searches all enabled MCP tools and excludes saved tools and all non-MCP tools. Returns each tool's source and allow_callers."
-          : "Search for discovered tools for invoke_deferred_tool. Write normalized queries using provider + resource + action + qualifiers, and prefer full words over abbreviations, for example 'github pull request list' instead of 'github pr list'. Prefix a term with + when it must be present, for example 'github +issue create'. Deferred tools appear by exact tool_id in <available-deferred-tools> messages. This searches lazy MCP tools only and returns each tool's source and allow_callers.",
+          ? "Search discovered tools by capability phrase or exact tool_id. Prefer normalized phrases like 'github issue create' or 'github pull request list' over natural-language sentences. For invoke_deferred_tool, the deferred inventory is already listed in <available-deferred-tools>; use this tool to map a task to candidate deferred tool_ids or choose among similar deferred tool_ids. For code_exec, this searches MCP tools only. Returns each tool's source and allow_callers."
+          : "Search discovered tools for invoke_deferred_tool by capability phrase or exact tool_id. Prefer normalized phrases like 'github issue create' or 'github pull request list' over natural-language sentences. The deferred inventory is already listed in <available-deferred-tools>; use this tool to map a task to candidate deferred tool_ids or choose among similar deferred tool_ids. Returns each tool's source and allow_callers.",
       schema: createSearchCallerSchema(options.codeExecEnabled)
     }
   )
@@ -385,8 +390,8 @@ export function createInspectTool(service: McpCapabilityService, options: ToolSe
       name: "inspect_tool",
       description:
         options.codeExecEnabled
-          ? "Inspect the exact schema and examples for any discovered MCP tool or saved tool. Set caller=code_exec only for MCP tools when you need canonical tool_id call examples and result samples for code_exec authoring."
-          : "Inspect the exact schema and examples for any discovered MCP tool. Enabled saved tools are hidden because code_exec is disabled in this runtime.",
+          ? "Inspect discovered tool_ids. Returns loaded_tools[] with schema, output_schema, and allow_callers. Set caller=code_exec only for MCP tools when you need code_exec call examples."
+          : "Inspect discovered MCP tool_ids. Returns loaded_tools[] with schema, output_schema, and allow_callers.",
       schema: createInspectCallerSchema(options.codeExecEnabled)
     }
   )
@@ -482,7 +487,7 @@ export function createInvokeDeferredTool(
     {
       name: "invoke_deferred_tool",
       description:
-        "Execute a deferred MCP tool or saved tool by tool_id. Use search_tool and inspect_tool first so you know the exact schema.",
+        "Execute a discovered MCP tool or saved tool by tool_id. If you already know the exact tool_id, inspect it first when needed. Returns { ok: true, data } on success or { ok: false, error } on failure.",
       schema: invokeDeferredToolSchema
     }
   )
