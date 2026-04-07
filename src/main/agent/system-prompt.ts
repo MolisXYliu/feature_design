@@ -149,7 +149,8 @@ const DEFERRED_TOOLS_WORKFLOW_PROMPT = `
 
 Use this workflow ONLY when you plan to call a tool from \`<available-deferred-tools>\`.
 
-Deferred tools are listed in \`<available-deferred-tools>\` by \`tool_id\` only (they do not include full schemas or descriptions). You CANNOT invoke a deferred tool until you fetch its exact schema.
+Deferred tools are listed in \`<available-deferred-tools>\` by \`tool_id\` only (they do not include full input schemas or descriptions).
+You CANNOT invoke a deferred tool until you fetch its exact schema using \`inspect_tool\`
 
 Follow this strict sequence:
 
@@ -168,8 +169,7 @@ const INSPECT_TOOL_ONLY_PROMPT = `
 Use \`inspect_tool\` to fetch full schema details and description for tools whose ids or definitions are already available in your current context before planning calls or writing \`code_exec\`.
 `
 
-const CODE_EXEC_BASE_PROMPT = `
-
+const CODE_EXEC_BASE_PROMPT_PREFIX = `
 ## Code Execution Workflow
 
 Use \`code_exec\` ONLY when a task requires orchestrating multiple MCP tools, using control flow (e.g., loops, conditionals), or complex reshaping of MCP results.
@@ -177,7 +177,10 @@ Use \`code_exec\` ONLY when a task requires orchestrating multiple MCP tools, us
 
 To write and execute code successfully, you must strictly follow this sequence:
 
-1. **Search (If needed):** The \`<available-deferred-tools>\` list only provides \`tool_id\`s without descriptions. If it is not entirely obvious which \`tool_id\`s are appropriate for your task, use \`search_tool\` with a relevant query to find them.
+`
+
+
+const CODE_EXEC_BASE_PROMPT_TAIL = `
 2. **Inspect:** Call \`inspect_tool(..., caller="code_exec")\` for EACH targeted tool you plan to use in your script (this applies to BOTH deferred MCP tools and normal MCP tools, as you need their specific \`code_exec\` hints). Do not inspect unnecessary tools.
 3. **Wait:** You MUST wait for the observation. Do not write any code until you have received the exact schemas and \`code_exec\` hints for all required tools.
 4. **Execute:** Call \`code_exec\` to run your orchestration script.
@@ -202,27 +205,23 @@ export function renderInjectedToolUsagePrompt(options: {
 }): string {
   const sections: string[] = []
   const hasDeferredWorkflow = options.hasSearchTool && options.hasInspectTool && options.hasInvokeDeferredTool
-
   if (hasDeferredWorkflow) {
     sections.push(DEFERRED_TOOLS_WORKFLOW_PROMPT)
-  } else if (options.hasInspectTool) {
-    sections.push(INSPECT_TOOL_ONLY_PROMPT)
   }
+  // } else if (options.hasInspectTool) {
+  //   sections.push(INSPECT_TOOL_ONLY_PROMPT)
+  // }
 
   if (options.hasCodeExecTool) {
     const codeExecLines = [
-      CODE_EXEC_BASE_PROMPT.trim(),
+      CODE_EXEC_BASE_PROMPT_PREFIX,
       hasDeferredWorkflow
-        ? "- Some MCP tools may appear only as tool_ids in `<available-deferred-tools>`. Those deferred tools are not ready to call inside `code_exec` until `inspect_tool(..., caller=\"code_exec\")` returns their schema."
-        : "- Some MCP tools already have full schemas available in your current context. Inspect the exact ones you plan to call before writing code.",
-      hasDeferredWorkflow
-        ? "- If the exact deferred `tool_id` is obvious, inspect it directly. Use `search_tool(..., caller=\"code_exec\")` only when you need help choosing the right MCP tool_id."
-        : "- For a single tool call, prefer direct invocation.",
-      "- After `inspect_tool` returns the schema and `code_exec.call_example`, call the MCP tool inside `code_exec` with `await mcp.$call(tool_id, args)`."
+        ? "1. **Search (If needed):** The `<available-deferred-tools>` list only provides `tool_id` without descriptions. If it is not entirely obvious which `tool_id` are appropriate for your task, use `search_tool` with a relevant query to find them."
+        : "1. Determine the tool_id of the MCP tool to use based on the task.",
+      CODE_EXEC_BASE_PROMPT_TAIL
     ]
-    sections.push(codeExecLines.join("\n"))
+    sections.push(codeExecLines.join(""))
   }
-
   return joinPromptSections(sections)
 }
 

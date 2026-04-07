@@ -19,7 +19,7 @@ import { getCustomModelConfigs, type CustomModelConfig } from "../../storage"
 import type { ApprovalStore } from "../approval-store"
 import type { McpCapabilityService } from "../../mcp/capability-types"
 
-const DEFAULT_TIMEOUT_MS = 10_000
+const DEFAULT_TIMEOUT_MS = 20_000
 const SAVE_TOOL_REWRITE_FAILED_NOTE = "工具化改写失败，请点拒绝关闭。"
 const SAVED_TOOL_REWRITE_SYSTEM_PROMPT = `rewrite a param hard coding js function into a reusable function.
 

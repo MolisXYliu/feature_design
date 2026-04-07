@@ -863,12 +863,10 @@ The workspace root is: ${workspacePath}`
   const lazyMcpMetadata = allMcpTools.filter((tool) => tool.visibility === "lazy")
   const deferredSavedTools = codeExecEnabled ? listSavedCodeExecTools() : []
   const mcpTools = createEagerMcpTools(capabilityService, eagerMcpMetadata)
-  const toolSearchTools = await createToolSearchTools(capabilityService, {
-    workspacePath,
-    threadId: options.threadId
-  }, {
-    codeExecEnabled
-  })
+  const toolSearchTools = await createToolSearchTools(capabilityService,
+    {workspacePath,
+    threadId: options.threadId},
+    {codeExecEnabled})
 
   if (allMcpTools.length > 0) {
     console.log("[Runtime] MCP tools loaded, eager:", eagerMcpMetadata.length, "lazy:", lazyMcpMetadata.length)
