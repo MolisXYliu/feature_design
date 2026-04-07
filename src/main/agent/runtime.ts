@@ -61,7 +61,9 @@ import {
   createToolSearchTools,
   fixMcpToolSchema
 } from "./tools/tool-search-tool"
-import { getWindowsSandboxMode, getYoloMode, getEnabledHooks } from "../storage"
+import { createLspTool } from "./tools/lsp-tool"
+import { getWindowsSandboxMode, getYoloMode, getEnabledHooks, getLspConfig } from "../storage"
+import { detectJavaProject } from "../lsp"
 import { ApprovalStore } from "./approval-store"
 import { ToolOrchestrator } from "./tool-orchestrator"
 import type { ApprovalRequest, ApprovalDecision } from "../types"
@@ -1069,6 +1071,17 @@ The workspace root is: ${workspacePath}`
   }
 
   extraTools.push(createPlaywrightTool(workspacePath))
+
+  // Conditionally inject Java LSP tool
+  try {
+    const lspConfig = getLspConfig()
+    if (lspConfig.enabled && detectJavaProject(workspacePath)) {
+      extraTools.push(createLspTool({ workspacePath }))
+      console.log("[Runtime] Java LSP tool injected for:", workspacePath)
+    }
+  } catch (e) {
+    console.warn("[Runtime] Failed to check LSP config:", e)
+  }
 
   // Wrap extra tools so that errors are returned as strings instead of throwing
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

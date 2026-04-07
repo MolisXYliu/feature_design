@@ -66,7 +66,15 @@ import type {
   PluginMetadata,
   PluginManifest,
   ChatXConfig,
-  ChatXRobotConfig
+  ChatXRobotConfig,
+  LspConfig,
+  LspDiagnostic,
+  LspLocation,
+  LspHoverResult,
+  LspSymbol,
+  LspCallHierarchyItem,
+  LspCallHierarchyIncomingCall,
+  LspCallHierarchyOutgoingCall
 } from "../../main/types"
 
 export type {
@@ -82,7 +90,15 @@ export type {
   PluginMetadata,
   PluginManifest,
   ChatXConfig,
-  ChatXRobotConfig
+  ChatXRobotConfig,
+  LspConfig,
+  LspDiagnostic,
+  LspLocation,
+  LspHoverResult,
+  LspSymbol,
+  LspCallHierarchyItem,
+  LspCallHierarchyIncomingCall,
+  LspCallHierarchyOutgoingCall
 }
 
 export type StreamEvent =

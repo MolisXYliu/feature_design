@@ -84,6 +84,10 @@
       {
         "from": "resources/bin",
         "to": "bin"
+      },
+      {
+        "from": "resources/lsp-vsix",
+        "to": "lsp-vsix"
       }
     ],
     "electronVersion": "39.8.0"
@@ -146,6 +150,7 @@
     "sql.js": "^1.12.0",
     "tailwind-merge": "^2.6.0",
     "uuid": "^11.0.5",
+    "vscode-jsonrpc": "^8.2.1",
     "ws": "^8.19.0",
     "xlsx": "0.18.5",
     "zustand": "^5.0.3"

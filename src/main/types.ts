@@ -313,6 +313,70 @@ export interface PluginMcpServerConfig {
   headers?: Record<string, string>
 }
 
+// LSP types
+export interface LspConfig {
+  enabled: boolean
+  maxHeapMb: number
+  lastError: string | null
+}
+
+export interface LspDiagnostic {
+  file: string
+  line: number
+  column: number
+  endLine?: number
+  endColumn?: number
+  severity: "error" | "warning" | "info" | "hint"
+  message: string
+  source?: string
+}
+
+export interface LspLocation {
+  file: string
+  line: number
+  column: number
+  endLine?: number
+  endColumn?: number
+}
+
+export interface LspHoverResult {
+  contents: string
+  range?: {
+    startLine: number
+    startColumn: number
+    endLine: number
+    endColumn: number
+  }
+}
+
+export interface LspSymbol {
+  name: string
+  kind: string
+  file?: string
+  line?: number
+  column?: number
+  containerName?: string
+}
+
+export interface LspCallHierarchyItem {
+  name: string
+  kind: string
+  detail?: string
+  file: string
+  range: { startLine: number; startColumn: number; endLine: number; endColumn: number }
+  selectionRange: { startLine: number; startColumn: number; endLine: number; endColumn: number }
+}
+
+export interface LspCallHierarchyIncomingCall {
+  from: LspCallHierarchyItem
+  fromRanges: Array<{ startLine: number; startColumn: number; endLine: number; endColumn: number }>
+}
+
+export interface LspCallHierarchyOutgoingCall {
+  to: LspCallHierarchyItem
+  fromRanges: Array<{ startLine: number; startColumn: number; endLine: number; endColumn: number }>
+}
+
 // ── Approval / Sandbox Policy Types ──
 
 /** Review decision for command approval */

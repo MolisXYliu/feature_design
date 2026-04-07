@@ -1197,6 +1197,49 @@ export function saveHeartbeatContent(content: string): void {
   writeFileSync(HEARTBEAT_MD_FILE, content)
 }
 
+// ── LSP Config ──
+
+const LSP_CONFIG_FILE = join(OPENWORK_DIR, "lsp-config.json")
+
+function defaultLspConfig(): import("./types").LspConfig {
+  return {
+    enabled: false,
+    maxHeapMb: 1024,
+    lastError: null
+  }
+}
+
+export function getLspConfig(): import("./types").LspConfig {
+  getOpenworkDir()
+  if (!existsSync(LSP_CONFIG_FILE)) return defaultLspConfig()
+  try {
+    const content = readFileSync(LSP_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultLspConfig()
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      maxHeapMb: typeof parsed.maxHeapMb === "number" ? parsed.maxHeapMb : defaults.maxHeapMb,
+      lastError: typeof parsed.lastError === "string" ? parsed.lastError : defaults.lastError
+    }
+  } catch {
+    return defaultLspConfig()
+  }
+}
+
+export function saveLspConfig(updates: Partial<import("./types").LspConfig>): void {
+  getOpenworkDir()
+  const current = getLspConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(LSP_CONFIG_FILE, JSON.stringify(merged, null, 2))
+}
+
+export function resetLspConfig(): import("./types").LspConfig {
+  getOpenworkDir()
+  const defaults = defaultLspConfig()
+  writeFileSync(LSP_CONFIG_FILE, JSON.stringify(defaults, null, 2))
+  return defaults
+}
+
 // ── Plugins ──
 
 const PLUGINS_DIR = join(OPENWORK_DIR, "plugins")
