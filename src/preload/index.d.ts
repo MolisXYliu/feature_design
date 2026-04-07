@@ -90,6 +90,7 @@ interface CustomAPI {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
         tier?: "premium" | "economy"
       }>
     >
@@ -100,6 +101,7 @@ interface CustomAPI {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     } | null>
     setCustomConfig: (config: {
@@ -109,6 +111,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<void>
     // Backward-compatible alias, prefer upsertCustomConfig in new code.
@@ -119,6 +122,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<{ id: string }>
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>

@@ -196,6 +196,8 @@ const api = {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
+        tier?: "premium" | "economy"
       }>
     > => {
       return ipcRenderer.invoke("models:getCustomConfigs") as Promise<
@@ -206,6 +208,8 @@ const api = {
           model: string
           hasApiKey: boolean
           maxTokens: number
+          interleavedThinking?: boolean
+          tier?: "premium" | "economy"
         }>
       >
     },
@@ -218,6 +222,8 @@ const api = {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     } | null> => {
       return ipcRenderer.invoke("models:getCustomConfig", id) as Promise<{
         id: string
@@ -226,6 +232,8 @@ const api = {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
+        tier?: "premium" | "economy"
       } | null>
     },
     setCustomConfig: (config: {
@@ -235,6 +243,8 @@ const api = {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     }): Promise<void> => {
       return ipcRenderer.invoke("models:setCustomConfig", config) as Promise<void>
     },
@@ -245,6 +255,8 @@ const api = {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     }): Promise<{ id: string }> => {
       return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
     },
