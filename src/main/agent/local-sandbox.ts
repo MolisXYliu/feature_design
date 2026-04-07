@@ -21,7 +21,9 @@ import {
   type ExecuteResponse,
   type SandboxBackendProtocol,
   type GrepMatch,
-  type FileInfo
+  type FileInfo,
+  type FileUploadResponse,
+  type FileOperationError
 } from "deepagents"
 import fg from "fast-glob"
 import * as iconv from "iconv-lite"
@@ -364,6 +366,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || lower.includes("certificate_verify_failed")
       || lower.includes("unable to get local issuer certificate")
       || (lower.includes("ssl") && lower.includes("certificate") && lower.includes("verify"))
+      // SSH authentication failures: elevated sandbox user's USERPROFILE points to the
+      // sandbox account's home dir (~/.ssh is empty), so SSH key auth always fails.
+      || lower.includes("permission denied (publickey")
+      || lower.includes("no supported authentication methods available")
+      || lower.includes("could not read from remote repository")
       // Permission errors: elevated sandbox user may lack write access to TEMP,
       // site-packages, or other directories that pip/npm/cargo need
       || (lower.includes("permission denied") && lower.includes("errno 13"))
@@ -447,11 +454,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || /\bbundle\s+(install|update|add)\b/.test(cmd)
       // C/C++
       || /\bvcpkg\s+install\b/.test(cmd)
-      // Git clone: elevated mode causes checkout failures (ACL inheritance gaps on new dirs)
-      // and is abnormally slow due to elevated setup + sandbox user overhead.
-      // Unelevated mode uses real user identity + workspace Everyone:(OI)(CI)(M) ACL grant,
-      // so cloned subdirectories are writable and network access is direct.
+      // Git network operations: elevated sandbox user lacks Windows Credential Store access
+      // (SEC_E_NO_CREDENTIALS for HTTPS) and has empty ~/.ssh (SSH key auth fails with
+      // "Permission denied (publickey)"). Proactive unelevated routing avoids the wasted
+      // elevated attempt and the directory-pollution problem git clone/submodule have
+      // (partial .git/ left behind makes the unelevated retry fail).
       || /\bgit\s+clone\b/.test(cmd)
+      || /\bgit\s+(pull|fetch|push)\b/.test(cmd)
+      || /\bgit\s+submodule\b/.test(cmd)
+      || /\bgit\s+lfs\b/.test(cmd)
       // Any pip-installed CLI tool detected via PATH scan (auto, no hardcoded list needed)
       || LocalSandbox.isPythonCliTool(command)
     )
@@ -1115,7 +1126,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /**
    * Override uploadFiles to enforce readonly sandbox restrictions on each file.
    */
-  async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
+  async uploadFiles(files: [string, Uint8Array][]): Promise<FileUploadResponse[]> {
     // Check for both sandbox-sensitive and readonly-blocked files
     const indexed = files.map(([filePath, content], i) => ({
       filePath, content, i,
@@ -1128,17 +1139,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     // Batch-delegate all allowed files in one call
     const allowedResults = allowed.length > 0
-      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, string | Buffer]))
+      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, Uint8Array]))
       : []
 
     // Merge results back in original order
-    const results: { path: string; error: string | null }[] = new Array(files.length)
+    const results: FileUploadResponse[] = new Array(files.length)
+    const denied: FileOperationError = "permission_denied"
     let ai = 0
     for (const entry of indexed) {
-      if (entry.sandboxBlocked) {
-        results[entry.i] = { path: entry.filePath, error: `Access denied — '${entry.filePath}' is restricted by sandbox policy.` }
-      } else if (entry.writeBlocked) {
-        results[entry.i] = { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
+      if (entry.sandboxBlocked || entry.writeBlocked) {
+        results[entry.i] = { path: entry.filePath, error: denied }
       } else {
         results[entry.i] = allowedResults[ai++]
       }
