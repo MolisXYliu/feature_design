@@ -447,6 +447,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || /\bbundle\s+(install|update|add)\b/.test(cmd)
       // C/C++
       || /\bvcpkg\s+install\b/.test(cmd)
+      // Git clone: elevated mode causes checkout failures (ACL inheritance gaps on new dirs)
+      // and is abnormally slow due to elevated setup + sandbox user overhead.
+      // Unelevated mode uses real user identity + workspace Everyone:(OI)(CI)(M) ACL grant,
+      // so cloned subdirectories are writable and network access is direct.
+      || /\bgit\s+clone\b/.test(cmd)
       // Any pip-installed CLI tool detected via PATH scan (auto, no hardcoded list needed)
       || LocalSandbox.isPythonCliTool(command)
     )
