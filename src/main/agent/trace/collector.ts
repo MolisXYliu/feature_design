@@ -422,11 +422,13 @@ export class TraceCollector {
 
     writeTraceFile(trace)
 
-    try {
-      await _reporter.report(trace)
-    } catch (e) {
-      console.warn("[Tracer] Reporter.report() threw:", e)
-    }
+    // Fire-and-forget: trace upload is a side-channel operation and must
+    // never block the main agent flow. Errors are logged and swallowed.
+    void Promise.resolve()
+      .then(() => _reporter.report(trace))
+      .catch((e) => {
+        console.warn("[Tracer] Reporter.report() threw:", e)
+      })
 
     return trace
   }
