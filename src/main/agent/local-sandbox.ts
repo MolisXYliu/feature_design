@@ -257,12 +257,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const ivyHome = path.win32.join(realTempDir, "sandbox-ivy2")
     const sbtFlags = `-Dsbt.global.base=${sbtBase} -Divy.home=${ivyHome}`
 
+    // Force git to use OpenSSL instead of SChannel. The sandbox user (CodexSandboxOnline)
+    // doesn't have access to the Windows LSA for SChannel credential initialization.
+    const gitSslCmd = 'set "GIT_CONFIG_COUNT=1" & set "GIT_CONFIG_KEY_0=http.sslBackend" & set "GIT_CONFIG_VALUE_0=openssl"'
+    const gitSslPs  = "$env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='http.sslBackend'; $env:GIT_CONFIG_VALUE_0='openssl'"
+
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
       const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
-      return `${base} & ${jvmOpts}`
+      return `${base} & ${jvmOpts} & ${gitSslCmd}`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
@@ -273,7 +278,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
       const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
       const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
-      return `${base}; ${jvmOpts}`
+      return `${base}; ${jvmOpts}; ${gitSslPs}`
     }
 
     return ""
@@ -2128,10 +2133,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Unelevated sandbox: codex.exe may inject HTTP_PROXY=127.0.0.1:9 via apply_no_network_to_env
     // when the policy's network_access is false (default). Clear proxy vars in the command preamble
     // so the sandboxed process can access the network normally.
+    //
+    // Also force git to use the OpenSSL SSL backend instead of the default SChannel (Windows).
+    // WRITE_RESTRICTED tokens (used by unelevated sandbox) cannot access the Windows LSA for
+    // credential initialization, causing SChannel's AcquireCredentialsHandle to fail with
+    // SEC_E_NO_CREDENTIALS even for public HTTPS repos. OpenSSL does not use the Windows
+    // Security API and works correctly under restricted tokens.
+    // GIT_CONFIG_COUNT/KEY/VALUE injects git config for this invocation only (git ≥ 2.31).
     const clearProxyPreamble = !isElevatedSandbox && effectiveMode !== "none"
       ? (shellBase === "cmd"
-          ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE="'
-          : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null')
+          ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE=" & set "GIT_CONFIG_COUNT=1" & set "GIT_CONFIG_KEY_0=http.sslBackend" & set "GIT_CONFIG_VALUE_0=openssl"'
+          : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null; $env:GIT_CONFIG_COUNT=\'1\'; $env:GIT_CONFIG_KEY_0=\'http.sslBackend\'; $env:GIT_CONFIG_VALUE_0=\'openssl\'')
       : ""
     // Unelevated sandbox: also set JVM env vars to redirect maven.repo.local to TEMP
     // (restricted token cannot write to ~/.m2/repository)
