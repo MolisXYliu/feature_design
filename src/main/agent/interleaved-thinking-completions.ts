@@ -3,6 +3,9 @@ import type { BaseMessage } from "@langchain/core/messages"
 import type { ChatGenerationChunk } from "@langchain/core/outputs"
 import { ChatOpenAICompletions } from "@langchain/openai"
 
+const THINK_OPEN_TAG = "<think>"
+const THINK_CLOSE_TAG = "</think>"
+
 function extractReasoningText(reasoning: unknown): string {
   if (typeof reasoning === "string") return reasoning
   if (Array.isArray(reasoning)) {
@@ -17,14 +20,50 @@ function extractReasoningText(reasoning: unknown): string {
   return ""
 }
 
+function hasThinkOpenTag(text: string): boolean {
+  return text.includes(THINK_OPEN_TAG)
+}
+
+function hasThinkCloseTag(text: string): boolean {
+  return text.includes(THINK_CLOSE_TAG)
+}
+
+function startsWithThinkTag(text: string): boolean {
+  return text.trimStart().startsWith(THINK_OPEN_TAG)
+}
+
+function resolveThinkOpenState(initialState: boolean, text: string): boolean {
+  let thinkingOpen = initialState
+  const tagPattern = /<\/?think>/g
+  let match: RegExpExecArray | null = null
+
+  while ((match = tagPattern.exec(text)) !== null) {
+    thinkingOpen = match[0] === THINK_OPEN_TAG
+  }
+
+  return thinkingOpen
+}
+
+function normalizeReasoningBlock(reasoning: unknown): string {
+  const reasoningText = extractReasoningText(reasoning).trim()
+  if (!reasoningText) return ""
+
+  if (hasThinkOpenTag(reasoningText)) {
+    return resolveThinkOpenState(false, reasoningText)
+      ? `${reasoningText}${THINK_CLOSE_TAG}\n\n`
+      : reasoningText
+  }
+
+  return `${THINK_OPEN_TAG}${reasoningText}${THINK_CLOSE_TAG}\n\n`
+}
+
 function mergeReasoningIntoContent(content: unknown, reasoning: unknown): string {
   const contentText = typeof content === "string" ? content : ""
-  const reasoningText = extractReasoningText(reasoning).trim()
-  if (!reasoningText) return contentText
-  if (contentText.startsWith("<think>")) return contentText
+  const reasoningBlock = normalizeReasoningBlock(reasoning)
+  if (!reasoningBlock) return contentText
+  if (startsWithThinkTag(contentText)) return contentText
 
-  const thinkBlock = `<think>${reasoningText}</think>`
-  return contentText ? `${thinkBlock}\n${contentText}` : thinkBlock
+  return contentText ? `${reasoningBlock}\n${contentText}` : reasoningBlock
 }
 
 export class InterleavedThinkingChatOpenAICompletions extends ChatOpenAICompletions {
@@ -71,15 +110,28 @@ export class InterleavedThinkingChatOpenAICompletions extends ChatOpenAICompleti
 
     let nextContent = contentText
     if (reasoningText) {
-      nextContent = `${this.thinkingOpen ? "" : "<think>"}${reasoningText}`
-      if (contentText.length > 0 || hasToolCalls) {
-        nextContent += `</think>${contentText.length > 0 ? `\n${contentText}` : ""}`
+      let reasoningChunk = reasoningText
+      if (this.thinkingOpen && startsWithThinkTag(reasoningChunk)) {
+        reasoningChunk = reasoningChunk.replace(/^\s*<think>/, "")
+      }
+      if (!this.thinkingOpen && !hasThinkOpenTag(reasoningChunk) && !hasThinkCloseTag(reasoningChunk)) {
+        reasoningChunk = `${THINK_OPEN_TAG}${reasoningChunk}`
+      }
+
+      const thinkingOpenAfterReasoning = resolveThinkOpenState(this.thinkingOpen, reasoningChunk)
+      nextContent = reasoningChunk
+
+      if (thinkingOpenAfterReasoning && (contentText.length > 0 || hasToolCalls || rawResponse.choices?.[0]?.finish_reason != null)) {
+        nextContent += `${THINK_CLOSE_TAG}${contentText.length > 0 ? `\n\n${contentText}` : ""}`
         this.thinkingOpen = false
       } else {
-        this.thinkingOpen = true
+        if (contentText.length > 0) {
+          nextContent += reasoningChunk.length > 0 ? `\n${contentText}` : contentText
+        }
+        this.thinkingOpen = thinkingOpenAfterReasoning
       }
     } else if (shouldCloseThink) {
-      nextContent = nextContent.length > 0 ? `</think>\n${nextContent}` : "</think>"
+      nextContent = nextContent.length > 0 ? `${THINK_CLOSE_TAG}\n\n${nextContent}` : THINK_CLOSE_TAG
       this.thinkingOpen = false
     }
 
