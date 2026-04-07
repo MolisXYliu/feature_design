@@ -159,13 +159,20 @@ async function executeUserCode(
     throw new CodeExecStageError("compile", message)
   }
 
-  const context = vm.createContext({
+  const contextGlobals = Object.assign(Object.create(null), {
     process: undefined,
     require: undefined,
     module: undefined,
     exports: undefined,
     Buffer: undefined,
     global: undefined
+  })
+
+  const context = vm.createContext(contextGlobals, {
+    codeGeneration: {
+      strings: false,
+      wasm: false
+    }
   })
 
   let runnable: (api: {

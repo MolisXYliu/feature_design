@@ -155,18 +155,18 @@ Some tools are available but not loaded in your immediate context. This includes
 To use these tools, follow this 3-step process:
 
 1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_discovered_tool")\`
+   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_deferred_tool")\`
    - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" or "github pull request read details" rather than "github pr list".
    - \`max_results\`: Maximum number of candidate tools to return
-   - \`caller\`: "invoke_discovered_tool" (default) searches lazy MCP tools plus enabled saved tools; "code_exec" searches all enabled MCP tools and excludes saved tools
+   - \`caller\`: "invoke_deferred_tool" (default) searches lazy MCP tools plus enabled saved tools; "code_exec" searches all enabled MCP tools and excludes saved tools and all non-MCP tools
    - Returns matching tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
 
 2. **Inspect tool schema** using \`inspect_tool\`:
-   \`inspect_tool(tool_ids=["provider__tool_name"], caller="invoke_discovered_tool")\`
+   \`inspect_tool(tool_ids=["mcp__provider__tool_name"], caller="invoke_deferred_tool")\`
    - Returns the tool's parameter schema so you know what arguments to provide
 
-3. **Execute the tool** using \`invoke_discovered_tool\`:
-   \`invoke_discovered_tool(tool_id="provider__tool_name", tool_args={...})\`
+3. **Execute the tool** using \`invoke_deferred_tool\`:
+   \`invoke_deferred_tool(tool_id="mcp__provider__tool_name", tool_args={...})\`
    - Execute the tool with the required parameters
 
 ### When to Use
@@ -182,15 +182,15 @@ To use these tools, follow this 3-step process:
 # User asks: "Create a GitHub issue for this bug"
 
 # Step 1: Search for GitHub tools
-search_tool(query="github create issue", max_results=5, caller="invoke_discovered_tool")
-# Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool", "code_exec"], description: "Create a new issue..." }]
+search_tool(query="github create issue", max_results=5, caller="invoke_deferred_tool")
+# Returns: [{ tool_id: "mcp__github__create_issue", source: "mcp", allow_callers: ["invoke_deferred_tool", "code_exec"], description: "Create a new issue..." }]
 
 # Step 2: Inspect the schema
-inspect_tool(tool_ids=["github__create_issue"], caller="invoke_discovered_tool")
+inspect_tool(tool_ids=["mcp__github__create_issue"], caller="invoke_deferred_tool")
 # Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
 
 # Step 3: Execute
-invoke_discovered_tool(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
+invoke_deferred_tool(tool_id="mcp__github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
 \`\`\`
 
 Always search first when you need lazy tool capabilities.
@@ -207,18 +207,18 @@ Some MCP tools are available but not loaded in your immediate context. These too
 To use these tools, follow this 3-step process:
 
 1. **Search for tools** using \`search_tool\`:
-   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_discovered_tool")\`
+   \`search_tool(query="search for tools that can help with X", max_results=5, caller="invoke_deferred_tool")\`
    - \`query\`: Use a normalized capability phrase: provider + resource + action + qualifiers. Prefer full words over abbreviations, for example "github pull request list" rather than "github pr list".
    - \`max_results\`: Maximum number of candidate tools to return
-   - \`caller\`: always use "invoke_discovered_tool" in this runtime
+   - \`caller\`: always use "invoke_deferred_tool" in this runtime
    - Returns matching lazy MCP tools with \`tool_id\`, \`source\`, \`allow_callers\`, and descriptions
 
 2. **Inspect tool schema** using \`inspect_tool\`:
-   \`inspect_tool(tool_ids=["provider__tool_name"], caller="invoke_discovered_tool")\`
+   \`inspect_tool(tool_ids=["mcp__provider__tool_name"], caller="invoke_deferred_tool")\`
    - Returns the tool's parameter schema so you know what arguments to provide
 
-3. **Execute the tool** using \`invoke_discovered_tool\`:
-   \`invoke_discovered_tool(tool_id="provider__tool_name", tool_args={...})\`
+3. **Execute the tool** using \`invoke_deferred_tool\`:
+   \`invoke_deferred_tool(tool_id="mcp__provider__tool_name", tool_args={...})\`
    - Execute the tool with the required parameters
 
 ### When to Use
@@ -234,15 +234,15 @@ To use these tools, follow this 3-step process:
 # User asks: "Create a GitHub issue for this bug"
 
 # Step 1: Search for GitHub tools
-search_tool(query="github create issue", max_results=5, caller="invoke_discovered_tool")
-# Returns: [{ tool_id: "github__create_issue", source: "mcp", allow_callers: ["invoke_discovered_tool"], description: "Create a new issue..." }]
+search_tool(query="github create issue", max_results=5, caller="invoke_deferred_tool")
+# Returns: [{ tool_id: "mcp__github__create_issue", source: "mcp", allow_callers: ["invoke_deferred_tool"], description: "Create a new issue..." }]
 
 # Step 2: Inspect the schema
-inspect_tool(tool_ids=["github__create_issue"], caller="invoke_discovered_tool")
+inspect_tool(tool_ids=["mcp__github__create_issue"], caller="invoke_deferred_tool")
 # Returns: { schema: { properties: { title: {...}, body: {...} }, required: ["title"] } }
 
 # Step 3: Execute
-invoke_discovered_tool(tool_id="github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
+invoke_deferred_tool(tool_id="mcp__github__create_issue", tool_args={ title: "Bug: ...", body: "..." })
 \`\`\`
 
 Always search first when you need lazy MCP tool capabilities.
@@ -252,15 +252,22 @@ export const CODE_EXEC_SYSTEM_PROMPT_WITH_DISCOVERY = `
 
 ## Multiple Tool Call using code
 
-Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding. For a single tool call, prefer \`inspect_tool\` plus \`invoke_discovered_tool\`.
+Use \`code_exec\` when you need to call multiple MCP tools in one step, add small control flow, or reshape MCP tool results before responding. For a single tool call, prefer \`inspect_tool\` plus \`invoke_deferred_tool\`.
 
 Before writing a \`code_exec\` script:
 1. Use \`search_tool(..., caller="code_exec")\` when you need to discover MCP tools that may not appear in the context
 2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
 3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
 
+For \`caller="code_exec"\`:
+- \`inspect_tool\` is MCP-only.
+- Do not inspect or plan around built-in tools, filesystem tools, browser tools, memory tools, scheduler tools, task tools, or saved code_exec tools.
+
 Call MCP tools with:
-- \`await mcp.$call("provider__tool_name", args)\`
+- \`await mcp.$call("mcp__provider__tool_name", args)\`
+
+Inside \`code_exec\`, only call MCP tools through \`mcp.$call(...)\`.
+Do not attempt to call built-in tools or Node.js APIs from \`code_exec\`.
 
 Execution guidance:
 - Do **not** use \`Promise.all(...)\`; await them one by one in order.
@@ -284,8 +291,15 @@ Before writing a \`code_exec\` script:
 2. Use \`inspect_tool(..., caller="code_exec")\` for the exact MCP tools you plan to call
 3. Read \`loaded_tools[].schema\`, \`loaded_tools[].code_exec.call_example\`, and \`loaded_tools[].code_exec.result_example\`
 
+For \`caller="code_exec"\`:
+- \`inspect_tool\` is MCP-only.
+- Do not inspect or plan around built-in tools, filesystem tools, browser tools, memory tools, scheduler tools, task tools, or saved code_exec tools.
+
 Call MCP tools with:
-- \`await mcp.$call("provider__tool_name", args)\`
+- \`await mcp.$call("mcp__provider__tool_name", args)\`
+
+Inside \`code_exec\`, only call MCP tools through \`mcp.$call(...)\`.
+Do not attempt to call built-in tools or Node.js APIs from \`code_exec\`.
 
 Execution guidance:
 - Do **not** use \`Promise.all(...)\`; await them one by one in order.

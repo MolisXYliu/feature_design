@@ -12,7 +12,7 @@ const segmenter = new Segment()
 segmenter.useDefault()
 
 type ToolSearchSource = "mcp" | "saved_tool"
-export type ToolSearchCaller = "invoke_discovered_tool" | "code_exec"
+export type ToolSearchCaller = "invoke_deferred_tool" | "code_exec"
 type ToolSearchFieldBucket = "toolId" | "toolName" | "providerDisplayName" | "providerAlias" | "dependency"
 
 interface SearchFieldTerms {
@@ -223,7 +223,7 @@ export function buildMcpToolSearchDoc(
   return {
     toolId: tool.toolId,
     source: "mcp",
-    allowCallers: options?.allowCallers ?? ["invoke_discovered_tool", "code_exec"],
+    allowCallers: options?.allowCallers ?? ["invoke_deferred_tool", "code_exec"],
     description: tool.description,
     visibility: tool.visibility,
     exactPhrases: {
@@ -256,7 +256,7 @@ export function buildSavedToolSearchDoc(tool: SavedCodeExecTool): ToolSearchDoc 
   return {
     toolId: tool.toolId,
     source: "saved_tool",
-    allowCallers: ["invoke_discovered_tool"],
+    allowCallers: ["invoke_deferred_tool"],
     description: tool.description,
     exactPhrases: {
       toolId: toolIdTerms.exactPhrases,

@@ -12,6 +12,7 @@ export interface McpCapabilitySeed {
 }
 
 const RESERVED_HELPER_NAMES = new Set(["$call", "$meta"])
+const MCP_TOOL_PREFIX = "mcp"
 
 function splitIntoTokens(value: string): string[] {
   const normalized = value
@@ -64,7 +65,11 @@ function makeUniqueAlias(baseAlias: string, used: Set<string>, fallback: string)
 }
 
 export function toMcpToolId(providerAlias: string, displayMethodAlias: string): string {
-  return providerAlias ? `${providerAlias}__${displayMethodAlias}` : displayMethodAlias
+  const normalizedProviderAlias = providerAlias.trim() ? ensureIdentifier(providerAlias, "provider") : ""
+  const normalizedMethodAlias = ensureIdentifier(displayMethodAlias, "tool")
+  return normalizedProviderAlias
+    ? `${MCP_TOOL_PREFIX}__${normalizedProviderAlias}__${normalizedMethodAlias}`
+    : `${MCP_TOOL_PREFIX}__${normalizedMethodAlias}`
 }
 
 export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilityTool[] {
@@ -99,6 +104,7 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
   }
 
   const resolved = new Map<string, McpCapabilityTool>()
+  const usedToolIds = new Set<string>()
 
   for (const [providerKey, providerTools] of Array.from(toolsByProvider.entries()).sort(([left], [right]) => left.localeCompare(right))) {
     const providerAlias = providerAliasByKey.get(providerKey) ?? ""
@@ -110,15 +116,26 @@ export function buildCapabilityAliases(seeds: McpCapabilitySeed[]): McpCapabilit
       }
       return left.toolName.localeCompare(right.toolName)
     })) {
-      const displayMethodAlias = makeUniqueAlias(
+      const baseDisplayMethodAlias = makeUniqueAlias(
         toSnakeCase(seed.toolName, "tool"),
         usedDisplayAliases,
         "tool"
       )
+      let displayMethodAlias = baseDisplayMethodAlias
+      let toolId = toMcpToolId(providerAlias, displayMethodAlias)
+      let suffix = 2
+
+      while (usedToolIds.has(toolId)) {
+        displayMethodAlias = `${baseDisplayMethodAlias}_${suffix}`
+        toolId = toMcpToolId(providerAlias, displayMethodAlias)
+        suffix += 1
+      }
+
+      usedToolIds.add(toolId)
 
       resolved.set(seed.capabilityId, {
         capabilityId: seed.capabilityId,
-        toolId: toMcpToolId(providerAlias, displayMethodAlias),
+        toolId,
         providerKey: seed.providerKey,
         providerAlias,
         providerDisplayName: seed.providerDisplayName,

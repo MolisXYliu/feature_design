@@ -48,7 +48,7 @@ Rules:
 - Do not mention code_exec, saved tools, JavaScript, wrappers, or promotion in tool_name or description.`
 
 const codeExecSchema = z.object({
-  code: z.string().describe("JavaScript async function-body code for one ad hoc script run. Declare local variables directly inside the code, then call MCP tools with mcp.$call(tool_id, args). Example: const targetUrl = \"https://www.example.com\"; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\"chrome__chrome_navigate\", navigateArgs);")
+  code: z.string().describe("JavaScript async function-body code for one ad hoc script run. Declare local variables directly inside the code, then call MCP tools with mcp.$call(tool_id, args). Example: const targetUrl = \"https://www.example.com\"; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\"mcp__chrome__chrome_navigate\", navigateArgs);")
 })
 
 interface CodeExecToolContext {
@@ -445,11 +445,12 @@ export function createCodeExecTool(context: CodeExecToolContext) {
     {
       name: "code_exec",
       description:
-        "Run a JavaScript script body that can call MCP tools through mcp.$call(tool_id, args). " +
+        "Run a JavaScript script body that can call only MCP tools through mcp.$call(tool_id, args). " +
         "This tool only accepts a single code string for ad hoc execution. Write any run-specific local constants directly inside the script body. " +
+        "Do not attempt to call built-in agent tools or Node.js APIs from inside the script. " +
         "The tool always returns a single string result. " +
         "Example input: {\n" +
-        "  \"code\": \"const targetUrl = \\\"https://www.example.com\\\"; const textContent = true; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\\\"chrome__chrome_navigate\\\", navigateArgs); if (!navigateResult.ok) { throw new Error(\\\"chrome__chrome_navigate failed: \\\" + navigateResult.error); } const contentArgs = { textContent }; const contentResult = await mcp.$call(\\\"chrome__chrome_get_web_content\\\", contentArgs); if (!contentResult.ok) { throw new Error(\\\"chrome__chrome_get_web_content failed: \\\" + contentResult.error); } return { opened_url: targetUrl, navigate_result: navigateResult.data, page_content: contentResult.data };\"\n" +
+        "  \"code\": \"const targetUrl = \\\"https://www.example.com\\\"; const textContent = true; const navigateArgs = { url: targetUrl, newWindow: false }; const navigateResult = await mcp.$call(\\\"mcp__chrome__chrome_navigate\\\", navigateArgs); if (!navigateResult.ok) { throw new Error(\\\"mcp__chrome__chrome_navigate failed: \\\" + navigateResult.error); } const contentArgs = { textContent }; const contentResult = await mcp.$call(\\\"mcp__chrome__chrome_get_web_content\\\", contentArgs); if (!contentResult.ok) { throw new Error(\\\"mcp__chrome__chrome_get_web_content failed: \\\" + contentResult.error); } return { opened_url: targetUrl, navigate_result: navigateResult.data, page_content: contentResult.data };\"\n" +
         "}",
       schema: codeExecSchema
     }
