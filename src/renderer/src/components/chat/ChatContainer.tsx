@@ -49,7 +49,6 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
-import DisplayDiffTest from "./DisplayDiffTest"
 import { UpdateDialog } from "../update/UpdateDialog"
 import { toast } from "sonner"
 
