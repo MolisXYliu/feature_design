@@ -40,6 +40,16 @@ export interface RoutingResultState {
   routeReason: string
 }
 
+// Model retry indicator — shown inline in chat while the fetch layer is
+// retrying a transient model error. Cleared when the retry resolves.
+export interface ModelRetryState {
+  attempt: number
+  maxRetries: number
+  reason: string
+  delayMs: number
+  startedAt: Date
+}
+
 // Per-thread state (persisted/restored from checkpoints)
 export interface ThreadState {
   messages: Message[]
@@ -58,6 +68,7 @@ export interface ThreadState {
   scheduledTaskLoading: boolean
   scheduledTaskId: string | null
   routingResult: RoutingResultState | null
+  modelRetry: ModelRetryState | null
 }
 
 // Stream instance type
@@ -123,7 +134,8 @@ const createDefaultThreadState = (): ThreadState => ({
   draftInput: "",
   scheduledTaskLoading: false,
   scheduledTaskId: null,
-  routingResult: null
+  routingResult: null,
+  modelRetry: null
 })
 
 const defaultStreamData: StreamData = {
@@ -161,6 +173,11 @@ interface CustomEventData {
   resolvedModelId?: string
   resolvedTier?: "premium" | "economy"
   routeReason?: string
+  // model_retry fields
+  attempt?: number
+  maxRetries?: number
+  reason?: string
+  delayMs?: number
 }
 
 // Component that holds a stream and notifies subscribers
@@ -384,7 +401,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     (threadId: string, error: Error) => {
       console.error("[ThreadContext] Stream error:", { threadId, error })
       const userFriendlyMessage = parseErrorMessage(error)
-      updateThreadState(threadId, () => ({ error: userFriendlyMessage }))
+      updateThreadState(threadId, () => ({ error: userFriendlyMessage, modelRetry: null }))
     },
     [parseErrorMessage, updateThreadState]
   )
@@ -450,6 +467,22 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
               currentModel: data.resolvedModelId!
             }))
           }
+          break
+        case "model_retry":
+          if (typeof data.attempt === "number" && typeof data.maxRetries === "number") {
+            updateThreadState(threadId, () => ({
+              modelRetry: {
+                attempt: data.attempt!,
+                maxRetries: data.maxRetries!,
+                reason: data.reason ?? "",
+                delayMs: data.delayMs ?? 0,
+                startedAt: new Date()
+              }
+            }))
+          }
+          break
+        case "model_retry_clear":
+          updateThreadState(threadId, () => ({ modelRetry: null }))
           break
         case "token_usage":
           // Only update if we have meaningful token values (> 0)

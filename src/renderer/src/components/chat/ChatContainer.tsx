@@ -334,6 +334,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     draftInput: input,
     scheduledTaskLoading,
     scheduledTaskId,
+    modelRetry,
     setTodos,
     setPendingApproval,
     appendMessage,
@@ -1886,6 +1887,19 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
 
             {/* Orchestrator standalone approval bar moved outside ScrollArea — see below */}
+            {/* Model retry indicator — shown when the fetch layer is retrying a transient error */}
+            {modelRetry && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50/60 dark:border-amber-500/40 dark:bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                <span className="inline-block size-3 mt-0.5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span>
+                    模型暂时不可用（{modelRetry.reason}），正在重试 {modelRetry.attempt}/{modelRetry.maxRetries}
+                    {modelRetry.delayMs > 0 && <>（等待 {Math.round(modelRetry.delayMs / 100) / 10}s）</>}
+                    …
+                  </span>
+                </div>
+              </div>
+            )}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
