@@ -124,18 +124,20 @@ jobs:
       # 不能沉默出坏包 —— 这是过去 node-pty + glibc 事故的根因。
       - name: Verify glibc symbol ceiling <= 2.28
         run: |
-          set -eux
+          set -euxo pipefail
           check_glibc() {
             local file=$1
             local max
+            # 不加 || true:依赖 pipefail,objdump/grep/sort/tail 任一环失败
+            # 都直接 trip set -e,stderr 保留真实错误(比如 "not a dynamic object"),
+            # 比落到空值兜底分支报 "no GLIBC symbols" 这种二阶错误信息更易定位。
+            # pty.node 一定有 GLIBC_* 符号,grep 不会空匹配触发误报。
             max=$(objdump -T "$file" \
               | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
               | sort -V \
-              | tail -n1 || true)
+              | tail -n1)
             echo "$file -> max GLIBC symbol: ${max:-<none>}"
-            # pty.node 必须 dlopen libc 调 forkpty,不可能没有 GLIBC_* 符号。
-            # 若 grep 不到,更可能是 objdump 失败或文件损坏/不是 ELF,
-            # 必须直接报错而不是静默放过。
+            # 兜底:即便上面都成功了,空值还是非法状态,显式报错。
             if [ -z "$max" ]; then
               echo "ERROR: no GLIBC symbols found in $file — file may be corrupt or not a Linux ELF"
               exit 1
@@ -271,17 +273,33 @@ jobs:
           name: node-pty-linux-x64-glibc228
           path: node_modules/node-pty/build/Release/
 
+      # 显式确保 binutils (objdump) 可用。ubuntu-latest 当前预装 binutils,
+      # 但这是 runner image 的隐式契约,未来精简可能让 objdump 消失,
+      # 让后面两个 verify 步骤静默炸。这里用 if 显式判断(避免 || && 优先级陷阱
+      # 导致无论是否存在都跑 apt-get)。
+      - name: Ensure binutils (objdump) available
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! command -v objdump >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y binutils
+          fi
+
       # 二次 glibc 校验,防止 artifact 下载过程中被篡改或和错 job 串了。
       # pty.node 是 .so,不需要 execute bit,所以不做 chmod。
       - name: Verify downloaded pty.node
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           ls -la node_modules/node-pty/build/Release/
           file=node_modules/node-pty/build/Release/pty.node
+          # 不加 || true:依赖 pipefail 让 objdump/grep 真实失败直接 trip set -e,
+          # 错误信息保留在 stderr,比落到空值兜底分支更易定位根因。
           max=$(objdump -T "$file" \
             | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-            | sort -V | tail -n1 || true)
+            | sort -V | tail -n1)
           echo "$file -> max GLIBC: ${max:-<none>}"
           if [ -z "$max" ]; then
             echo "ERROR: no GLIBC symbols in $file after download — artifact likely corrupt"
@@ -327,18 +345,28 @@ jobs:
       # 就说明跑起来用的是 manylinux 编的那份,风险被压住。
       - name: Verify packaged pty.node matches manylinux artifact
         if: matrix.platform == 'linux'
+        shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           src="node_modules/node-pty/build/Release/pty.node"
           # electron-builder Linux 默认输出目录是 dist/linux-unpacked,
           # asarUnpack 把 node-pty 展到 resources/app.asar.unpacked/
-          packed=$(find dist/linux-unpacked -type f -name pty.node \
-                   -path '*/node-pty/build/Release/pty.node' | head -n1)
-          if [ -z "$packed" ]; then
+          # 用 mapfile 收集所有匹配,要求恰好 1 份 —— 防御 electron-builder 未来
+          # 版本同时把 node-pty 放到 asarUnpack + extraResources 等多处时,
+          # head -n1 静默只取第一份导致 SHA 对比放过另一份的边缘情况。
+          mapfile -t packed_list < <(find dist/linux-unpacked -type f -name pty.node \
+                                     -path '*/node-pty/build/Release/pty.node')
+          if [ "${#packed_list[@]}" -eq 0 ]; then
             echo "ERROR: pty.node not found under dist/linux-unpacked/ — asarUnpack config drift?"
             find dist/linux-unpacked -type f -name pty.node || true
             exit 1
           fi
+          if [ "${#packed_list[@]}" -gt 1 ]; then
+            echo "ERROR: found ${#packed_list[@]} pty.node copies under dist/linux-unpacked/ — expected exactly 1"
+            printf '  %s\n' "${packed_list[@]}"
+            exit 1
+          fi
+          packed="${packed_list[0]}"
           echo "Source  : $src"
           echo "Packaged: $packed"
           src_sha=$(sha256sum "$src" | awk '{print $1}')
@@ -351,10 +379,11 @@ jobs:
             echo "       Check: --config.npmRebuild=false effective? afterPack hook?"
             exit 1
           fi
-          # 最后再对打包后的 pty.node 跑一次 objdump glibc 校验,彻底闭环
+          # 最后再对打包后的 pty.node 跑一次 objdump glibc 校验,彻底闭环。
+          # 不加 || true:依赖 pipefail 让真实失败直接 trip set -e。
           max=$(objdump -T "$packed" \
             | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-            | sort -V | tail -n1 || true)
+            | sort -V | tail -n1)
           echo "$packed -> max GLIBC: ${max:-<none>}"
           if [ -z "$max" ]; then
             echo "ERROR: no GLIBC symbols in packaged pty.node"
