@@ -21,6 +21,8 @@ interface ElectronAPI {
   openExternal: Promise
   openLoginWindow: () => void
   closeLoginWindow: () => void
+  openLoginPage: () => void
+  closeLoginPage: () => void
   onNotifyMsg: (callback: (msg: string) => void) => void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void

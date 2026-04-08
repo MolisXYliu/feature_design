@@ -23,6 +23,8 @@ const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
   openLoginWindow: () => ipcRenderer.invoke("open-login-window"),
   closeLoginWindow: () => ipcRenderer.invoke("close-login-window"),
+  openLoginPage: () => ipcRenderer.invoke("open-login-page"),
+  closeLoginPage: () => ipcRenderer.invoke("close-login-page"),
   onNotifyMsg: (callback: (msg: string) => void) => {
     ipcRenderer.on("notify-login-msg", (_event, data) => {
       callback(data)

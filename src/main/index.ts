@@ -392,6 +392,21 @@ if (!gotTheLock) {
       }
     })
 
+    ipcMain.handle("open-login-page", async () => {
+      if(mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(`https://oa-auth.paas.${import.meta.env.VITE_LOGIN_PT}.com/auth/sso-login` +
+          "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+          "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.${import.meta.env.VITE_LOGIN_PT}.cn/login.html`) +
+          "&response_type=code")
+      }
+    })
+
+    ipcMain.handle("close-login-page", async () => {
+      if(mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+      }
+    })
+
     createWindow()
 
     // Run post-update self-check before anything else
