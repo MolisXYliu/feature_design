@@ -91,7 +91,7 @@
           ]
         }
       ],
-      "extraArgs": [
+      "executableArgs": [
         "--no-sandbox"
       ]
     },
