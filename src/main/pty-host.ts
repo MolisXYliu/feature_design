@@ -122,7 +122,19 @@ function getShell(): string {
       `Please install Git for Windows: https://git-scm.com/download/win`
     )
   } else {
-    cachedShell = process.env.SHELL || "/bin/zsh"
+    // $SHELL 在 systemd service / 部分 su 场景下可能为空，需要兜底探测。
+    // 顺序：$SHELL → /bin/zsh（macOS Catalina+ 默认存在）→ /bin/bash（Linux 主流默认）→ /bin/sh（POSIX 保底）
+    // 不硬编码 /bin/zsh：Linux 发行版默认通常不带 zsh，硬编码会让 ptySpawn 立刻 ENOENT。
+    const envShell = process.env.SHELL
+    if (envShell && existsSync(envShell)) {
+      cachedShell = envShell
+    } else if (existsSync("/bin/zsh")) {
+      cachedShell = "/bin/zsh"
+    } else if (existsSync("/bin/bash")) {
+      cachedShell = "/bin/bash"
+    } else {
+      cachedShell = "/bin/sh"
+    }
   }
   return cachedShell
 }
