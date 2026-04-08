@@ -10,13 +10,14 @@
  *   - silent failure logged as a warning
  *
  * Index design (server-side, single ES index `cowork-events`):
- *   eventId / eventName / eventCategory / eventTimestamp /
+ *   eventId / eventName / eventCategory / eventTime /
  *   userName / userIp / properties (dynamic)
  */
 
 import { randomUUID } from "crypto"
 import { getUserInfo } from "../storage"
 import { getLocalIP } from "../util/local-ip"
+import { nowIsoLocal } from "../util/local-time"
 
 // ─────────────────────────────────────────────────────────
 // Constants
@@ -38,13 +39,19 @@ export type EventCategory = "skill" | "git"
  * Matches the ES mapping defined in cowork-event-service-design.md.
  */
 export interface CoworkEvent {
-  eventId:        string
-  eventName:      string
-  eventCategory:  EventCategory
-  eventTimestamp: number          // unix epoch milliseconds
-  userName:       string
-  userIp:         string
-  properties?:    Record<string, unknown>
+  eventId:       string
+  eventName:     string
+  eventCategory: EventCategory
+  /**
+   * ISO 8601 timestamp anchored to the local timezone, e.g.
+   * "2026-04-08T10:30:15.123+08:00". Preserves the offset so ES (and any
+   * other parser) can resolve it to an absolute instant, while remaining
+   * human-readable in the user's local time.
+   */
+  eventTime:     string
+  userName:      string
+  userIp:        string
+  properties?:   Record<string, unknown>
 }
 
 export interface IEventReporter {
@@ -136,6 +143,8 @@ export function getEventReporter(): IEventReporter {
  *
  * IP is obtained via the shared `getLocalIP()` util — same source as the
  * runtime IP exposed to the renderer / used elsewhere in the main process.
+ * Time is formatted via the shared `nowIsoLocal()` util so that traces and
+ * events use a consistent on-disk representation.
  */
 export function buildEvent(
   eventName: string,
@@ -144,12 +153,12 @@ export function buildEvent(
 ): CoworkEvent {
   const userInfo = getUserInfo()
   return {
-    eventId:        randomUUID(),
+    eventId:       randomUUID(),
     eventName,
     eventCategory,
-    eventTimestamp: Date.now(),
-    userName:       userInfo?.userName || "unknown",
-    userIp:         getLocalIP(),
+    eventTime:     nowIsoLocal(),
+    userName:      userInfo?.userName || "unknown",
+    userIp:        getLocalIP(),
     properties
   }
 }
