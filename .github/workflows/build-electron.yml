@@ -204,12 +204,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          npm install --include=optional
+          npm ci --include=optional
           if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
             Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
             Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-            Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
-            npm install --include=optional
+            npm ci --include=optional
           }
 
       # Linux 加 --ignore-scripts:跳过 package.json 的 postinstall (electron-rebuild
@@ -220,13 +219,10 @@ jobs:
       # Windows 那条保持默认 (不加 --ignore-scripts),因为 Windows 有 prebuild,
       # electron-rebuild 看到 prebuild 存在会空跑,无害。
       #
-      # ⚠️ 已知隐患 (这次 hotfix 不修):这里用的是 npm install 而不是 npm ci,
-      # fallback 路径还会 rm -rf package-lock.json 重新解析 semver。理论上可能
-      # 让这个 job 解析到的 node-pty 版本和 manylinux job (npm ci 严格按 lockfile)
-      # 不一致,导致 js 层和 native 层不匹配。实际风险被后面的
-      # "Verify packaged pty.node matches manylinux artifact" step 兜住 ——
-      # 它做 SHA256 对比,只要最终 deb 里的 pty.node 字节 = manylinux artifact 字节,
-      # 就说明跑起来用的是正确版本。以后把两边都改成 npm ci 才是根治。
+      # Linux fallback 路径保持 npm install + rm -rf package-lock.json 兜底(rollup
+      # optional dep 丢失时),风险被后面 SHA256 对比步骤压住 —— 只要最终 deb 里的
+      # pty.node 字节 = manylinux artifact 字节就说明用的是正确版本。
+      # Windows 侧已改用 npm ci,lockfile 严格锁定,不再删 package-lock.json。
       - name: Install dependencies (Linux with optional deps fallback)
         if: runner.os == 'Linux'
         run: |
