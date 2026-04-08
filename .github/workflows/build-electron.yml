@@ -23,12 +23,13 @@ jobs:
   #
   # 解法:把"编译"和"打包"拆开。
   # - 这个 job 在 manylinux_2_28_x86_64 (AlmaLinux 8 base, glibc 2.28, gcc 14)
-  #   里只跑 @electron/rebuild,产出 pty.node + spawn-helper 两个文件,当
-  #   artifact 上传。glibc 2.28 刚好是 UOS V20 / 麒麟 V10 的 glibc 版本,
+  #   里只跑 @electron/rebuild,产出 pty.node (node-pty 1.1.0 的 Linux 分支
+  #   直接调 forkpty,不编 spawn-helper,只有这一个原生二进制需要出),
+  #   当 artifact 上传。glibc 2.28 刚好是 UOS V20 / 麒麟 V10 的 glibc 版本,
   #   ABI 前向兼容。
   # - 后面的 build job 在 ubuntu-latest 宿主上跑(因为 electron-builder 打 deb
   #   需要 fakeroot/dpkg,manylinux 是 rpm 系没有 dpkg,硬装很脏),
-  #   download artifact 后把两个二进制覆盖到 node_modules/node-pty/build/Release/,
+  #   download artifact 后把 pty.node 覆盖到 node_modules/node-pty/build/Release/,
   #   再跑 electron-builder。
   #
   # 为什么不用 manylinux2014 (CentOS 7 / glibc 2.17) 下限更低:
@@ -105,6 +106,10 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Electron version: ${VERSION}"
 
+      # node-pty 1.1.0 的 binding.gyp 只在 OS=="mac" 时编译 spawn-helper
+      # (src/unix/pty.cc 的 Linux 分支是 #else,直接 forkpty,不走 posix_spawn +
+      # helper 路径),所以 Linux build/Release/ 下只会有 pty.node 一个产物。
+      # 不要加 spawn-helper 的 test -f 检查,那会误红。
       - name: Rebuild node-pty against Electron headers
         run: |
           set -eux
@@ -112,9 +117,8 @@ jobs:
           echo "=== build/Release contents ==="
           ls -la node_modules/node-pty/build/Release/
           test -f node_modules/node-pty/build/Release/pty.node
-          test -f node_modules/node-pty/build/Release/spawn-helper
 
-      # 强校验:objdump 读两个二进制需要的 GLIBC_ 版本符号,取最大值。
+      # 强校验:objdump 读 pty.node 需要的 GLIBC_ 版本符号,取最大值。
       # 只要 <= 2.28 就说明能跑在 UOS V20 / 麒麟 V10 / Debian 10+ / Ubuntu 18.10+ 上。
       # 这一步 CI 红 = 编译环境漂了(比如基础镜像悄悄升级),必须人工介入,
       # 不能沉默出坏包 —— 这是过去 node-pty + glibc 事故的根因。
@@ -129,9 +133,9 @@ jobs:
               | sort -V \
               | tail -n1 || true)
             echo "$file -> max GLIBC symbol: ${max:-<none>}"
-            # pty.node 必须 dlopen libc 调 forkpty,spawn-helper 必须动态链接 libc,
-            # 两者都不可能没有 GLIBC_* 符号。若 grep 不到,更可能是 objdump 失败
-            # 或文件损坏/不是 ELF,必须直接报错而不是静默放过。
+            # pty.node 必须 dlopen libc 调 forkpty,不可能没有 GLIBC_* 符号。
+            # 若 grep 不到,更可能是 objdump 失败或文件损坏/不是 ELF,
+            # 必须直接报错而不是静默放过。
             if [ -z "$max" ]; then
               echo "ERROR: no GLIBC symbols found in $file — file may be corrupt or not a Linux ELF"
               exit 1
@@ -144,15 +148,14 @@ jobs:
             fi
           }
           check_glibc node_modules/node-pty/build/Release/pty.node
-          check_glibc node_modules/node-pty/build/Release/spawn-helper
 
+      # Linux 上 node-pty 的 C++ 代码直接调 forkpty,不走 spawn-helper 路径
+      # (仅 macOS 才用 helper),这里只需要上传 pty.node 一个产物。
       - name: Upload node-pty binaries
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-linux-x64-glibc228
-          path: |
-            node_modules/node-pty/build/Release/pty.node
-            node_modules/node-pty/build/Release/spawn-helper
+          path: node_modules/node-pty/build/Release/pty.node
           if-no-files-found: error
           retention-days: 7
 
@@ -247,50 +250,44 @@ jobs:
           test -f node_modules/node-pty/prebuilds/win32-x64/pty.node \
             || (echo "ERROR: node-pty win32-x64 prebuild missing" && exit 1)
 
-      # Linux 侧:下载上游 job 在 manylinux_2_28 里编好的 pty.node + spawn-helper,
+      # Linux 侧:下载上游 job 在 manylinux_2_28 里编好的 pty.node,
       # 放到 node_modules/node-pty/build/Release/。
       # 因为前面加了 --ignore-scripts 跳过 node-pty 的 install/postinstall,
       # node_modules/node-pty/build 目录不会被 npm 创建,显式 mkdir 让意图清晰、
       # 错误定位更早。actions/download-artifact@v4 本身也会 mkdir -p,这里是双保险。
+      # 注意:Linux 不需要 spawn-helper(node-pty 的 Linux 分支直接用 forkpty)。
       - name: Prepare node-pty build dir
         if: runner.os == 'Linux'
         run: mkdir -p node_modules/node-pty/build/Release
 
-      - name: Download node-pty binaries from manylinux_2_28 job
+      - name: Download node-pty binary from manylinux_2_28 job
         if: runner.os == 'Linux'
         uses: actions/download-artifact@v4
         with:
           name: node-pty-linux-x64-glibc228
           path: node_modules/node-pty/build/Release/
 
-      # actions/upload-artifact@v4 会丢 execute bit,spawn-helper 是可执行文件
-      # 必须恢复,否则运行时 posix_spawnp 会 EACCES。
-      # 顺便再跑一次 glibc 校验,防止 artifact 下载过程中被篡改或和错 job 串了。
-      - name: Restore exec bit + verify downloaded binaries
+      # 二次 glibc 校验,防止 artifact 下载过程中被篡改或和错 job 串了。
+      # pty.node 是 .so,不需要 execute bit,所以不做 chmod。
+      - name: Verify downloaded pty.node
         if: runner.os == 'Linux'
         run: |
           set -eux
-          chmod +x node_modules/node-pty/build/Release/spawn-helper
           ls -la node_modules/node-pty/build/Release/
-          check_glibc() {
-            local file=$1
-            local max
-            max=$(objdump -T "$file" \
-              | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-              | sort -V | tail -n1 || true)
-            echo "$file -> max GLIBC: ${max:-<none>}"
-            if [ -z "$max" ]; then
-              echo "ERROR: no GLIBC symbols in $file after download — artifact likely corrupt"
-              exit 1
-            fi
-            local ver=${max#GLIBC_}
-            if [ "$(printf '%s\n2.28\n' "$ver" | sort -V | tail -n1)" != "2.28" ]; then
-              echo "ERROR: $file requires $max after download, expected <= 2.28"
-              exit 1
-            fi
-          }
-          check_glibc node_modules/node-pty/build/Release/pty.node
-          check_glibc node_modules/node-pty/build/Release/spawn-helper
+          file=node_modules/node-pty/build/Release/pty.node
+          max=$(objdump -T "$file" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sort -V | tail -n1 || true)
+          echo "$file -> max GLIBC: ${max:-<none>}"
+          if [ -z "$max" ]; then
+            echo "ERROR: no GLIBC symbols in $file after download — artifact likely corrupt"
+            exit 1
+          fi
+          ver=${max#GLIBC_}
+          if [ "$(printf '%s\n2.28\n' "$ver" | sort -V | tail -n1)" != "2.28" ]; then
+            echo "ERROR: $file requires $max after download, expected <= 2.28"
+            exit 1
+          fi
 
       - name: Build
         run: npm run build
@@ -305,7 +302,7 @@ jobs:
       # --config.npmRebuild=false: electron-builder 默认会在打包阶段自动跑一次
       # app-rebuild (@electron/rebuild) 对齐 Electron ABI,这会用宿主 ubuntu-24.04
       # 的工具链重新编 node-pty,把我们前面从 manylinux_2_28 artifact 拿来的干净
-      # pty.node + spawn-helper 覆盖成 glibc 2.39 版本 —— 整个修复路径就废了。
+      # pty.node 覆盖成 glibc 2.39 版本 —— 整个修复路径就废了。
       # 这里显式禁用。只影响 Linux,Windows 分支保持默认(Windows 有 nan prebuild,
       # 内置 rebuild 是锦上添花)。
       - name: Package (Linux x64)
@@ -350,43 +347,21 @@ jobs:
             echo "       Check: --config.npmRebuild=false effective? afterPack hook?"
             exit 1
           fi
-          # spawn-helper 也检查
-          src_sh="node_modules/node-pty/build/Release/spawn-helper"
-          packed_sh=$(find dist/linux-unpacked -type f -name spawn-helper \
-                      -path '*/node-pty/build/Release/spawn-helper' | head -n1)
-          if [ -z "$packed_sh" ]; then
-            echo "ERROR: spawn-helper not found under dist/linux-unpacked/"
+          # 最后再对打包后的 pty.node 跑一次 objdump glibc 校验,彻底闭环
+          max=$(objdump -T "$packed" \
+            | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | sort -V | tail -n1 || true)
+          echo "$packed -> max GLIBC: ${max:-<none>}"
+          if [ -z "$max" ]; then
+            echo "ERROR: no GLIBC symbols in packaged pty.node"
             exit 1
           fi
-          src_sha=$(sha256sum "$src_sh" | awk '{print $1}')
-          pkg_sha=$(sha256sum "$packed_sh" | awk '{print $1}')
-          echo "src spawn-helper SHA256:  $src_sha"
-          echo "pkg spawn-helper SHA256:  $pkg_sha"
-          if [ "$src_sha" != "$pkg_sha" ]; then
-            echo "ERROR: packaged spawn-helper differs from manylinux artifact"
+          ver=${max#GLIBC_}
+          if [ "$(printf '%s\n2.28\n' "$ver" | sort -V | tail -n1)" != "2.28" ]; then
+            echo "ERROR: packaged pty.node requires $max, exceeds 2.28 floor"
             exit 1
           fi
-          # 最后再对打包后的二进制跑一次 objdump glibc 校验,彻底闭环
-          check_glibc() {
-            local file=$1
-            local max
-            max=$(objdump -T "$file" \
-              | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-              | sort -V | tail -n1 || true)
-            echo "$file -> max GLIBC: ${max:-<none>}"
-            if [ -z "$max" ]; then
-              echo "ERROR: no GLIBC symbols in packaged $file"
-              exit 1
-            fi
-            local ver=${max#GLIBC_}
-            if [ "$(printf '%s\n2.28\n' "$ver" | sort -V | tail -n1)" != "2.28" ]; then
-              echo "ERROR: packaged $file requires $max, exceeds 2.28 floor"
-              exit 1
-            fi
-          }
-          check_glibc "$packed"
-          check_glibc "$packed_sh"
-          echo "OK: packaged Linux native binaries match manylinux artifact and pass glibc check"
+          echo "OK: packaged Linux pty.node matches manylinux artifact and passes glibc check"
 
       - name: Package (Other platforms)
         if: matrix.platform != 'linux'
