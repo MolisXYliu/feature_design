@@ -85,6 +85,7 @@ import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
 import { CloudTraceReporter } from "./agent/trace/cloud-reporter"
+import { setEventReporter, HttpEventReporter } from "./services/event-reporter"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -94,7 +95,6 @@ import { closeRuntime } from "./agent/runtime"
 import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "./updater"
 import { runStartupSelfCheck } from "./updater/rollback"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
-import  os from "os";
 import { getLocalIP } from "./net-utils"
 
 let mainWindow: BrowserWindow | null = null
@@ -292,6 +292,10 @@ if (!gotTheLock) {
     if (traceBaseUrl) {
       setTraceReporter(new CloudTraceReporter(traceBaseUrl))
       console.log("[Main] CloudTraceReporter registered, uploading traces to:", traceBaseUrl)
+
+      // Operational telemetry events (skill / git) share the same base URL.
+      setEventReporter(new HttpEventReporter(traceBaseUrl))
+      console.log("[Main] HttpEventReporter registered, sending events to:", traceBaseUrl)
     }
 
     // Initialize database

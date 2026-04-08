@@ -1,4 +1,5 @@
 import { IpcMain, BrowserWindow } from "electron"
+import { nowIsoLocal } from "../util/local-time"
 import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { Command } from "@langchain/langgraph"
 import {
@@ -592,7 +593,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
         status,
         errorMessage,
         usedSkills: skillUsageDetector.getUsedSkillNames(),
-        finishedAt: new Date().toISOString()
+        finishedAt: nowIsoLocal()
       })
 
       const context = buildSkillProposalWindowContext(snapshotSkillProposalWindow(threadId))
@@ -1041,7 +1042,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
               const llmNodeId = tracer.beginLlmNode({
                 messageId: aiMsgId,
-                startedAt: new Date().toISOString(),
+                startedAt: nowIsoLocal(),
                 input: inputSlice,
                 metadata: {
                   toolCallCount: outputToolCalls.length
@@ -1058,7 +1059,7 @@ export function registerAgentHandlers(ipcMain: IpcMain): void {
 
               tracer.recordModelCall({
                 messageId: aiMsgId,
-                startedAt: new Date().toISOString(),
+                startedAt: nowIsoLocal(),
                 inputMessages: inputSlice,
                 outputMessage: {
                   role: "assistant",
