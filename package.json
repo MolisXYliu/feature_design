@@ -1,5 +1,5 @@
 {
-  "name": "CMBDevClaw",
+  "name": "cmbdevclaw",
   "version": "0.2.0",
   "description": "CMBDevClaw description",
   "author": {
@@ -47,6 +47,7 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux --x64",
     "server:cache": "node scripts/server-cache.js",
     "postinstall": "electron-rebuild -f -w node-pty",
     "env:filter:setup": "node scripts/setup-env-filter.mjs",
@@ -82,7 +83,10 @@
       "icon": "build/icon.ico"
     },
     "linux": {
-      "target": "dir"
+      "target": "deb",
+      "arch": [
+        "x64"
+      ]
     },
     "extraResources": [
       {
