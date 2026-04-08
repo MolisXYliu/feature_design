@@ -172,7 +172,11 @@ jobs:
   build:
     needs: rebuild-node-pty-linux
     strategy:
-      # 一个平台失败时另一个继续跑,方便定位
+      # matrix 内部一个平台失败时另一个继续跑,方便定位。
+      # 注意:这只影响 matrix 内部,不影响 needs 链 —— rebuild-node-pty-linux 失败时
+      # Windows/Linux 两个条目都会被 skip(这是 needs 的固定行为,fail-fast 管不到)。
+      # 接受这个代价换 workflow 简洁,若未来 manylinux job 稳定性差到影响 Windows
+      # 迭代,再考虑拆 build-windows / build-linux 两个独立 job。
       fail-fast: false
       matrix:
         include:
@@ -219,18 +223,22 @@ jobs:
       # Windows 那条保持默认 (不加 --ignore-scripts),因为 Windows 有 prebuild,
       # electron-rebuild 看到 prebuild 存在会空跑,无害。
       #
-      # Linux fallback 路径保持 npm install + rm -rf package-lock.json 兜底(rollup
-      # optional dep 丢失时),风险被后面 SHA256 对比步骤压住 —— 只要最终 deb 里的
-      # pty.node 字节 = manylinux artifact 字节就说明用的是正确版本。
-      # Windows 侧已改用 npm ci,lockfile 严格锁定,不再删 package-lock.json。
+      # 为什么必须用 npm ci 而不是 npm install:
+      # manylinux job 用 npm ci 严格按 lockfile 装,编出来的 pty.node 对应 lockfile
+      # 锁定的 node-pty 版本(当前 1.1.0)。如果这边用 npm install,它会按 ^1.1.0
+      # 解析 semver,若 registry 发布了 1.1.1/1.2.0,主 job 的 JS 层会 require 新版
+      # node-pty,再去 load 老版本的 pty.node —— JS/native ABI 错配,运行时崩。
+      # 后面的 SHA256 对比只能证明二进制字节是 manylinux 编的那份,无法防御 JS 层
+      # 版本漂移。所以这里必须 npm ci,fallback 也用 npm ci(保留 lockfile,只删
+      # node_modules),和 manylinux job 完全同步。
       - name: Install dependencies (Linux with optional deps fallback)
         if: runner.os == 'Linux'
         run: |
-          npm install --ignore-scripts --include=optional
+          npm ci --ignore-scripts --include=optional
           if [ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]; then
             echo "Missing @rollup/rollup-linux-x64-gnu, retry with clean install..."
-            rm -rf node_modules package-lock.json
-            npm install --ignore-scripts --include=optional
+            rm -rf node_modules
+            npm ci --ignore-scripts --include=optional
           fi
           # no AppImage tooling required for deb-only builds
 
