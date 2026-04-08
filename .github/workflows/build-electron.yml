@@ -65,6 +65,20 @@ jobs:
             rm -rf node_modules package-lock.json
             npm install --include=optional
           fi
+          # Install tools needed to manipulate AppImage and squashfs during CI so we can set SUID on chrome-sandbox
+          sudo apt-get update -y
+          sudo apt-get install -y squashfs-tools libarchive-tools || true
+          # Download appimagetool (used to repackage extracted AppImage) to /usr/local/bin
+          if [ ! -x /usr/local/bin/appimagetool ]; then
+            echo "Downloading appimagetool..."
+            tmpfile=$(mktemp)
+            curl -sSL "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage" -o "$tmpfile" || true
+            if [ -f "$tmpfile" ]; then
+              chmod +x "$tmpfile"
+              sudo mv "$tmpfile" /usr/local/bin/appimagetool || sudo cp "$tmpfile" /usr/local/bin/appimagetool || true
+              sudo chmod +x /usr/local/bin/appimagetool || true
+            fi
+          fi
 
       - name: Build
         run: npm run build
@@ -81,12 +95,43 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Remove chrome-sandbox (Linux)
+      - name: Fix chrome-sandbox permissions (Linux)
         if: matrix.platform == 'linux'
         run: |
-          # 删除沙箱文件，避免 SUID sandbox 权限问题
-          find dist -name "chrome-sandbox" -type f -delete || true
-          echo "chrome-sandbox removed from Linux build"
+          set -e
+          echo "Setting setuid on any chrome-sandbox found in dist/...-unpacked"
+          # Set the SUID bit on any chrome-sandbox inside unpacked directories (dir target / linux-unpacked)
+          find dist -type f -name "chrome-sandbox" -print0 | xargs -0 -r chmod 4755 || true
+
+          # Try to fix chrome-sandbox inside AppImage if one was produced
+          for app in dist/*.AppImage; do
+            if [ -f "$app" ]; then
+              echo "Found AppImage: $app. Attempting to extract, fix permissions, and repackage if possible."
+              # --appimage-extract will create squashfs-root in CWD; run in tempdir
+              tmp=$(mktemp -d)
+              pushd "$tmp" >/dev/null
+              "$app" --appimage-extract >/dev/null 2>&1 || true
+              if [ -d squashfs-root ]; then
+                find squashfs-root -type f -name "chrome-sandbox" -exec chmod 4755 {} \; || true
+                if command -v appimagetool >/dev/null 2>&1; then
+                  echo "Repacking AppImage using appimagetool"
+                  appimagetool squashfs-root "${app}.fixed" >/dev/null || true
+                  if [ -f "${app}.fixed" ]; then
+                    mv "${app}.fixed" "$app"
+                    chmod +x "$app"
+                  fi
+                else
+                  echo "appimagetool not found; fixed permissions inside extracted AppImage but cannot repackage. Consider installing appimagetool in the runner or ensure chrome-sandbox is SUID prior to AppImage creation."
+                fi
+                rm -rf squashfs-root
+              else
+                echo "Could not extract AppImage $app"
+              fi
+              popd >/dev/null
+              rm -rf "$tmp"
+            fi
+          done
+          echo "chrome-sandbox permission fix completed (if applicable)"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
