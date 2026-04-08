@@ -380,7 +380,7 @@ function App(): React.JSX.Element {
   if(!bus){
     return (
       <div className="flex h-screen items-center justify-center bg-background">
-        <div className="text-muted-foreground">目前仅供零售客户经营开发团队使用，暂不对外提供服务...,有任何疑问请联系 范雄/80231855</div>
+        <div className="text-muted-foreground">目前仅供零售客户经营开发团队使用，暂不对外提供服务...,有任何疑问请联系</div>
       </div>
     )
   }
