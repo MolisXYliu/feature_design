@@ -32,6 +32,7 @@ export function GitPanelView({
   const [error, setError] = useState<string | null>(null)
   const [submitAction, setSubmitAction] = useState<"commit" | "push" | null>(null)
   const [cardNumber, setCardNumber] = useState("")
+  const [commitType, setCommitType] = useState<"fix" | "feat" | "refactor" | "docs" | "style" | "test" | "chore">("fix")
   const [commitMessage, setCommitMessage] = useState("")
   const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [revertingFilePath, setRevertingFilePath] = useState<string | null>(null)
@@ -457,11 +458,13 @@ export function GitPanelView({
         deletions={state?.totals.deletions ?? 0}
         requiresCommitMetadata={hasPending}
         cardNumber={cardNumber}
+        commitType={commitType}
         commitMessage={commitMessage}
         onOpenChange={(open) => {
           if (!open) setSubmitAction(null)
         }}
         onCardNumberChange={setCardNumber}
+        onCommitTypeChange={setCommitType}
         onCommitMessageChange={setCommitMessage}
         onSubmit={(action) => {
           void runSubmit(action)
