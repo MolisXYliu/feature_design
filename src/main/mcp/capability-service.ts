@@ -2,7 +2,7 @@ import { createHash } from "crypto"
 import { join } from "path"
 import { MultiServerMCPClient } from "@langchain/mcp-adapters"
 import { buildMcpServerConfig } from "../ipc/mcp"
-import { getEnabledMcpConnectors, getPlugins, parseMcpJsonFile } from "../storage"
+import { getEnabledMcpConnectors, getPlugins, getUserInfo, parseMcpJsonFile } from "../storage"
 import type { PluginMcpServerConfig } from "../types"
 import { buildAliasMaps, buildCapabilityAliases, type McpCapabilitySeed } from "./aliasing"
 import type {
@@ -75,6 +75,8 @@ function buildPluginServerConfig(config: PluginMcpServerConfig): Record<string, 
 }
 
 function toConnectorSources(): CapabilitySource[] {
+  const userInfo = getUserInfo()
+
   return getEnabledMcpConnectors().map((connector) => ({
     kind: "connector" as const,
     providerKey: connector.id,
@@ -82,7 +84,15 @@ function toConnectorSources(): CapabilitySource[] {
     visibility: connector.lazyLoad ? "lazy" : "eager",
     serverConfig: buildMcpServerConfig({
       url: connector.url,
-      advanced: connector.advanced
+      advanced: {
+        ...connector.advanced,
+        headers: {
+          ...connector.advanced?.headers,
+          yst_id_token: userInfo?.ystIdToken || "",
+          sap_id: userInfo?.sapId || "",
+          name: encodeURIComponent(userInfo?.userName || "")
+        }
+      }
     })
   }))
 }
