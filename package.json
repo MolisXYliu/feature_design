@@ -47,7 +47,7 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux --x64",
+    "dist:linux": "npm run build && electron-builder --linux --x64 --publish=never",
     "server:cache": "node scripts/server-cache.js",
     "postinstall": "electron-rebuild -f -w node-pty",
     "env:filter:setup": "node scripts/setup-env-filter.mjs",
@@ -83,9 +83,13 @@
       "icon": "build/icon.ico"
     },
     "linux": {
-      "target": "deb",
-      "arch": [
-        "x64"
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "extraResources": [

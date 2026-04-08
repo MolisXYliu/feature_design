@@ -77,22 +77,17 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Package
-        run: npx electron-builder --${{ matrix.platform == 'linux' && 'linux deb' || matrix.platform }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Package (Linux x64)
         if: matrix.platform == 'linux'
         run: |
-          npx electron-builder --linux deb --x64
+          npx electron-builder --linux deb --x64 --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package (Other platforms)
         if: matrix.platform != 'linux'
         run: |
-          npx electron-builder --${{ matrix.platform }}
+          npx electron-builder --${{ matrix.platform }} --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
