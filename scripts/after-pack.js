@@ -2,12 +2,12 @@
 const fs = require("fs")
 const path = require("path")
 
-module.exports = async function(context) {
+module.exports = async function (context) {
   try {
     // Only run on Linux. Allow override for local testing with FORCE_AFTER_PACK_LINUX=1
-    const isLinux = process.platform === 'linux' || process.env.FORCE_AFTER_PACK_LINUX === '1'
+    const isLinux = process.platform === "linux" || process.env.FORCE_AFTER_PACK_LINUX === "1"
     if (!isLinux) {
-      console.log('after-pack: not running because platform is', process.platform, "(only runs on 'linux')")
+      console.log(`after-pack: not running because platform is ${process.platform} (only runs on 'linux')`)
       return
     }
 

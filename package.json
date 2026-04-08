@@ -58,6 +58,7 @@
   },
   "build": {
     "appId": "com.cmbdevclaw.com",
+    "afterPack": "scripts/after-pack.js",
     "productName": "CMBDevClaw",
     "directories": {
       "output": "dist"
@@ -81,8 +82,7 @@
       "icon": "build/icon.ico"
     },
     "linux": {
-      "target": "dir",
-      "afterPack": "scripts/after-pack.js"
+      "target": "dir"
     },
     "extraResources": [
       {
