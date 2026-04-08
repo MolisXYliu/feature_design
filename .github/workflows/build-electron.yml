@@ -194,13 +194,35 @@ jobs:
           echo "OK: 所有带 install/postinstall 的包都在白名单内"
 
       # 从 package.json 读 build.electronVersion,避免两处硬编码不同步。
+      #
+      # 同时断言 build.electronVersion 的 major 和 lockfile 里实际 electron 的 major 一致。
+      # 背景:manylinux job 用 build.electronVersion 作为 @electron/rebuild 的 -v 参数,
+      # 编出来的 pty.node 的 NODE_MODULE_VERSION(ABI)取决于这个版本。主 build job
+      # 实际打包进 deb 的是 devDependencies.electron 的锁定版本(来自 lockfile)。
+      # 如果未来有人升级 devDependencies.electron 到 40.x 时忘了改 build.electronVersion,
+      # manylinux 会用 Electron 39 的 headers 编 pty.node,deb 里装 Electron 40 —>
+      # 运行时 NODE_MODULE_VERSION mismatch 直接崩,而 SHA256 对比兜不住(它只验字节一致)。
+      # 这里强制同 major,升级时两处必须同步,否则 CI 立即红。
       - name: Read Electron version from package.json
         id: electron
         run: |
-          set -eux
+          set -euxo pipefail
           VERSION=$(node -p "require('./package.json').build.electronVersion")
+          LOCKED=$(node -p "require('./package-lock.json').packages['node_modules/electron'].version")
+          echo "build.electronVersion: ${VERSION}"
+          echo "locked electron       : ${LOCKED}"
+          BUILD_MAJOR=${VERSION%%.*}
+          LOCKED_MAJOR=${LOCKED%%.*}
+          if [ "${BUILD_MAJOR}" != "${LOCKED_MAJOR}" ]; then
+            echo "ERROR: build.electronVersion (${VERSION}) 和 lockfile 里的 electron (${LOCKED}) major 不一致"
+            echo "  这会导致 manylinux job 用错误的 Electron headers 编 pty.node,"
+            echo "  运行时 NODE_MODULE_VERSION mismatch 崩掉。"
+            echo "  升级 Electron 时必须同步改 package.json:"
+            echo "    - devDependencies.electron"
+            echo "    - build.electronVersion"
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Electron version: ${VERSION}"
 
       # node-pty 1.1.0 的 binding.gyp 只在 OS=="mac" 时编译 spawn-helper
       # (src/unix/pty.cc 的 Linux 分支是 #else,直接 forkpty,不走 posix_spawn +
@@ -307,16 +329,16 @@ jobs:
         env:
           ENV_ENCRYPTION_KEY: ${{ secrets.ENV_ENCRYPTION_KEY }}
 
-      - name: Install dependencies (Windows with optional deps fallback)
+      # 用 npm ci 严格按 lockfile 装。
+      # 历史:曾经有 "缺 @rollup/rollup-win32-x64-msvc 就删 node_modules 重装" 的 fallback,
+      # 那是早期改用 npm install(增量路径有 optional deps 缺失 bug)时加的应急方案。
+      # 现在 lockfile 里已完整收录所有平台的 @rollup/* optional deps,npm ci 走的是
+      # "删 node_modules + 全新解析" 路径,不会触发那个增量 bug,fallback 恒不触发。
+      # 已删除死代码。
+      - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          npm ci --include=optional
-          if (-not (Test-Path "node_modules/@rollup/rollup-win32-x64-msvc")) {
-            Write-Host "Missing @rollup/rollup-win32-x64-msvc, retry with clean install..."
-            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-            npm ci --include=optional
-          }
+        run: npm ci --include=optional
 
       # Linux 加 --ignore-scripts:跳过 package.json 的 postinstall (electron-rebuild
       # -f -w node-pty),因为那条会在 ubuntu 24.04 宿主 (glibc 2.39) 上编一份坏的
@@ -338,18 +360,13 @@ jobs:
       # 解析 semver,若 registry 发布了 1.1.1/1.2.0,主 job 的 JS 层会 require 新版
       # node-pty,再去 load 老版本的 pty.node —— JS/native ABI 错配,运行时崩。
       # 后面的 SHA256 对比只能证明二进制字节是 manylinux 编的那份,无法防御 JS 层
-      # 版本漂移。所以这里必须 npm ci,fallback 也用 npm ci(保留 lockfile,只删
-      # node_modules),和 manylinux job 完全同步。
-      - name: Install dependencies (Linux with optional deps fallback)
+      # 版本漂移。所以这里必须 npm ci,和 manylinux job 完全同步。
+      #
+      # 同 Windows:历史上有 "缺 @rollup/rollup-linux-x64-gnu 就删重装" 的 fallback,
+      # 是 npm install 增量路径的 workaround,npm ci 下恒不触发,已删除。
+      - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: |
-          npm ci --ignore-scripts --include=optional
-          if [ ! -d "node_modules/@rollup/rollup-linux-x64-gnu" ]; then
-            echo "Missing @rollup/rollup-linux-x64-gnu, retry with clean install..."
-            rm -rf node_modules
-            npm ci --ignore-scripts --include=optional
-          fi
-          # no AppImage tooling required for deb-only builds
+        run: npm ci --ignore-scripts --include=optional
 
       # Windows 侧仅校验 prebuild 已存在,不重新编译。
       # node-pty 自带 prebuilds/win32-x64/pty.node 可直接用,rebuild 反而需要
@@ -446,10 +463,9 @@ jobs:
       # 实际打进去的 pty.node 和 node_modules/ 里从 manylinux artifact 下载的那份
       # 的 SHA256,不一致立即红。
       #
-      # 这一步也顺便防御了另一个隐患:主 build job 的 npm install fallback
-      # (rm -rf package-lock.json && npm install) 理论上可能让 node-pty 的 minor
-      # 版本和 manylinux job 不一致。只要最终 deb 里 pty.node 字节 = artifact 字节,
-      # 就说明跑起来用的是 manylinux 编的那份,风险被压住。
+      # 注:主 build job 已统一用 npm ci(不是 npm install),lockfile 锁死 node-pty
+      # 版本,JS 层和 manylinux job 编的 native 层版本天然一致,SHA256 对比是
+      # electron-builder 内部重写路径的兜底,不再兜 JS/native 版本漂移。
       - name: Verify packaged pty.node matches manylinux artifact
         if: matrix.platform == 'linux'
         shell: bash
