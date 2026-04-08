@@ -27,6 +27,8 @@ interface ElectronAPI {
   openExternal: Promise
   openLoginWindow: () => void
   closeLoginWindow: () => void
+  openLoginPage: () => void
+  closeLoginPage: () => void
   onNotifyMsg: (callback: (msg: string) => void) => void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
@@ -334,7 +336,7 @@ interface CustomAPI {
     selectDir: () => Promise<string | null>
     ack: (id: string, bytes: number) => void
     onData: (id: string, callback: (data: string, bytes: number) => void) => () => void
-    onExit: (id: string, callback: (code: number) => void) => () => void
+    onExit: (id: string, callback: (code: number | null) => void) => () => void
   }
   keepAwake: {
     get: () => Promise<boolean>

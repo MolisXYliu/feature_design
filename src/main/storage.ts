@@ -484,6 +484,7 @@ export interface UserInfoConfig {
   originOrgId?: string
   orgName?: string
   ystRefreshToken?: string
+  ystIdToken?: string
   ystCode?: string
   ystAccessToken?: string
 }

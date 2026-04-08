@@ -29,6 +29,8 @@ const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
   openLoginWindow: () => ipcRenderer.invoke("open-login-window"),
   closeLoginWindow: () => ipcRenderer.invoke("close-login-window"),
+  openLoginPage: () => ipcRenderer.invoke("open-login-page"),
+  closeLoginPage: () => ipcRenderer.invoke("close-login-page"),
   onNotifyMsg: (callback: (msg: string) => void) => {
     ipcRenderer.on("notify-login-msg", (_event, data) => {
       callback(data)
@@ -601,9 +603,10 @@ const api = {
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     },
-    onExit: (id: string, callback: (code: number) => void): (() => void) => {
+    onExit: (id: string, callback: (code: number | null) => void): (() => void) => {
       const channel = `terminal:exit:${id}`
-      const handler = (_: unknown, code: number): void => { callback(code) }
+      // code 为 null 时表示主进程因 host 通信故障/spawn 失败强制 tear-down，没有真实退出码
+      const handler = (_: unknown, code: number | null): void => { callback(code) }
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
     }

@@ -19,6 +19,16 @@ import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 import { initMMJ } from "../js/mmjUtils"
 import { Toaster } from "sonner"
+interface UserInfoConfig {
+  sapId: '',//8
+  ystId: '',//6
+  userName: '',
+  originOrgId: '',
+  orgName: '',
+  ystRefreshToken: '',
+  ystCode: '',
+  ystAccessToken: '',
+}
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -62,6 +72,7 @@ function App(): React.JSX.Element {
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
   const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
+  const [bus, setBus] = useState(true)
   const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
@@ -69,6 +80,40 @@ function App(): React.JSX.Element {
   const moduleInactiveClass = "text-foreground hover:bg-muted/45"
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
+
+  useEffect(() => {
+    initUser()
+  }, [])
+
+  const initUser = () => {
+    window.api.models.getUserInfo().then(user => {
+        const userInfo = user || {} as UserInfoConfig
+        if (userInfo.sapId) {
+          fetch(`https://archguardservice.paas.${import.meta.env.VITE_LOGIN_PT}.cn/cowork/login-info`, {
+              method: 'GET',
+              headers: {
+                  ystCode: userInfo.ystCode,
+                  ystRefreshToken: userInfo.ystRefreshToken || '',
+              }
+          }).then(async res => {
+              const result = await res.json()
+              if (result.returnCode === 'SUC0000') {
+                const resBody = result.body
+                const pathName = resBody.pathName||''
+                if(pathName.includes('零售客户经营开发团队')){
+                  setBus(true)
+                }else{
+                  setBus(false)
+                }
+              } else{
+                window.electron.openLoginPage()
+              }
+          })
+        } else {
+          window.electron.openLoginPage()
+        }
+    });
+  };
 
   useEffect(() => {
     document.addEventListener('click', (e) => {
@@ -328,6 +373,14 @@ function App(): React.JSX.Element {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
         <div className="text-muted-foreground">Initializing...</div>
+      </div>
+    )
+  }
+
+  if(!bus){
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="text-muted-foreground">目前仅供零售客户经营开发团队使用，暂不对外提供服务...,有任何疑问请联系 范雄</div>
       </div>
     )
   }

@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - feature/gitaction
   workflow_dispatch: # 支持手动触发
 
 concurrency:
@@ -65,18 +63,58 @@ jobs:
             rm -rf node_modules package-lock.json
             npm install --include=optional
           fi
+          # no AppImage tooling required for deb-only builds
+
+      # 显式为目标 Electron 版本重新编译 node-pty 原生模块。
+      # 背景：node-pty 1.1.0 的 npm 包只带 darwin/win32 的 prebuilds，linux-x64 没有预编译二进制，
+      # 必须现场编译出 build/Release/pty.node，否则运行时会报 "Failed to load native module: pty.node"。
+      # 不依赖 package.json 的 postinstall（"electron-rebuild -f -w node-pty"）：
+      # 那个二进制来自 electron-builder 的传递依赖 @electron/rebuild，postinstall 失败时
+      # npm 不总会当致命错误处理，曾经沉默出过没有 pty.node 的坏包。
+      # 这里显式跑，失败 CI 直接红；并用 Electron 的 headers 而非 Node 的，确保 ABI 对。
+      # -v 对应 package.json build.electronVersion；升级 electron 时两处需同步。
+      # Windows 不跑 rebuild：node-pty 自带 prebuilds/win32-x64/pty.node 可直接用，
+      # rebuild 反而需要 Visual Studio Build Tools，徒增失败面。
+      - name: Rebuild node-pty for Electron (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          npx --yes @electron/rebuild -f -w node-pty -v 39.8.0
+          echo "=== node-pty native binary check ==="
+          ls -la node_modules/node-pty/build/Release/ 2>&1 || echo "(no build/Release)"
+          test -f node_modules/node-pty/build/Release/pty.node \
+            || (echo "ERROR: node-pty pty.node missing after rebuild" && exit 1)
+
+      # Windows 侧仅校验 prebuild 已存在，不重新编译
+      - name: Verify node-pty prebuild (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "=== node-pty prebuilds/win32-x64 ==="
+          ls -la node_modules/node-pty/prebuilds/win32-x64/ 2>&1 || echo "(missing)"
+          test -f node_modules/node-pty/prebuilds/win32-x64/pty.node \
+            || (echo "ERROR: node-pty win32-x64 prebuild missing" && exit 1)
 
       - name: Build
         run: npm run build
 
       - name: Get package version
         id: pkg
+        shell: bash
         run: |
-            # read version from package.json and expose as step output
-            echo "version=$(jq -r .version package.json)" >> $GITHUB_OUTPUT
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Package
-        run: npx electron-builder --${{ matrix.platform == 'linux' && 'linux deb AppImage' || matrix.platform }}
+      - name: Package (Linux x64)
+        if: matrix.platform == 'linux'
+        run: |
+          npx electron-builder --linux deb --x64 --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package (Other platforms)
+        if: matrix.platform != 'linux'
+        run: |
+          npx electron-builder --${{ matrix.platform }} --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -87,7 +125,6 @@ jobs:
           path: |
             dist/*.exe
             dist/*.msi
-            dist/*.AppImage
             dist/*.deb
             dist/*.rpm
             dist/*.tar.gz
@@ -100,12 +137,17 @@ jobs:
           name: CMBDevClaw-win-unpacked-${{ steps.pkg.outputs.version }}
           path: dist/win-unpacked/
 
+      - name: Package Linux unpacked as tar.gz (preserves file permissions)
+        if: matrix.platform == 'linux'
+        run: |
+          tar -czf CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}.tar.gz -C dist/linux-unpacked .
+
       - name: Upload unpacked (Linux)
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}
-          path: dist/linux-unpacked/
+          path: CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}.tar.gz
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -114,7 +156,6 @@ jobs:
           files: |
             dist/*.exe
             dist/*.msi
-            dist/*.AppImage
             dist/*.deb
             dist/*.rpm
             dist/*.tar.gz

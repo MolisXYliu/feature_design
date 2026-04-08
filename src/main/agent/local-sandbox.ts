@@ -21,7 +21,9 @@ import {
   type ExecuteResponse,
   type SandboxBackendProtocol,
   type GrepMatch,
-  type FileInfo
+  type FileInfo,
+  type FileUploadResponse,
+  type FileOperationError
 } from "deepagents"
 import fg from "fast-glob"
 import * as iconv from "iconv-lite"
@@ -212,6 +214,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // Rust
       ["CARGO_HOME", path.win32.join(realTempDir, "sandbox-cargo-home")],
       ["RUSTUP_HOME", path.win32.join(realTempDir, "sandbox-rustup-home")],
+      // cargo uses libgit2→libcurl→SChannel for git dependencies; force system git (which
+      // we've already patched with GIT_CONFIG_COUNT to use OpenSSL) instead of libgit2.
+      ["CARGO_GIT_FETCH_WITH_CLI", "true"],
+      // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
+      // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
+      ["CURL_SSL_BACKEND", "openssl"],
       // .NET
       ["NUGET_PACKAGES", path.win32.join(realTempDir, "sandbox-nuget-packages")],
       // Ruby
@@ -255,12 +263,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const ivyHome = path.win32.join(realTempDir, "sandbox-ivy2")
     const sbtFlags = `-Dsbt.global.base=${sbtBase} -Divy.home=${ivyHome}`
 
+    // Force git to use OpenSSL instead of SChannel. The sandbox user (CodexSandboxOnline)
+    // doesn't have access to the Windows LSA for SChannel credential initialization.
+    const gitSslCmd = 'set "GIT_CONFIG_COUNT=1" & set "GIT_CONFIG_KEY_0=http.sslBackend" & set "GIT_CONFIG_VALUE_0=openssl"'
+    const gitSslPs  = "$env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='http.sslBackend'; $env:GIT_CONFIG_VALUE_0='openssl'"
+
     if (shellBase === "cmd") {
       const base = envOverrides
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
       const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
-      return `${base} & ${jvmOpts}`
+      return `${base} & ${jvmOpts} & ${gitSslCmd}`
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
@@ -271,7 +284,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
       const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
       const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
-      return `${base}; ${jvmOpts}`
+      return `${base}; ${jvmOpts}; ${gitSslPs}`
     }
 
     return ""
@@ -302,6 +315,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // Rust
       ["CARGO_HOME", path.win32.join(tempDir, "sandbox-cargo-home")],
       ["RUSTUP_HOME", path.win32.join(tempDir, "sandbox-rustup-home")],
+      // cargo uses libgit2→libcurl→SChannel for git dependencies; force system git (which
+      // we've already patched with GIT_CONFIG_COUNT to use OpenSSL) instead of libgit2.
+      ["CARGO_GIT_FETCH_WITH_CLI", "true"],
+      // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
+      // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
+      ["CURL_SSL_BACKEND", "openssl"],
       // .NET
       ["NUGET_PACKAGES", path.win32.join(tempDir, "sandbox-nuget-packages")],
       // Ruby
@@ -364,6 +383,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || lower.includes("certificate_verify_failed")
       || lower.includes("unable to get local issuer certificate")
       || (lower.includes("ssl") && lower.includes("certificate") && lower.includes("verify"))
+      // SSH authentication failures: elevated sandbox user's USERPROFILE points to the
+      // sandbox account's home dir (~/.ssh is empty), so SSH key auth always fails.
+      || lower.includes("permission denied (publickey")
+      || lower.includes("no supported authentication methods available")
+      || lower.includes("could not read from remote repository")
       // Permission errors: elevated sandbox user may lack write access to TEMP,
       // site-packages, or other directories that pip/npm/cargo need
       || (lower.includes("permission denied") && lower.includes("errno 13"))
@@ -447,6 +471,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       || /\bbundle\s+(install|update|add)\b/.test(cmd)
       // C/C++
       || /\bvcpkg\s+install\b/.test(cmd)
+      // Git network operations: elevated sandbox user lacks Windows Credential Store access
+      // (SEC_E_NO_CREDENTIALS for HTTPS) and has empty ~/.ssh (SSH key auth fails with
+      // "Permission denied (publickey)"). Proactive unelevated routing avoids the wasted
+      // elevated attempt and the directory-pollution problem git clone/submodule have
+      // (partial .git/ left behind makes the unelevated retry fail).
+      || /\bgit\s+clone\b/.test(cmd)
+      || /\bgit\s+(pull|fetch|push)\b/.test(cmd)
+      || /\bgit\s+submodule\b/.test(cmd)
+      || /\bgit\s+lfs\b/.test(cmd)
       // Any pip-installed CLI tool detected via PATH scan (auto, no hardcoded list needed)
       || LocalSandbox.isPythonCliTool(command)
     )
@@ -1110,7 +1143,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /**
    * Override uploadFiles to enforce readonly sandbox restrictions on each file.
    */
-  async uploadFiles(files: [string, string | Buffer][]): Promise<{ path: string; error: string | null }[]> {
+  async uploadFiles(files: [string, Uint8Array][]): Promise<FileUploadResponse[]> {
     // Check for both sandbox-sensitive and readonly-blocked files
     const indexed = files.map(([filePath, content], i) => ({
       filePath, content, i,
@@ -1123,17 +1156,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     // Batch-delegate all allowed files in one call
     const allowedResults = allowed.length > 0
-      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, string | Buffer]))
+      ? await super.uploadFiles(allowed.map((e) => [e.filePath, e.content] as [string, Uint8Array]))
       : []
 
     // Merge results back in original order
-    const results: { path: string; error: string | null }[] = new Array(files.length)
+    const results: FileUploadResponse[] = new Array(files.length)
+    const denied: FileOperationError = "permission_denied"
     let ai = 0
     for (const entry of indexed) {
-      if (entry.sandboxBlocked) {
-        results[entry.i] = { path: entry.filePath, error: `Access denied — '${entry.filePath}' is restricted by sandbox policy.` }
-      } else if (entry.writeBlocked) {
-        results[entry.i] = { path: entry.filePath, error: this.readonlyBlockedError(entry.filePath, "写入") }
+      if (entry.sandboxBlocked || entry.writeBlocked) {
+        results[entry.i] = { path: entry.filePath, error: denied }
       } else {
         results[entry.i] = allowedResults[ai++]
       }
@@ -2113,10 +2145,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     // Unelevated sandbox: codex.exe may inject HTTP_PROXY=127.0.0.1:9 via apply_no_network_to_env
     // when the policy's network_access is false (default). Clear proxy vars in the command preamble
     // so the sandboxed process can access the network normally.
+    //
+    // Also force git to use the OpenSSL SSL backend instead of the default SChannel (Windows).
+    // WRITE_RESTRICTED tokens (used by unelevated sandbox) cannot access the Windows LSA for
+    // credential initialization, causing SChannel's AcquireCredentialsHandle to fail with
+    // SEC_E_NO_CREDENTIALS even for public HTTPS repos. OpenSSL does not use the Windows
+    // Security API and works correctly under restricted tokens.
+    // GIT_CONFIG_COUNT/KEY/VALUE injects git config for this invocation only (git ≥ 2.31).
     const clearProxyPreamble = !isElevatedSandbox && effectiveMode !== "none"
       ? (shellBase === "cmd"
-          ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE="'
-          : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null')
+          ? 'set "HTTP_PROXY=" & set "HTTPS_PROXY=" & set "ALL_PROXY=" & set "GIT_HTTP_PROXY=" & set "GIT_HTTPS_PROXY=" & set "GIT_SSH_COMMAND=" & set "GIT_ALLOW_PROTOCOLS=" & set "PIP_NO_INDEX=" & set "NPM_CONFIG_OFFLINE=" & set "CARGO_NET_OFFLINE=" & set "SBX_NONET_ACTIVE=" & set "GIT_CONFIG_COUNT=1" & set "GIT_CONFIG_KEY_0=http.sslBackend" & set "GIT_CONFIG_VALUE_0=openssl"'
+          : '$env:HTTP_PROXY=$null; $env:HTTPS_PROXY=$null; $env:ALL_PROXY=$null; $env:GIT_HTTP_PROXY=$null; $env:GIT_HTTPS_PROXY=$null; $env:GIT_SSH_COMMAND=$null; $env:GIT_ALLOW_PROTOCOLS=$null; $env:PIP_NO_INDEX=$null; $env:NPM_CONFIG_OFFLINE=$null; $env:CARGO_NET_OFFLINE=$null; $env:SBX_NONET_ACTIVE=$null; $env:GIT_CONFIG_COUNT=\'1\'; $env:GIT_CONFIG_KEY_0=\'http.sslBackend\'; $env:GIT_CONFIG_VALUE_0=\'openssl\'')
       : ""
     // Unelevated sandbox: also set JVM env vars to redirect maven.repo.local to TEMP
     // (restricted token cannot write to ~/.m2/repository)
