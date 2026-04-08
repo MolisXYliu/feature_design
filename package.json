@@ -90,6 +90,9 @@
             "x64"
           ]
         }
+      ],
+      "extraArgs": [
+        "--no-sandbox"
       ]
     },
     "extraResources": [

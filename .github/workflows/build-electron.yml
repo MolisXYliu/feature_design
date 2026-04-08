@@ -91,15 +91,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fix chrome-sandbox permissions (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          set -e
-          echo "Setting setuid on any chrome-sandbox found in dist/...-unpacked"
-          # Set the SUID bit on any chrome-sandbox inside unpacked directories (dir target / linux-unpacked)
-          find dist -type f -name "chrome-sandbox" -print0 | xargs -0 -r chmod 4755 || true
-          echo "chrome-sandbox permission fix completed (if applicable)"
-
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
