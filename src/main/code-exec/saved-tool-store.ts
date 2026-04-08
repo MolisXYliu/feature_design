@@ -419,7 +419,7 @@ export function persistSavedCodeExecTool(draft: SavedCodeExecToolDraft): SavedCo
   const now = new Date().toISOString()
   const nextEntry: SavedCodeExecTool = {
     toolId: draft.toolId,
-    enabled: true,
+    enabled: false,
     description: draft.description,
     inputSchema: draft.inputSchema,
     outputSchema: draft.outputSchema,

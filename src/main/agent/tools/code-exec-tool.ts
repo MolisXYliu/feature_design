@@ -210,8 +210,8 @@ function maybePromoteCodeExecAsTool(
         savedToolMetadataError: metadataError,
         cwd: context.workspacePath,
         reason: metadataError
-          ? "工具化改写失败，请点拒绝关闭"
-          : "工具信息已生成，确认后保存为可复用工具",
+          ? "工具化改写失败，点拒绝关闭"
+          : "工具信息已生成，确认后保存为可复用工具。可在自定义-编程式调用页面管理/启用",
         allowed_decisions: metadataError ? ["reject"] : ["approve", "reject"],
         allowed_approval_types: metadataError ? ["reject"] : ["approve", "reject"]
       })
