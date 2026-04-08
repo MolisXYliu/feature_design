@@ -66,11 +66,16 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      # manylinux_2_28 没预装 Node,手动装一个 Node 22(和 .nvmrc 对齐)。
+      # manylinux_2_28 没预装 Node,手动装一个 Node 22。
       # 从 nodejs.org 下 tarball 直接解到 /usr/local,bin 会在 PATH 里。
+      #
+      # NODE_VERSION 锁到具体 patch:.nvmrc 只写 major("22"),tarball URL 必须有完整
+      # x.y.z,这里没法直接读 .nvmrc。锁 patch 反而是好事 —— 让 manylinux job 编译
+      # native module 时的 Node ABI 完全可重现,N-API 虽稳但仍有边角差异。
+      # 升 Node patch 时手动改这一行,顺便重新跑一次 CI 确认没破坏性。
       - name: Install Node.js 22
         run: |
-          set -eux
+          set -euxo pipefail
           NODE_VERSION=22.11.0
           curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz
           tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
@@ -97,6 +102,97 @@ jobs:
       - name: Install dependencies (no postinstall)
         run: npm ci --ignore-scripts --include=optional
 
+      # 审计 --ignore-scripts 的影响范围。
+      #
+      # --ignore-scripts 是全局开关,会跳过 node_modules 里**所有**包的
+      # preinstall/install/postinstall。我们需要它的目的只是为了跳过 node-pty 在
+      # ubuntu/manylinux 宿主上编 pty.node(由 manylinux artifact 替代),但副作用
+      # 会一并跳过其他包的 install 脚本。某些包靠这些脚本下载 prebuild 或编 native
+      # binary,被静默跳过会让最终 deb 缺东西,装到用户机器上启动崩。
+      #
+      # 这一步在 npm ci 之后扫 node_modules,枚举所有带 install/postinstall 的包,
+      # 和下面的 EXPECTED 白名单对比。出现新包就直接 CI 红,强制人类评估:
+      # 这个新包的 install 脚本是干什么的?跳过它会不会让 Linux 打包出坏包?
+      # 评估完确认安全后才能加进白名单。
+      #
+      # 白名单解释(为什么这些包被跳过 install 是安全的):
+      #   - electron: postinstall 下载 Electron 二进制到 node_modules/electron/dist/。
+      #     被跳过没事 —— electron-builder 自己用 app-builder unpack-electron 拉。
+      #   - esbuild: 现已改用 optionalDependencies (@esbuild/linux-x64) 分发 native
+      #     binary,postinstall 跑空。--include=optional 兜住。
+      #   - electron-winstaller: install 是给 Windows installer 选 7z 架构,
+      #     Linux 打 deb 用不到这个工具。
+      #   - node-pty: 正是我们故意要跳过的对象,由 manylinux artifact 替代。
+      - name: Audit packages with install/postinstall scripts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # 已确认 --ignore-scripts 跳过这些包是安全的(理由见上方注释)
+          EXPECTED="electron electron-winstaller esbuild node-pty"
+
+          actual=$(node -e "
+            const fs = require('fs'), path = require('path');
+            const found = new Set();
+            function scan(dir) {
+              let entries;
+              try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+              for (const e of entries) {
+                if (!e.isDirectory()) continue;
+                if (e.name === '.bin' || e.name === '.cache') continue;
+                const sub = path.join(dir, e.name);
+                if (e.name.startsWith('@')) { scan(sub); continue; }
+                const pj = path.join(sub, 'package.json');
+                if (fs.existsSync(pj)) {
+                  try {
+                    const j = JSON.parse(fs.readFileSync(pj, 'utf8'));
+                    const s = j.scripts || {};
+                    if (s.preinstall || s.install || s.postinstall) found.add(j.name);
+                  } catch {}
+                }
+              }
+            }
+            scan('node_modules');
+            console.log([...found].sort().join('\n'));
+          ")
+
+          echo "=== Packages with install/postinstall scripts ==="
+          echo "$actual"
+          echo "================================================="
+
+          expected_sorted=$(echo "$EXPECTED" | tr ' ' '\n' | sort)
+          unexpected=$(comm -23 <(echo "$actual" | sort) <(echo "$expected_sorted") || true)
+
+          if [ -n "$unexpected" ]; then
+            echo ""
+            echo "ERROR: 发现 EXPECTED 白名单之外的、带 install/postinstall 脚本的包:"
+            echo "$unexpected" | sed 's/^/  - /'
+            echo ""
+            echo "原因:这个 job 用 npm ci --ignore-scripts,会全局跳过这些脚本。"
+            echo "如果新包的脚本负责下载 prebuild 或编译 native binary,跳过会让"
+            echo "最终 Linux deb 缺东西,装到用户机器上启动崩。"
+            echo ""
+            echo "请检查每个新包的 package.json 的 scripts.install / scripts.postinstall:"
+            echo "  - 如果脚本只是日志/无害检查 → 安全,加入 EXPECTED 白名单"
+            echo "  - 如果脚本下载/编译关键产物 → 需要在主 build job 里显式补回来,"
+            echo "    或考虑改方案:不用 --ignore-scripts(让所有 postinstall 跑),"
+            echo "    然后用 manylinux artifact 覆盖 node-pty 的 pty.node 即可"
+            echo ""
+            echo "评估完成后,把新包名加到本步骤的 EXPECTED 列表里,并在上方注释中"
+            echo "记录'为什么这个包被跳过 install 是安全的'。"
+            exit 1
+          fi
+
+          # 也检查白名单里是否有包已经从依赖树里删掉了(陈旧白名单),不致命但提醒
+          stale=$(comm -13 <(echo "$actual" | sort) <(echo "$expected_sorted") || true)
+          if [ -n "$stale" ]; then
+            echo ""
+            echo "NOTE: 白名单里有依赖树里不存在的包(可能已被删除):"
+            echo "$stale" | sed 's/^/  - /'
+            echo "      可以从 EXPECTED 里清理掉。"
+          fi
+
+          echo "OK: 所有带 install/postinstall 的包都在白名单内"
+
       # 从 package.json 读 build.electronVersion,避免两处硬编码不同步。
       - name: Read Electron version from package.json
         id: electron
@@ -110,10 +206,15 @@ jobs:
       # (src/unix/pty.cc 的 Linux 分支是 #else,直接 forkpty,不走 posix_spawn +
       # helper 路径),所以 Linux build/Release/ 下只会有 pty.node 一个产物。
       # 不要加 spawn-helper 的 test -f 检查,那会误红。
+      #
+      # 不加 npx --yes:@electron/rebuild 是 electron-builder 的传递依赖,前面的
+      # npm ci 已经把它装到 node_modules/.bin/electron-rebuild,直接用即可。
+      # --yes 会让 npx 在找不到本地版本时去 registry 拉(且不交互确认),万一
+      # 本地缺了我们想立即红,而不是悄悄拉一个未知版本回来编。
       - name: Rebuild node-pty against Electron headers
         run: |
-          set -eux
-          npx --yes @electron/rebuild -f -w node-pty -v "${{ steps.electron.outputs.version }}"
+          set -euxo pipefail
+          npx @electron/rebuild -f -w node-pty -v "${{ steps.electron.outputs.version }}"
           echo "=== build/Release contents ==="
           ls -la node_modules/node-pty/build/Release/
           test -f node_modules/node-pty/build/Release/pty.node
@@ -224,6 +325,12 @@ jobs:
       # job 产出,artifact 下载过来即可。
       # Windows 那条保持默认 (不加 --ignore-scripts),因为 Windows 有 prebuild,
       # electron-rebuild 看到 prebuild 存在会空跑,无害。
+      #
+      # ⚠️ --ignore-scripts 是全局开关,会跳过所有包的 install/postinstall。
+      # 当前依赖树里所有带 install/postinstall 的包都已评估,确认安全。
+      # manylinux job 里有 "Audit packages with install/postinstall scripts" 步骤
+      # 维护白名单,任何新增带 install 脚本的包都会让 CI 立即红,强制重新评估。
+      # 加新依赖时若被那个 step 拦下,请阅读它上方的注释。
       #
       # 为什么必须用 npm ci 而不是 npm install:
       # manylinux job 用 npm ci 严格按 lockfile 装,编出来的 pty.node 对应 lockfile
