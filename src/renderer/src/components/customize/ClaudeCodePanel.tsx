@@ -19,6 +19,7 @@ interface Session {
   hasContent: boolean
   ownsCreatingState: boolean // 只有 createSessionWithDir 创建的才为 true，表示该 session 持有 creating 锁
   restarting: boolean
+  slowStarting: boolean // terminal.create() 超过 8s 尚未返回，在 overlay 显示"首次启动较慢"提示
   // #1 fix: 分离 DOM 级别的 cleanup 和 PTY/IPC 级别的 cleanup
   domCleanups: Array<() => void>
   ptyCleanups: Array<() => void>
@@ -289,12 +290,26 @@ export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.E
       session.xterm.clear()
     }
 
-    const termId = await window.api.terminal.create({
-      workDir: session.workDir || undefined,
-      cols: session.xterm.cols,
-      rows: session.xterm.rows,
-      claudeModelId: session.claudeModelId
-    })
+    // 慢启动提示：主进程 terminal.create 在最坏情况下最长等 ~50s（20s host ready + 30s PTY create），
+    // 8s 后还没返回，把 slowStarting 标记置 true，overlay 会切换到"首次启动较慢"文案。
+    // 成功后清掉标记，不污染 xterm buffer（写 buffer 会在 overlay 撤销后变成脏历史）。
+    const slowStartTimer = setTimeout(() => {
+      if (!sessionsRef.current.has(session.id)) return
+      session.slowStarting = true
+      setSessionIds((prev) => [...prev]) // 触发重渲让 overlay 更新文案
+    }, 8_000)
+    let termId: string
+    try {
+      termId = await window.api.terminal.create({
+        workDir: session.workDir || undefined,
+        cols: session.xterm.cols,
+        rows: session.xterm.rows,
+        claudeModelId: session.claudeModelId
+      })
+    } finally {
+      clearTimeout(slowStartTimer)
+      session.slowStarting = false
+    }
 
     // #2 fix: 如果 await 期间 session 被关闭，dispose 新创建的 PTY
     if (!sessionsRef.current.has(session.id)) {
@@ -324,7 +339,11 @@ export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.E
 
     const removeExit = window.api.terminal.onExit(termId, (code) => {
       if (!sessionsRef.current.has(session.id)) return
-      session.xterm.write(`\r\n\x1b[90m[进程已退出，代码: ${code}]\x1b[0m\r\n`)
+      // code 为 null 表示主进程 host 通信故障/spawn 失败强制 tear-down，没有真实退出码
+      const exitMsg = code === null
+        ? "[终端主机异常退出]"
+        : `[进程已退出，代码: ${code}]`
+      session.xterm.write(`\r\n\x1b[90m${exitMsg}\x1b[0m\r\n`)
       session.running = false
       session.restarting = false
       session.termId = null // 进程已退出，清零防止重启时多余 dispose
@@ -437,7 +456,7 @@ export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.E
 
       session = {
         id, termId: null, xterm, fitAddon, container,
-        running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, restarting: false, domCleanups: [], ptyCleanups: []
+        running: false, workDir: dir, claudeModelId: resolvedModelId || undefined, hasContent: false, ownsCreatingState: true, restarting: false, slowStarting: false, domCleanups: [], ptyCleanups: []
       }
     } catch (err) {
       console.error("[ClaudeCode] Failed to create session:", err)
@@ -810,7 +829,7 @@ export function ClaudeCodePanel({ visible }: { visible?: boolean }): React.JSX.E
                 <rect x="10" y="4" width="1" height="1" fill="#888"/>
               </svg>
             </div>
-            <span className="text-xs text-muted-foreground/50">{activeSession?.restarting ? "正在重启 Claude Code..." : "正在启动 Claude Code..."}</span>
+            <span className="text-xs text-muted-foreground/50">{activeSession?.slowStarting ? "首次启动可能较慢，请稍候..." : activeSession?.restarting ? "正在重启 Claude Code..." : "正在启动 Claude Code..."}</span>
             <style>{`
               .claude-mascot-container {
                 animation: mascot-hop 0.5s ease-in-out infinite;

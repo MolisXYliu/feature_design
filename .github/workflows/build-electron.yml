@@ -69,6 +69,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Get package version
+        id: pkg
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Package
         run: npx electron-builder --${{ matrix.platform == 'linux' && 'linux deb AppImage' || matrix.platform }}
         env:
@@ -77,7 +84,7 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: CMBDevClaw-${{ matrix.platform }}-installer
+          name: CMBDevClaw-${{ matrix.platform }}-${{ steps.pkg.outputs.version }}-installer
           path: |
             dist/*.exe
             dist/*.msi
@@ -91,14 +98,14 @@ jobs:
         if: matrix.platform == 'win'
         uses: actions/upload-artifact@v4
         with:
-          name: CMBDevClaw-win-unpacked
+          name: CMBDevClaw-win-unpacked-${{ steps.pkg.outputs.version }}
           path: dist/win-unpacked/
 
       - name: Upload unpacked (Linux)
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: CMBDevClaw-linux-unpacked
+          name: CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}
           path: dist/linux-unpacked/
 
       - name: Upload to GitHub Release
