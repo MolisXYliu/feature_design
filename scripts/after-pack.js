@@ -33,9 +33,12 @@ module.exports = async function (context) {
       console.log(`after-pack: renamed ${productName} -> ${productName}.bin`)
     }
 
+    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "../package.json"), "utf-8"))
+    const packageName = packageJson.name
+
     // 3. 用同名 shell 脚本替代原来的二进制入口，自动加 --no-sandbox
     //    脚本权限设为 0o755，与原二进制一致，双击文件管理器可直接运行
-    const wrapperContent = `#!/bin/bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\nexec "$DIR/${productName}.bin" --no-sandbox "$@"\n`
+    const wrapperContent = `#!/bin/bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\ncd "$DIR"\nexec "./${packageName}" --no-sandbox "$@"\n`
     fs.writeFileSync(realBinPath, wrapperContent, { mode: 0o755 })
     console.log(`after-pack: created no-sandbox wrapper as ${productName}`)
 
