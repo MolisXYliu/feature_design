@@ -110,6 +110,18 @@ jobs:
           name: CMBDevClaw-win-unpacked-${{ steps.pkg.outputs.version }}
           path: dist/win-unpacked/
 
+      - name: Remove chrome-sandbox from Linux unpacked (fixes SUID error)
+        if: matrix.platform == 'linux'
+        run: |
+          rm -f dist/linux-unpacked/chrome-sandbox
+          # 创建带 --no-sandbox 的启动脚本
+          cat > dist/linux-unpacked/start.sh << 'EOF'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$DIR/CMBDevClaw" --no-sandbox "$@"
+          EOF
+          chmod +x dist/linux-unpacked/start.sh
+
       - name: Upload unpacked (Linux)
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
