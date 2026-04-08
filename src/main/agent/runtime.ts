@@ -652,13 +652,152 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
 }
 
 // Get the model instance from custom model configuration
+// ─── Custom fetch with unified retry ────────────────────────────────────────
+// Single source of truth for same-model retry logic. SDK-level retry is
+// disabled (maxRetries: 0) so this is the only layer that retries.
+
+/** Specific non-5xx status codes that should trigger a retry on the SAME model/endpoint.
+ *  All 5xx are also retryable (handled by isRetryableStatus below). */
+const RETRYABLE_NON_5XX_STATUS = new Set([408, 409, 429, 432, 433])
+
+function isRetryableStatus(status: number): boolean {
+  return status >= 500 || RETRYABLE_NON_5XX_STATUS.has(status)
+}
+
+const RETRY_MAX_ATTEMPTS = 5 // 1 initial + 4 retries
+const RETRY_BASE_DELAY_MS = 1000 // exponential: 1s, 2s, 4s, 8s
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"))
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+function computeBackoffDelay(attempt: number): number {
+  // attempt is 1-based (1 = before first retry). 1s,2s,4s,8s with jitter 1x-2x.
+  const base = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1)
+  return Math.round(base * (1 + Math.random()))
+}
+
+/** Info emitted to the UI before each retry wait. */
+export interface ModelRetryInfo {
+  /** 1-based attempt counter about to be retried (1 = first retry). */
+  attempt: number
+  /** Maximum number of retries that can occur. */
+  maxRetries: number
+  /** Human-readable reason (HTTP status or network error message). */
+  reason: string
+  /** Wait duration before the next attempt, in ms. */
+  delayMs: number
+}
+
+/** Hooks invoked by the retrying fetch wrapper so the UI can display status. */
+export interface ModelRetryHooks {
+  onRetry?: (info: ModelRetryInfo) => void
+  /** Called when the fetch ultimately succeeds (only if at least one retry happened). */
+  onRetryResolved?: () => void
+}
+
+/**
+ * Build a retrying fetch wrapper. Retries on:
+ *   - Network errors thrown by fetch
+ *   - HTTP status in RETRYABLE_HTTP_STATUS (or >= 500)
+ * Does NOT retry on:
+ *   - AbortError (user cancelled)
+ *   - 2xx (including streaming 200 — returned immediately)
+ *   - Non-retryable 4xx (400/401/403/404/...) — bubbled up to failover layer
+ */
+function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
+  const maxRetries = RETRY_MAX_ATTEMPTS - 1
+  return async (input, init) => {
+    const signal = init?.signal ?? undefined
+    let lastError: unknown = undefined
+    let didRetry = false
+
+    for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
+
+      try {
+        const res = await fetch(input, init)
+
+        // Success or non-retryable error — return as-is.
+        if (!isRetryableStatus(res.status)) {
+          if (didRetry && res.ok) hooks?.onRetryResolved?.()
+          return res
+        }
+
+        // Retryable HTTP status.
+        if (attempt >= RETRY_MAX_ATTEMPTS) return res // exhausted — return so caller sees the real status
+
+        // Drain body to free the connection before retrying.
+        try {
+          await res.arrayBuffer()
+        } catch {
+          /* ignore */
+        }
+
+        const delay = computeBackoffDelay(attempt)
+        console.warn(
+          `[Runtime] fetch HTTP ${res.status}, retry ${attempt}/${maxRetries} after ${delay}ms`
+        )
+        didRetry = true
+        hooks?.onRetry?.({
+          attempt,
+          maxRetries,
+          reason: `HTTP ${res.status}`,
+          delayMs: delay
+        })
+        await sleep(delay, signal)
+        continue
+      } catch (err) {
+        // AbortError — propagate immediately, do not retry.
+        if (err instanceof Error && err.name === "AbortError") throw err
+
+        lastError = err
+        if (attempt >= RETRY_MAX_ATTEMPTS) throw err
+
+        const delay = computeBackoffDelay(attempt)
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(
+          `[Runtime] fetch network error "${msg}", retry ${attempt}/${maxRetries} after ${delay}ms`
+        )
+        didRetry = true
+        hooks?.onRetry?.({
+          attempt,
+          maxRetries,
+          reason: msg || "network error",
+          delayMs: delay
+        })
+        await sleep(delay, signal)
+        continue
+      }
+    }
+
+    // Unreachable — loop always returns or throws.
+    throw lastError ?? new Error("retryingFetch: unexpected loop exit")
+  }
+}
+
+/** Default fetch (no UI hooks) for model instances without a UI context (e.g. skill generation). */
+const defaultRetryingFetch = createRetryingFetch()
+
 function getModelInstance(
   customConfig: {
     id: string
     model: string
     baseUrl: string
     apiKey?: string
-  }
+  },
+  retryHooks?: ModelRetryHooks
 ): ChatOpenAI {
   const apiKey = customConfig.apiKey
   if (!apiKey) {
@@ -674,10 +813,12 @@ function getModelInstance(
   return new ChatOpenAI({
     model: resolvedModel,
     apiKey,
-    maxRetries: 1,
+    // SDK-level retry disabled — unified retry lives in retryingFetch below.
+    maxRetries: 0,
     timeout: 60_000,
     configuration: {
-      baseURL: customConfig.baseUrl
+      baseURL: customConfig.baseUrl,
+      fetch: retryHooks ? createRetryingFetch(retryHooks) : defaultRetryingFetch
     }
   })
 }
@@ -697,13 +838,15 @@ export interface CreateAgentRuntimeOptions {
   noSkillEvolutionTool?: boolean
   /** AbortSignal — when signalled, any running child process is killed immediately. */
   abortSignal?: AbortSignal
+  /** Optional hooks invoked when the model fetch layer retries / resolves. */
+  retryHooks?: ModelRetryHooks
 }
 
 // Create agent runtime with configured model and checkpointer
 export type AgentRuntime = ReturnType<typeof createAgent>
 
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Promise<DeepAgent> {
-  const { threadId, workspacePath, modelId, extraSystemPrompt } = options
+  const { threadId, workspacePath, modelId, extraSystemPrompt, retryHooks } = options
 
   if (!threadId) {
     throw new Error("Thread ID is required for checkpointing.")
@@ -731,7 +874,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     throw new Error("Custom model not configured. Please configure a model in Settings.")
   }
 
-  const model = getModelInstance(customConfig)
+  const model = getModelInstance(customConfig, retryHooks)
   console.log("[Runtime] Model instance created")
 
   const checkpointer = await getCheckpointer(threadId)
@@ -955,7 +1098,10 @@ The workspace root is: ${workspacePath}`
             mcpServers[c.id] = buildMcpServerConfig({ url: c.url, advanced: {
               ...c.advanced,
               headers:{
-                ...c.advanced?.headers
+                ...c.advanced?.headers,
+                "yst_id_token": userInfo?.ystIdToken || '',
+                "sap_id": userInfo?.sapId || '',
+                "name": encodeURIComponent(userInfo?.userName || '')
               }
             } })
           }

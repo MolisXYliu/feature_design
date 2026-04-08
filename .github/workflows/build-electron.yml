@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - feature/gitaction
   workflow_dispatch: # 支持手动触发
 
 concurrency:
@@ -65,6 +63,7 @@ jobs:
             rm -rf node_modules package-lock.json
             npm install --include=optional
           fi
+          # no AppImage tooling required for deb-only builds
 
       # 显式为目标 Electron 版本重新编译 node-pty 原生模块。
       # 背景：node-pty 1.1.0 的 npm 包只带 darwin/win32 的 prebuilds，linux-x64 没有预编译二进制，
@@ -105,8 +104,17 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Package
-        run: npx electron-builder --${{ matrix.platform == 'linux' && 'linux deb AppImage' || matrix.platform }}
+      - name: Package (Linux x64)
+        if: matrix.platform == 'linux'
+        run: |
+          npx electron-builder --linux deb --x64 --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package (Other platforms)
+        if: matrix.platform != 'linux'
+        run: |
+          npx electron-builder --${{ matrix.platform }} --publish=never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -117,7 +125,6 @@ jobs:
           path: |
             dist/*.exe
             dist/*.msi
-            dist/*.AppImage
             dist/*.deb
             dist/*.rpm
             dist/*.tar.gz
@@ -130,12 +137,17 @@ jobs:
           name: CMBDevClaw-win-unpacked-${{ steps.pkg.outputs.version }}
           path: dist/win-unpacked/
 
+      - name: Package Linux unpacked as tar.gz (preserves file permissions)
+        if: matrix.platform == 'linux'
+        run: |
+          tar -czf CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}.tar.gz -C dist/linux-unpacked .
+
       - name: Upload unpacked (Linux)
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}
-          path: dist/linux-unpacked/
+          path: CMBDevClaw-linux-unpacked-${{ steps.pkg.outputs.version }}.tar.gz
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -144,7 +156,6 @@ jobs:
           files: |
             dist/*.exe
             dist/*.msi
-            dist/*.AppImage
             dist/*.deb
             dist/*.rpm
             dist/*.tar.gz
