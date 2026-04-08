@@ -78,6 +78,8 @@ import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
 import { S3TraceReporter } from "./agent/trace/s3-reporter"
+import { setEventReporter, HttpEventReporter } from "./services/event-reporter"
+import { getLocalIP } from "./util/local-ip"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
@@ -85,7 +87,6 @@ import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
-import  os from "os";
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
@@ -131,26 +132,6 @@ function getDevWindowsIconPath(): string | undefined {
 
 function getDevMacDockIconPath(): string | undefined {
   return getBuildIconPath("icon.png") ?? getBuildIconPath("icon.ico")
-}
-
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  let localIP = '';
-
-  // 遍历所有网卡
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      // 过滤掉 IPv6、回环地址（127.0.0.1）、内部地址
-      if (iface.family === 'IPv4' && !iface.internal) {
-        localIP = iface.address;
-        // 如果你有多个网卡（比如同时连WiFi和网线），可以根据需求选择第一个/指定网卡的IP
-        break;
-      }
-    }
-    if (localIP) break;
-  }
-
-  return localIP || '127.0.0.1';
 }
 
 function createWindow(): void {
@@ -300,6 +281,10 @@ if (!gotTheLock) {
     if (apiBaseUrl) {
       setTraceReporter(new S3TraceReporter(apiBaseUrl))
       console.log("[Main] S3TraceReporter registered, uploading traces to:", apiBaseUrl)
+
+      // Operational telemetry events (skill / git) share the same base URL.
+      setEventReporter(new HttpEventReporter(apiBaseUrl))
+      console.log("[Main] HttpEventReporter registered, sending events to:", apiBaseUrl)
     }
 
     // Initialize database
