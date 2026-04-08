@@ -448,11 +448,12 @@ export function createCodeExecTool(context: CodeExecToolContext) {
     },
     {
       name: "code_exec",
-      description:
-        "Run a JavaScript async function body for one ad hoc MCP workflow. " +
-        "Call MCP tools only through mcp.$call(tool_id, args), and write any run-specific constants directly inside the script body. " +
-        "The script may return any JSON-serializable value; the tool serializes that value into the string result. " +
-        "Do not call tools in the script whose tool_id prefix is not mcp__, and do not use Node.js APIs.",
+      description: `
+      Write an async JavaScript function body for an ad hoc MCP workflow. You must strictly adhere to the following rules:
+      1. Before generating this script, you MUST use \`inspect_tool\` to get the exact schemas of all MCP tools you intend to call. Do not guess the tool arguments.
+      2. Call MCP tools ONLY using await mcp.$call(tool_id, args).
+      3. Script MUST return the final execution result as a JSON-serializable value (the system will automatically serialize it to a string). Note: The execution environment cannot observe console.log outputs; never rely on printing to pass your final results.
+      4. Use pure JavaScript only. It is STRICTLY PROHIBITED to use any Node.js APIs (e.g., require, fs, path).`,
       schema: codeExecSchema
     }
   )

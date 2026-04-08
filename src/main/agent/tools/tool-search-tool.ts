@@ -56,11 +56,11 @@ async function invokeWithRetry(
 const invokeDeferredToolSchema = z.object({
   tool_id: z
     .string()
-    .describe("Exact discovered tool_id for the deferred MCP tool or saved tool to execute"),
+    .describe("Exact deferred-only tool_id returned by search_tool or listed in <deferred-tool-ids>"),
   tool_args: z
     .object({})
     .passthrough()
-    .describe("Tool arguments matching inspect_tool.loaded_tools[].schema")
+    .describe("Tool arguments matching the schema returned by inspect_tool(caller=\"invoke_deferred_tool\")")
 })
 
 interface ToolSearchContext {
@@ -69,7 +69,9 @@ interface ToolSearchContext {
 }
 
 interface ToolSearchOptions {
-  codeExecEnabled: boolean
+  codeExecRouteEnabled: boolean
+  savedToolsEnabled: boolean
+  deferredRouteEnabled: boolean
 }
 
 type SearchToolEntry = {
@@ -107,13 +109,15 @@ function buildSavedToolSearchSnapshot(tools: SavedCodeExecTool[]): string {
 function getCachedMcpSearchDocs(
   cache: SearchDocCacheEntry,
   tools: McpCapabilityTool[],
-  allowMcpCallers: ToolSearchCaller[]
+  options: ToolSearchOptions
 ): ToolSearchDoc[] {
   const snapshot = buildMcpSearchSnapshot(tools)
   if (cache.snapshot === snapshot) return cache.docs
 
   cache.snapshot = snapshot
-  cache.docs = tools.map((tool) => buildMcpToolSearchDoc(tool, { allowCallers: allowMcpCallers }))
+  cache.docs = tools.map((tool) => buildMcpToolSearchDoc(tool, {
+    allowCallers: getMcpToolAllowCallers(tool, options)
+  }))
   return cache.docs
 }
 
@@ -129,14 +133,24 @@ function getCachedSavedToolSearchDocs(
   return cache.docs
 }
 
+function getMcpToolAllowCallers(
+  tool: McpCapabilityTool,
+  options: ToolSearchOptions
+): ToolSearchCaller[] {
+  const allowCallers: ToolSearchCaller[] = []
+  if (tool.visibility === "lazy") allowCallers.push("invoke_deferred_tool")
+  if (options.codeExecRouteEnabled) allowCallers.push("code_exec")
+  return allowCallers
+}
+
 function toMcpSearchToolEntry(
   tool: McpCapabilityTool,
-  allowCallers: ToolSearchCaller[]
+  options: ToolSearchOptions
 ): SearchToolEntry {
   return {
     toolId: tool.toolId,
     source: "mcp",
-    allowCallers,
+    allowCallers: getMcpToolAllowCallers(tool, options),
     description: tool.description
   }
 }
@@ -153,16 +167,15 @@ function toSavedSearchToolEntry(tool: SavedCodeExecTool): SearchToolEntry {
 function findExactSearchMatches(
   query: string,
   searchableMcpTools: McpCapabilityTool[],
-  fallbackMcpTools: McpCapabilityTool[],
   savedTools: SavedCodeExecTool[],
-  allowMcpCallers: ToolSearchCaller[],
+  options: ToolSearchOptions,
   maxResults: number
 ): SearchToolEntry[] {
   const exactMatches = new Map<string, SearchToolEntry>()
 
   const addMcpMatches = (tools: McpCapabilityTool[]): void => {
     for (const tool of findExactToolIdOrNameMatches(tools, query)) {
-      exactMatches.set(tool.toolId, toMcpSearchToolEntry(tool, allowMcpCallers))
+      exactMatches.set(tool.toolId, toMcpSearchToolEntry(tool, options))
     }
   }
 
@@ -175,9 +188,6 @@ function findExactSearchMatches(
 
   addMcpMatches(searchableMcpTools)
   addSavedToolMatches()
-  if (exactMatches.size > 0) return Array.from(exactMatches.values()).slice(0, maxResults)
-
-  addMcpMatches(fallbackMcpTools)
   return Array.from(exactMatches.values()).slice(0, maxResults)
 }
 
@@ -192,39 +202,52 @@ async function getMissingSavedToolDependencies(
   return dependencies.filter((dependency) => !availableToolIds.has(dependency))
 }
 
-function createSearchCallerSchema(codeExecEnabled: boolean) {
+function createCallerSchema(
+  allowedCallers: ToolSearchCaller[],
+  description: string
+) {
+  return z.enum(allowedCallers as [ToolSearchCaller, ...ToolSearchCaller[]])
+    .optional()
+    .default(allowedCallers[0])
+    .describe(description)
+}
+
+function createSearchCallerSchema(options: ToolSearchOptions) {
+  const allowedCallers: ToolSearchCaller[] = options.codeExecRouteEnabled
+    ? ["invoke_deferred_tool", "code_exec"]
+    : ["invoke_deferred_tool"]
+
   return z.object({
-    query: z.string().describe(
-      "Exact tool_id or normalized capability phrase. Prefer provider + resource + action + optional qualifier, for example: 'github issue create', 'github pull request list', or 'notion database query'. Prefer full words over abbreviations. Prefix a required term with +, for example 'github +issue create'. When using invoke_deferred_tool, check <available-deferred-tools> first and search only if the right deferred tool_id is not obvious from that list."
-    ),
+    query: z
+      .string()
+      .describe(
+        "tool in `<deferred-tool-ids>` or normalized capability phrase. For example: 'github issue create', 'search wiki detail', or '团队 风险 列表'. Prefer full words over abbreviations. For caller=invoke_deferred_tool, search only deferred-only tools."
+      ),
     max_results: z.number().optional().default(5).describe("Maximum number of results to return"),
-    caller: codeExecEnabled
-      ? z.enum(["invoke_deferred_tool", "code_exec"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this search is for. Use invoke_deferred_tool to rank or resolve candidates from the deferred-tool inventory. Use code_exec to search MCP tools only."
-      )
-      : z.enum(["invoke_deferred_tool"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this search is for. code_exec is disabled in this runtime, so invoke_deferred_tool is the only available caller."
-      )
+    caller: createCallerSchema(
+      allowedCallers,
+      options.codeExecRouteEnabled
+        ? "Which route this search is for. Use invoke_deferred_tool only to discover deferred tools. Use code_exec only after you have already decided to write a code_exec script and need MCP tool_ids for that script."
+        : "Which route this search is for. The only valid value is invoke_deferred_tool, which searches deferred-only tools."
+    )
   })
 }
 
-function createInspectCallerSchema(codeExecEnabled: boolean) {
+function createInspectCallerSchema(allowedCallers: ToolSearchCaller[]) {
   return z.object({
-    tool_ids: z.array(z.string()).describe("Exact discovered tool_ids to inspect"),
-    caller: codeExecEnabled
-      ? z.enum(["invoke_deferred_tool", "code_exec"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this inspection is for. Use invoke_deferred_tool for direct invocation, or code_exec for MCP-only authoring hints."
-      )
-      : z.enum(["invoke_deferred_tool"]).optional().default("invoke_deferred_tool").describe(
-        "Which caller this inspection is for. code_exec is disabled in this runtime, so invoke_deferred_tool is the only available caller."
-      )
+    tool_ids: z.array(z.string()).describe("tool_ids to inspect"),
+    caller: createCallerSchema(
+      allowedCallers,
+      allowedCallers.length === 2
+        ? "Which route this inspection is for. Use invoke_deferred_tool only for deferred tools before invoke_deferred_tool. Use code_exec only after you have already decided to write a code_exec script and need MCP schemas or call examples."
+        : allowedCallers[0] === "code_exec"
+          ? "Which route this inspection is for. The only valid value is code_exec. Use it only when authoring a code_exec script."
+          : "Which route this inspection is for. The only valid value is invoke_deferred_tool, which is only for deferred-only tools and saved tools before invoke_deferred_tool."
+    )
   })
 }
 
 export function createSearchTool(service: McpCapabilityService, options: ToolSearchOptions) {
-  const allowMcpCallers: ToolSearchCaller[] = options.codeExecEnabled
-    ? ["invoke_deferred_tool", "code_exec"]
-    : ["invoke_deferred_tool"]
   const lazyMcpDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
   const allMcpDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
   const savedToolDocCache: SearchDocCacheEntry = { snapshot: "", docs: [] }
@@ -232,43 +255,43 @@ export function createSearchTool(service: McpCapabilityService, options: ToolSea
   return tool(
     async (input) => {
       const caller = String(input.caller ?? "invoke_deferred_tool")
-      const isCodeExecCaller = options.codeExecEnabled && caller === "code_exec"
+      const isCodeExecCaller = options.codeExecRouteEnabled && caller === "code_exec"
       const allMcpTools = await service.listTools()
-      const searchableMcpTools = allMcpTools.filter((tool) => isCodeExecCaller || tool.visibility === "lazy")
-      const fallbackMcpTools = isCodeExecCaller
-        ? []
-        : allMcpTools.filter((tool) => tool.visibility !== "lazy")
-      const savedTools = !options.codeExecEnabled || isCodeExecCaller
-        ? []
-        : listSavedCodeExecTools()
+      const searchableMcpTools = allMcpTools.filter(
+        (tool) => isCodeExecCaller || tool.visibility === "lazy"
+      )
+      const savedTools =
+        !options.savedToolsEnabled || isCodeExecCaller ? [] : listSavedCodeExecTools()
       const exactMatches = findExactSearchMatches(
         input.query,
         searchableMcpTools,
-        fallbackMcpTools,
         savedTools,
-        allowMcpCallers,
+        options,
         input.max_results ?? 5
       )
 
       if (exactMatches.length > 0) {
-        return JSON.stringify({
-          tools: exactMatches.map((tool) => ({
-            tool_id: tool.toolId,
-            source: tool.source,
-            allow_callers: tool.allowCallers,
-            description: (tool.description ?? "").slice(0, 200)
-          }))
-        }, null, 2)
+        return JSON.stringify(
+          {
+            tools: exactMatches.map((tool) => ({
+              tool_id: tool.toolId,
+              source: tool.source,
+              allow_callers: tool.allowCallers,
+              description: (tool.description ?? "").slice(0, 200)
+            }))
+          },
+          null,
+          2
+        )
       }
 
       const mcpDocs = getCachedMcpSearchDocs(
         isCodeExecCaller ? allMcpDocCache : lazyMcpDocCache,
         searchableMcpTools,
-        allowMcpCallers
+        options
       )
-      const savedDocs = savedTools.length > 0
-        ? getCachedSavedToolSearchDocs(savedToolDocCache, savedTools)
-        : []
+      const savedDocs =
+        savedTools.length > 0 ? getCachedSavedToolSearchDocs(savedToolDocCache, savedTools) : []
 
       const tools: SearchToolEntry[] = searchToolDocs(
         [...mcpDocs, ...savedDocs],
@@ -281,38 +304,42 @@ export function createSearchTool(service: McpCapabilityService, options: ToolSea
         description: doc.description
       }))
 
-      return JSON.stringify({
-        tools: tools.map((tool) => ({
-          tool_id: tool.toolId,
-          source: tool.source,
-          allow_callers: tool.allowCallers,
-          description: (tool.description ?? "").slice(0, 200)
-        }))
-      }, null, 2)
+      return JSON.stringify(
+        {
+          tools: tools.map((tool) => ({
+            tool_id: tool.toolId,
+            source: tool.source,
+            allow_callers: tool.allowCallers,
+            description: (tool.description ?? "").slice(0, 200)
+          }))
+        },
+        null,
+        2
+      )
     },
     {
       name: "search_tool",
-      description:
-        options.codeExecEnabled
-          ? "Search discovered tools by capability phrase or exact tool_id. Prefer normalized phrases like 'github issue create' or 'github pull request list' over natural-language sentences. For invoke_deferred_tool, the deferred inventory is already listed in <available-deferred-tools>; use this tool to map a task to candidate deferred tool_ids or choose among similar deferred tool_ids. For code_exec, this searches MCP tools only. Returns each tool's source and allow_callers."
-          : "Search discovered tools for invoke_deferred_tool by capability phrase or exact tool_id. Prefer normalized phrases like 'github issue create' or 'github pull request list' over natural-language sentences. The deferred inventory is already listed in <available-deferred-tools>; use this tool to map a task to candidate deferred tool_ids or choose among similar deferred tool_ids. Returns each tool's source and allow_callers.",
-      schema: createSearchCallerSchema(options.codeExecEnabled)
+      description: options.codeExecRouteEnabled
+        ? "Search deferred tools by capability phrase or exact tool_id. For caller=invoke_deferred_tool, search only deferred tools. For caller=code_exec, search MCP tools only after you have already decided to author a code_exec script. Returns each tool's source and allow_callers."
+        : "Search deferred tools for invoke_deferred_tool by capability phrase or exact tool_id. Search only deferred tools. Returns each tool's source and allow_callers.",
+      schema: createSearchCallerSchema(options)
     }
   )
 }
 
 export function createInspectTool(service: McpCapabilityService, options: ToolSearchOptions) {
-  const allowMcpCallers: ToolSearchCaller[] = options.codeExecEnabled
-    ? ["invoke_deferred_tool", "code_exec"]
-    : ["invoke_deferred_tool"]
+  const allowedCallers: ToolSearchCaller[] = [
+    ...(options.deferredRouteEnabled ? ["invoke_deferred_tool" as const] : []),
+    ...(options.codeExecRouteEnabled ? ["code_exec" as const] : [])
+  ]
 
   return tool(
     async (input) => {
-      const caller = String(input.caller ?? "invoke_deferred_tool")
+      const caller = String(input.caller ?? allowedCallers[0])
       const loadedTools = await Promise.all(input.tool_ids.map(async (idOrAlias) => {
         const savedTool = getSavedCodeExecTool(idOrAlias, { includeDisabled: true })
         if (savedTool) {
-          if (!options.codeExecEnabled) {
+          if (!options.savedToolsEnabled) {
             return {
               tool_id: savedTool.toolId,
               source: "saved_tool",
@@ -353,7 +380,7 @@ export function createInspectTool(service: McpCapabilityService, options: ToolSe
           return {
             tool_id: idOrAlias,
             source: "mcp",
-            allow_callers: allowMcpCallers,
+            allow_callers: [],
             error:
               caller === "code_exec"
                 ? "Only MCP tools may be inspected for code_exec. Saved tools, built-in tools, and other non-MCP tools are not allowed."
@@ -361,10 +388,19 @@ export function createInspectTool(service: McpCapabilityService, options: ToolSe
           }
         }
 
+        if (caller === "invoke_deferred_tool" && resolved.visibility !== "lazy") {
+          return {
+            tool_id: resolved.toolId,
+            source: "mcp",
+            allow_callers: getMcpToolAllowCallers(resolved, options),
+            error: "This MCP tool is already directly callable from the tool list. Call it directly instead of using the deferred workflow."
+          }
+        }
+
         const loadedTool: Record<string, unknown> = {
           tool_id: resolved.toolId,
           source: "mcp",
-          allow_callers: allowMcpCallers,
+          allow_callers: getMcpToolAllowCallers(resolved, options),
           schema: resolved.inputSchema,
           output_schema: resolved.outputSchema
         }
@@ -389,10 +425,12 @@ export function createInspectTool(service: McpCapabilityService, options: ToolSe
     {
       name: "inspect_tool",
       description:
-        options.codeExecEnabled
-          ? "Inspect discovered tool_ids. Returns loaded_tools[] with schema, output_schema, and allow_callers. Set caller=code_exec only for MCP tools when you need code_exec call examples."
-          : "Inspect discovered MCP tool_ids. Returns loaded_tools[] with schema, output_schema, and allow_callers.",
-      schema: createInspectCallerSchema(options.codeExecEnabled)
+        allowedCallers.length === 2
+          ? "Inspect discovered tool_ids. Use caller=invoke_deferred_tool only for deferred-only tools and saved tools before invoke_deferred_tool. Use caller=code_exec only after you have already decided to write a code_exec script and need MCP schemas or call examples. Do not use inspect_tool before an ordinary direct call to a callable tool."
+          : allowedCallers[0] === "code_exec"
+            ? "Inspect discovered MCP tool_ids only when authoring a code_exec script. Returns loaded_tools[] with schema, output_schema, and code_exec call hints. Do not use inspect_tool before an ordinary direct call to a callable tool."
+            : "Inspect discovered deferred-only tool_ids and saved tool_ids before invoke_deferred_tool. Do not use inspect_tool for ordinary direct calls to tools already present in the callable tool list.",
+      schema: createInspectCallerSchema(allowedCallers)
     }
   )
 }
@@ -408,7 +446,7 @@ export function createInvokeDeferredTool(
     async (input) => {
       const savedTool = getSavedCodeExecTool(input.tool_id, { includeDisabled: true })
       if (savedTool) {
-        if (!options.codeExecEnabled) {
+        if (!options.savedToolsEnabled) {
           return JSON.stringify({
             ok: false,
             error: "Saved tools are disabled in settings."
@@ -455,10 +493,18 @@ export function createInvokeDeferredTool(
         }, null, 2)
       }
 
-      if (!(await service.getTool(input.tool_id))) {
+      const resolvedTool = await service.getTool(input.tool_id)
+      if (!resolvedTool) {
         return JSON.stringify({
           ok: false,
           error: `Tool not found: ${input.tool_id}`
+        }, null, 2)
+      }
+
+      if (resolvedTool.visibility !== "lazy") {
+        return JSON.stringify({
+          ok: false,
+          error: `Tool ${resolvedTool.toolId} is already directly callable from the tool list. Call it directly instead of using invoke_deferred_tool.`
         }, null, 2)
       }
 
@@ -487,7 +533,7 @@ export function createInvokeDeferredTool(
     {
       name: "invoke_deferred_tool",
       description:
-        "Execute a discovered MCP tool or saved tool by tool_id. If you already know the exact tool_id, inspect it first when needed. Returns { ok: true, data } on success or { ok: false, error } on failure.",
+        "Execute a deferred-only MCP tool or saved tool by tool_id. You must inspect the tool first with inspect_tool(caller=\"invoke_deferred_tool\") and use the exact returned schema. Do not use this for tools that are already directly callable from the tool list. Returns { ok: true, data } on success or { ok: false, error } on failure.",
       schema: invokeDeferredToolSchema
     }
   )
@@ -498,25 +544,42 @@ export async function createToolSearchTools(
   context: ToolSearchContext,
   options?: Partial<ToolSearchOptions>
 ): Promise<unknown[]> {
-  const codeExecEnabled = options?.codeExecEnabled !== false
+  const codeExecRouteEnabled = options?.codeExecRouteEnabled === true
+  const savedToolsEnabled = options?.savedToolsEnabled !== false
   const tools = await service.listTools()
-  const savedTools = codeExecEnabled ? listSavedCodeExecTools() : []
+  const savedTools = savedToolsEnabled ? listSavedCodeExecTools() : []
   const lazyTools = tools.filter((tool) => tool.visibility === "lazy")
   const hasMcpTools = tools.length > 0
   const hasLazyTools = lazyTools.length > 0
   const hasSavedTools = savedTools.length > 0
   const needsDeferredBridge = hasLazyTools || hasSavedTools
-  const shouldInjectInspectTool = needsDeferredBridge || (codeExecEnabled && hasMcpTools)
+  const shouldInjectInspectTool = needsDeferredBridge || (codeExecRouteEnabled && hasMcpTools)
 
   if (!shouldInjectInspectTool) return []
 
   if (!needsDeferredBridge) {
-    return [createInspectTool(service, { codeExecEnabled })]
+    return [createInspectTool(service, {
+      codeExecRouteEnabled,
+      savedToolsEnabled,
+      deferredRouteEnabled: false
+    })]
   }
 
   return [
-    createSearchTool(service, { codeExecEnabled }),
-    createInspectTool(service, { codeExecEnabled }),
-    createInvokeDeferredTool(service, context, { codeExecEnabled })
+    createSearchTool(service, {
+      codeExecRouteEnabled,
+      savedToolsEnabled,
+      deferredRouteEnabled: true
+    }),
+    createInspectTool(service, {
+      codeExecRouteEnabled,
+      savedToolsEnabled,
+      deferredRouteEnabled: true
+    }),
+    createInvokeDeferredTool(service, context, {
+      codeExecRouteEnabled,
+      savedToolsEnabled,
+      deferredRouteEnabled: true
+    })
   ]
 }

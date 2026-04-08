@@ -144,48 +144,79 @@ Your memory files are stored as Markdown in the memory directory. You can update
 - Never store API keys, passwords, or credentials in memory files
 `
 
+const TOOL_ROUTING_GATE_PROMPT_PREFIX = `
+## Tool Routing Gate
+
+Whenever your task requires calling tool, you must evaluate the task and choose EXACTLY ONE of the following mutually exclusive routes before proceeding:
+`
+
+function renderToolRoutingGatePrompt(options: {
+  hasDeferredRoute: boolean
+  hasCodeExecRoute: boolean
+}): string {
+  const routeTools = ["inspect_tool"]
+  if (options.hasDeferredRoute) {
+    routeTools.unshift("search_tool", "invoke_deferred_tool")
+  }
+  if (options.hasCodeExecRoute) {
+    routeTools.push("code_exec")
+  }
+
+  const toolList = routeTools.map((tool) => `\`${tool}\``).join(", ")
+  const directRouteWarnings: string[] = []
+  if (options.hasDeferredRoute) {
+    directRouteWarnings.push("deferred tools")
+  }
+  if (options.hasCodeExecRoute) {
+    directRouteWarnings.push("\`caller=\"code_exec\"\`")
+  }
+
+  const lines = [
+    TOOL_ROUTING_GATE_PROMPT_PREFIX.trim()
+    // `Before using ${toolList}, first choose exactly one route:`
+  ]
+  lines.push(
+    "- **Direct-Tool Call:** Use this IF the required tool is already listed in your standard callable tools. Call it directly."
+    // directRouteWarnings.length > 0
+    // ? `- **Direct-call route:** If the needed tool already appears in the callable tool list, call it directly. Do NOT use ${directRouteWarnings.join(" or ")} for an ordinary direct tool call.`
+    // : "- **Direct-call route:** If the needed tool already appears in the callable tool list, call it directly."
+  )
+  if (options.hasDeferredRoute) {
+    lines.push(
+      "- **Deferred Tools Workflow:** Use this ONLY when: The task cannot be resolved via a `Direct-Tool Call`, OR it requires calling tools from the <deferred-tool-ids> inventory."
+    )
+  }
+  if (options.hasCodeExecRoute) {
+    lines.push(
+      "- **Code-Exec Authoring Route:** Use this ONLY when: Use this ONLY when explicitly requested by the user, OR when the task requires orchestrating multiple MCP tools, using control flow (e.g., loops, conditionals), or complex reshaping of results. Do NOT use this for simple, single-step tool calls unless explicitly requested."
+    )
+  }
+  return lines.join("\n")
+}
+
 const DEFERRED_TOOLS_WORKFLOW_PROMPT = `
 ## Deferred Tools Workflow
 
-Use this workflow ONLY when you plan to call a tool from \`<available-deferred-tools>\`.
-
-Deferred tools are listed in \`<available-deferred-tools>\` by \`tool_id\` only (they do not include full input schemas or descriptions).
-You CANNOT invoke a deferred tool until you fetch its exact schema using \`inspect_tool\`
-
 Follow this strict sequence:
-
-1. **Identify:** Check the \`<available-deferred-tools>\` list.
-   - If the exact \`tool_id\` is obvious for your task, proceed to Step 2.
-   - If the task is complex, or you need to choose among similar tools, call \`search_tool\` first to find the best \`tool_id\`.
-2. **Inspect:** Call \`inspect_tool\` with the chosen \`tool_id\`.
-3. **Wait & Review:** You MUST wait for the observation from \`inspect_tool\`. Do not guess or hallucinate the parameters. Once received, review the schema and description to ensure it fits your needs.
-4. **Invoke:** Finally, call \`invoke_deferred_tool\` using the exact parameters defined in the schema.
-`
-
-const INSPECT_TOOL_ONLY_PROMPT = `
-
-## Tool Inspection
-
-Use \`inspect_tool\` to fetch full schema details and description for tools whose ids or definitions are already available in your current context before planning calls or writing \`code_exec\`.
+1. **Identify:** Check the \`<deferred-tool-ids>\`.
+   - If the exact deferred \`tool_id\` is obvious for your task, proceed to Step 2.
+   - If it is not obvious, call \`search_tool(..., caller="invoke_deferred_tool")\` to find the best deferred \`tool_id\`.
+2. **Inspect:** Call \`inspect_tool(..., caller="invoke_deferred_tool")\` with the chosen \`tool_id\`, Review the returned deferred tool schema and description.
+IMPORTANT: Invoking any tool from <deferred-tool-ids> without a prior inspect_tool call will result in guaranteed failure.
+3. **Invoke:** Call \`invoke_deferred_tool\` using the exact parameters defined by the inspected schema.
 `
 
 const CODE_EXEC_BASE_PROMPT_PREFIX = `
 ## Code Execution Workflow
 
-Use \`code_exec\` ONLY when a task requires orchestrating multiple MCP tools, using control flow (e.g., loops, conditionals), or complex reshaping of MCP results.
-**Do NOT use \`code_exec\` for simple, single-tool invocations.**
-
-To write and execute code successfully, you must strictly follow this sequence:
-
+Follow this strict sequence:
 `
 
-
 const CODE_EXEC_BASE_PROMPT_TAIL = `
-2. **Inspect:** Call \`inspect_tool(..., caller="code_exec")\` for EACH targeted tool you plan to use in your script (this applies to BOTH deferred MCP tools and normal MCP tools, as you need their specific \`code_exec\` hints). Do not inspect unnecessary tools.
-3. **Wait:** You MUST wait for the observation. Do not write any code until you have received the exact schemas and \`code_exec\` hints for all required tools.
-4. **Execute:** Call \`code_exec\` to run your orchestration script.
-   - Strictly follow the \`code_exec\` hints obtained in Step 3.
-   - Implement basic error handling in your code to gracefully manage potential tool failures.
+2. **Inspect:** Call \`inspect_tool(..., caller="code_exec")\` for EACH tool you plan to orchestrate in your code. This inspection is mandatory to fetch the schemas and \`code_exec\` call examples.
+IMPORTANT: Any MCP tool invoked via mcp.$call(...) in \`code_exec\` without prior inspect_tool call WILL FAIL.
+3. **Execute:** Call \`code_exec\` to run your orchestration script.
+   - Strictly follow the \`code_exec\` hints obtained in Step 2.
 `
 
 function joinPromptSections(sections: string[]): string {
@@ -205,19 +236,22 @@ export function renderInjectedToolUsagePrompt(options: {
 }): string {
   const sections: string[] = []
   const hasDeferredWorkflow = options.hasSearchTool && options.hasInspectTool && options.hasInvokeDeferredTool
+  if (hasDeferredWorkflow || options.hasCodeExecTool) {
+    sections.push(renderToolRoutingGatePrompt({
+      hasDeferredRoute: hasDeferredWorkflow,
+      hasCodeExecRoute: options.hasCodeExecTool
+    }))
+  }
   if (hasDeferredWorkflow) {
     sections.push(DEFERRED_TOOLS_WORKFLOW_PROMPT)
   }
-  // } else if (options.hasInspectTool) {
-  //   sections.push(INSPECT_TOOL_ONLY_PROMPT)
-  // }
 
   if (options.hasCodeExecTool) {
     const codeExecLines = [
       CODE_EXEC_BASE_PROMPT_PREFIX,
       hasDeferredWorkflow
-        ? "1. **Search (If needed):** The `<available-deferred-tools>` list only provides `tool_id` without descriptions. If it is not entirely obvious which `tool_id` are appropriate for your task, use `search_tool` with a relevant query to find them."
-        : "1. Determine the tool_id of the MCP tool to use based on the task.",
+        ? '1. **Identify MCP tools (if needed):** If you are tackling a complex task and do not already know the exact MCP tool_ids for code execution, you may call `search_tool(..., caller="code_exec")` to find them.'
+        : '1. **Identify MCP tools:** Determine the exact MCP tool_ids you need for the code_exec from the callable tool list.',
       CODE_EXEC_BASE_PROMPT_TAIL
     ]
     sections.push(codeExecLines.join(""))
@@ -234,5 +268,5 @@ export function renderAvailableDeferredToolsPrompt(toolIds: string[]): string {
 
   if (uniqueSortedToolIds.length === 0) return ""
 
-  return `\n<available-deferred-tools>\n${uniqueSortedToolIds.join("\n")}\n</available-deferred-tools>\n`
+  return `\n<deferred-tool-ids>\n${uniqueSortedToolIds.join("\n")}\n</deferred-tool-ids>\n`
 }
