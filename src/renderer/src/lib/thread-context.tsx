@@ -286,6 +286,17 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         if (prev[threadId] === data.isLoading) return prev
         return { ...prev, [threadId]: data.isLoading }
       })
+      // Defensive clear: when the stream stops for ANY reason (success / error
+      // / user cancel), drop any lingering retry indicator. This is the
+      // last-line-of-defense in case onRetryResolved / handleError / explicit
+      // model_retry_clear were all bypassed (e.g. abort racing the IPC).
+      if (data.isLoading === false) {
+        setThreadStates((prev) => {
+          const cur = prev[threadId]
+          if (!cur || !cur.modelRetry) return prev
+          return { ...prev, [threadId]: { ...cur, modelRetry: null } }
+        })
+      }
     },
     [notifyStreamSubscribers]
   )
@@ -481,9 +492,10 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             }))
           }
           break
-        case "model_retry_clear":
-          updateThreadState(threadId, () => ({ modelRetry: null }))
-          break
+        // No `model_retry_clear` case: clearing is handled uniformly by
+        // (1) message-delta defensive clear (mid-stream resumption),
+        // (2) handleStreamUpdate isLoading=false (any stream end),
+        // (3) handleError (explicit error path).
         case "token_usage":
           // Only update if we have meaningful token values (> 0)
           // This prevents resetting the usage when streaming ends
@@ -911,6 +923,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           const finalContent = tracker.accumulatedContent
           updateThreadState(threadId, (prev) => {
             const idx = prev.messages.findIndex((m) => m.id === id)
+            // Defensive clear: any real assistant token means data is flowing
+            // again, so a stale retry indicator must disappear.
+            const clearRetry = prev.modelRetry ? { modelRetry: null } : {}
             if (idx >= 0) {
               const updated = [...prev.messages]
               updated[idx] = {
@@ -918,9 +933,10 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
                 content: finalContent,
                 ...(toolCalls?.length && { tool_calls: toolCalls })
               }
-              return { messages: updated }
+              return { ...clearRetry, messages: updated }
             }
             return {
+              ...clearRetry,
               messages: [
                 ...prev.messages,
                 {

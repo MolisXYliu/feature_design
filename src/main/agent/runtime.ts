@@ -658,7 +658,7 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
 
 /** Specific non-5xx status codes that should trigger a retry on the SAME model/endpoint.
  *  All 5xx are also retryable (handled by isRetryableStatus below). */
-const RETRYABLE_NON_5XX_STATUS = new Set([408, 409, 429, 432, 433])
+const RETRYABLE_NON_5XX_STATUS = new Set([404, 408, 409, 429, 432, 433])
 
 function isRetryableStatus(status: number): boolean {
   return status >= 500 || RETRYABLE_NON_5XX_STATUS.has(status)
@@ -666,6 +666,10 @@ function isRetryableStatus(status: number): boolean {
 
 const RETRY_MAX_ATTEMPTS = 5 // 1 initial + 4 retries
 const RETRY_BASE_DELAY_MS = 1000 // exponential: 1s, 2s, 4s, 8s
+/** Per-attempt timeout — guards against half-open / stalled connections
+ *  (cases where TCP stays up but no bytes flow). Each attempt gets its own
+ *  AbortController so a timeout on attempt N doesn't poison attempt N+1. */
+const PER_ATTEMPT_TIMEOUT_MS = 60_000
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -700,38 +704,68 @@ export interface ModelRetryInfo {
   delayMs: number
 }
 
-/** Hooks invoked by the retrying fetch wrapper so the UI can display status. */
+/** Hooks invoked by the retrying fetch wrapper so the UI can display status.
+ *  Note: there is intentionally no "resolved" hook — the renderer clears the
+ *  retry indicator via stream-level signals (message-delta arrival, stream
+ *  end, or explicit error), which covers every termination path with one
+ *  unified mechanism. */
 export interface ModelRetryHooks {
   onRetry?: (info: ModelRetryInfo) => void
-  /** Called when the fetch ultimately succeeds (only if at least one retry happened). */
-  onRetryResolved?: () => void
 }
 
 /**
  * Build a retrying fetch wrapper. Retries on:
  *   - Network errors thrown by fetch
- *   - HTTP status in RETRYABLE_HTTP_STATUS (or >= 500)
+ *   - HTTP status in RETRYABLE_NON_5XX_STATUS (or >= 500)
+ *   - Per-attempt timeout (half-open / stalled connection guard)
  * Does NOT retry on:
- *   - AbortError (user cancelled)
+ *   - Parent signal abort (user cancelled) — propagated immediately
  *   - 2xx (including streaming 200 — returned immediately)
  *   - Non-retryable 4xx (400/401/403/404/...) — bubbled up to failover layer
+ *
+ * Each attempt creates its own AbortController so a timeout on one attempt
+ * does not poison the next one (avoids the "stuck signal" pitfall that
+ * happens when SDK-level timeout aborts the shared signal).
  */
 function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
   const maxRetries = RETRY_MAX_ATTEMPTS - 1
   return async (input, init) => {
-    const signal = init?.signal ?? undefined
+    const parentSignal = (init?.signal ?? undefined) as AbortSignal | undefined
     let lastError: unknown = undefined
-    let didRetry = false
 
     for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
+      if (parentSignal?.aborted) throw new DOMException("Aborted", "AbortError")
+
+      // Per-attempt controller: fresh each iteration so a timeout on attempt N
+      // does not leak into attempt N+1. Parent (user cancel) is forwarded in
+      // one direction only: parent -> attempt. Attempt abort never touches parent.
+      const attemptCtrl = new AbortController()
+      const onParentAbort = (): void => {
+        attemptCtrl.abort(parentSignal?.reason ?? new DOMException("Aborted", "AbortError"))
+      }
+      parentSignal?.addEventListener("abort", onParentAbort, { once: true })
+
+      const timeoutHandle = setTimeout(() => {
+        attemptCtrl.abort(new DOMException("Per-attempt timeout", "TimeoutError"))
+      }, PER_ATTEMPT_TIMEOUT_MS)
+
+      const cleanup = (): void => {
+        clearTimeout(timeoutHandle)
+        parentSignal?.removeEventListener("abort", onParentAbort)
+      }
 
       try {
-        const res = await fetch(input, init)
+        const res = await fetch(input, { ...init, signal: attemptCtrl.signal })
+
+        // IMPORTANT: do not cancel the per-attempt timeout yet for streaming
+        // responses — we want the timeout to cover only the time up to the
+        // first byte. Once the response headers are in, we cancel the timer
+        // because downstream (SDK / LangChain) owns the stream lifetime from
+        // here and should not be interrupted mid-stream by our timer.
+        cleanup()
 
         // Success or non-retryable error — return as-is.
         if (!isRetryableStatus(res.status)) {
-          if (didRetry && res.ok) hooks?.onRetryResolved?.()
           return res
         }
 
@@ -749,35 +783,40 @@ function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
         console.warn(
           `[Runtime] fetch HTTP ${res.status}, retry ${attempt}/${maxRetries} after ${delay}ms`
         )
-        didRetry = true
         hooks?.onRetry?.({
           attempt,
           maxRetries,
           reason: `HTTP ${res.status}`,
           delayMs: delay
         })
-        await sleep(delay, signal)
+        await sleep(delay, parentSignal)
         continue
       } catch (err) {
-        // AbortError — propagate immediately, do not retry.
-        if (err instanceof Error && err.name === "AbortError") throw err
+        cleanup()
+
+        // Parent signal aborted (user cancel) — propagate immediately, no retry.
+        if (parentSignal?.aborted) throw err
+
+        // Distinguish per-attempt timeout from generic network errors for logging;
+        // both are retryable.
+        const isTimeout = err instanceof Error && err.name === "TimeoutError"
+        const rawMsg = err instanceof Error ? err.message : String(err)
+        const reason = isTimeout ? `timeout after ${PER_ATTEMPT_TIMEOUT_MS}ms` : rawMsg
 
         lastError = err
         if (attempt >= RETRY_MAX_ATTEMPTS) throw err
 
         const delay = computeBackoffDelay(attempt)
-        const msg = err instanceof Error ? err.message : String(err)
         console.warn(
-          `[Runtime] fetch network error "${msg}", retry ${attempt}/${maxRetries} after ${delay}ms`
+          `[Runtime] fetch ${isTimeout ? "timeout" : "network error"} "${reason}", retry ${attempt}/${maxRetries} after ${delay}ms`
         )
-        didRetry = true
         hooks?.onRetry?.({
           attempt,
           maxRetries,
-          reason: msg || "network error",
+          reason: reason || "network error",
           delayMs: delay
         })
-        await sleep(delay, signal)
+        await sleep(delay, parentSignal)
         continue
       }
     }
@@ -813,9 +852,11 @@ function getModelInstance(
   return new ChatOpenAI({
     model: resolvedModel,
     apiKey,
-    // SDK-level retry disabled — unified retry lives in retryingFetch below.
+    // SDK-level retry AND timeout disabled — unified retry + per-attempt
+    // timeout live in retryingFetch below. Setting SDK timeout here would
+    // create a shared AbortSignal that, once fired, permanently blocks all
+    // subsequent retry attempts at the fetch layer.
     maxRetries: 0,
-    timeout: 60_000,
     configuration: {
       baseURL: customConfig.baseUrl,
       fetch: retryHooks ? createRetryingFetch(retryHooks) : defaultRetryingFetch
