@@ -274,6 +274,38 @@ async function hasPushableCommits(
   }
 }
 
+async function getPendingCommits(
+  worktreePath: string,
+  branch: string,
+  baseCommit: string | null,
+  options?: { silent?: boolean }
+): Promise<Array<{ hash: string; message: string; date: string }>> {
+  const silent = Boolean(options?.silent)
+  const remoteRef = `refs/remotes/origin/${branch}`
+  const logFormat = "%H\x1f%s\x1f%ci"
+  try {
+    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef], { silent })
+    const raw = (await runGit(worktreePath, ["log", `${remoteRef}..HEAD`, `--format=${logFormat}`], { silent })).trim()
+    if (!raw) return []
+    return raw.split("\n").map((line) => {
+      const [hash, message, date] = line.split("\x1f")
+      return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
+    }).filter((c) => c.hash)
+  } catch {
+    if (!baseCommit) return []
+    try {
+      const raw = (await runGit(worktreePath, ["log", `${baseCommit}..HEAD`, `--format=${logFormat}`], { silent })).trim()
+      if (!raw) return []
+      return raw.split("\n").map((line) => {
+        const [hash, message, date] = line.split("\x1f")
+        return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
+      }).filter((c) => c.hash)
+    } catch {
+      return []
+    }
+  }
+}
+
 function isPathspecNoMatchError(error: unknown): boolean {
   return getExecErrorText(error).toLowerCase().includes("pathspec")
 }
@@ -1273,6 +1305,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       const hasPushableCommit = worktreeBranch
         ? await hasPushableCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit, { silent: true })
         : false
+      const pendingCommits = worktreeBranch
+        ? await getPendingCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit, { silent: true })
+        : []
       return {
         success: true,
         isWorktree: context.isWorktree,
@@ -1282,6 +1317,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         totals: state.totals,
         hasPendingDiff: state.files.length > 0,
         hasPushableCommit,
+        pendingCommits,
         trackedFiles: tracked,
         worktreeBranch,
         suggestedCommitMessage:

@@ -47,6 +47,7 @@ export function GitPanelView({
     totals: { additions: number; deletions: number; fileCount: number }
     hasPendingDiff: boolean
     hasPushableCommit: boolean
+    pendingCommits?: Array<{ hash: string; message: string; date: string }>
     worktreeBranch?: string | null
     suggestedCommitMessage?: string
     error?: string
@@ -506,6 +507,7 @@ export function GitPanelView({
         cardNumber={cardNumber}
         commitType={commitType}
         commitMessage={commitMessage}
+        pendingCommits={state?.pendingCommits}
         onOpenChange={(open) => {
           if (!open) setSubmitAction(null)
         }}

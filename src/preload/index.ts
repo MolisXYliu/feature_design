@@ -359,6 +359,7 @@ const api = {
       totals: { additions: number; deletions: number; fileCount: number }
       hasPendingDiff: boolean
       hasPushableCommit: boolean
+      pendingCommits?: Array<{ hash: string; message: string; date: string }>
       trackedFiles?: string[]
       worktreeBranch?: string | null
       suggestedCommitMessage?: string
@@ -373,6 +374,7 @@ const api = {
         totals: { additions: number; deletions: number; fileCount: number }
         hasPendingDiff: boolean
         hasPushableCommit: boolean
+        pendingCommits?: Array<{ hash: string; message: string; date: string }>
         trackedFiles?: string[]
         worktreeBranch?: string | null
         suggestedCommitMessage?: string
