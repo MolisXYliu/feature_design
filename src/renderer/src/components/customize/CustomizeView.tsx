@@ -33,7 +33,13 @@ type CustomizeTab =
   | "lsp"
 
 export function CustomizeView(): React.JSX.Element {
-  const { setShowCustomizeView, customizeInitialTab, pendingEvolution, setPendingEvolution } = useAppStore()
+  const {
+    setShowCustomizeView,
+    customizeInitialTab,
+    pendingEvolution,
+    setPendingEvolution,
+    currentThreadId
+  } = useAppStore()
   const [activeTab, setActiveTab] = useState<CustomizeTab>(
     (customizeInitialTab as CustomizeTab) || "skills"
   )
@@ -249,7 +255,7 @@ export function CustomizeView(): React.JSX.Element {
       ) : activeTab === "chatx" ? (
         <ChatXPanel />
       ) : activeTab === "lsp" ? (
-        <LspPanel />
+        <LspPanel threadId={currentThreadId} />
       ) : activeTab === "sandbox" ? (
         <SandboxPanel />
       ) : activeTab === "userinfo" ? (

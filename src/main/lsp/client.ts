@@ -5,7 +5,9 @@ import {
   StreamMessageWriter,
   MessageConnection,
   RequestType,
-  NotificationType
+  RequestType0,
+  NotificationType,
+  NotificationType0
 } from "vscode-jsonrpc/node"
 import type {
   LspDiagnostic, LspLocation, LspHoverResult, LspSymbol,
@@ -208,6 +210,8 @@ const SERVICE_READY_TIMEOUT = 60_000
 const PROJECT_READY_TIMEOUT = 20_000
 const HOVER_MAX_RETRIES = 5
 const HOVER_RETRY_DELAY = 50
+const SHUTDOWN_REQUEST = new RequestType0<unknown, unknown>("shutdown")
+const EXIT_NOTIFICATION = new NotificationType0("exit")
 
 export class LspClient {
   private connection: MessageConnection
@@ -769,7 +773,7 @@ export class LspClient {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([
-          this.connection.sendRequest(new RequestType<null, unknown, unknown>("shutdown"), null),
+          this.connection.sendRequest(SHUTDOWN_REQUEST),
           new Promise((_, reject) => {
             timer = setTimeout(() => reject(new Error("shutdown timeout")), 2_000)
           })
@@ -777,16 +781,14 @@ export class LspClient {
       } finally {
         if (timer) clearTimeout(timer)
       }
-      this.connection.sendNotification(new NotificationType("exit"))
+      await this.connection.sendNotification(EXIT_NOTIFICATION)
       console.log("[LSP] Graceful shutdown sent")
     } catch (e) {
       console.warn("[LSP] Graceful shutdown failed:", e)
     }
 
     // Close stdin to signal EOF before terminating
-    if (this.process.stdin && !this.process.stdin.destroyed) {
-      this.process.stdin.end()
-    }
+    this.connection.end()
 
     this.connection.dispose()
 

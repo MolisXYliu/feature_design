@@ -14,7 +14,11 @@ const HEAP_OPTIONS = [
 const selectClass =
   "w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 
-export function LspPanel(): React.JSX.Element {
+interface LspPanelProps {
+  threadId: string | null
+}
+
+export function LspPanel({ threadId }: LspPanelProps): React.JSX.Element {
   const [config, setConfig] = useState<LspConfig | null>(null)
   const [running, setRunning] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -32,19 +36,27 @@ export function LspPanel(): React.JSX.Element {
       if (!mountedRef.current) return
       setConfig(cfg)
 
-      // Try to get workspace path for status check
-      const workspace = await window.api.workspace.get()
+      if (!threadId) {
+        setProjectRoot(null)
+        setRunning(false)
+        return
+      }
+
+      const workspace = await window.api.workspace.get(threadId)
       if (!mountedRef.current) return
       setProjectRoot(workspace)
 
-      if (workspace) {
-        const isRunning = await window.api.lsp.isRunning(workspace)
-        if (mountedRef.current) setRunning(isRunning)
+      if (!workspace) {
+        setRunning(false)
+        return
       }
+
+      const isRunning = await window.api.lsp.isRunning(workspace)
+      if (mountedRef.current) setRunning(isRunning)
     } catch (e) {
       console.error("[LspPanel] load error:", e)
     }
-  }, [])
+  }, [threadId])
 
   useEffect(() => {
     loadAll()
@@ -75,7 +87,7 @@ export function LspPanel(): React.JSX.Element {
 
   const handleStart = useCallback(async () => {
     if (!projectRoot) {
-      alert("请先选择一个工作目录")
+      alert("请先为当前会话选择工作目录")
       return
     }
     try {
@@ -228,8 +240,10 @@ export function LspPanel(): React.JSX.Element {
             )}>
               {running ? "运行中" : starting ? "启动中..." : "已停止"}
             </div>
-            <div className="text-muted-foreground">工作目录</div>
-            <div className="text-xs truncate">{projectRoot || "未选择"}</div>
+            <div className="text-muted-foreground">当前会话工作目录</div>
+            <div className="text-xs truncate">
+              {projectRoot || (threadId ? "当前会话未关联文件夹" : "未选择会话")}
+            </div>
             {config.lastError && (
               <>
                 <div className="text-muted-foreground">错误信息</div>
