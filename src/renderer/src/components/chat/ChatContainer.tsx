@@ -2145,7 +2145,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             </div>
             {/*chat container bottom panel — moved inside input box above */}
             <div className={'flex items-center justify-between'}>
-             <div>
+             <div className={'flex items-center space-x-4'}>
                {yoloMode && (
                  <button
                    type="button"
