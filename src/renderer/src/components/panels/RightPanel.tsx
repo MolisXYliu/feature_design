@@ -332,7 +332,9 @@ export function RightPanel({
           if (!currentThreadId) return
           const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
           if (summary.isGitRepo ?? summary.isWorktree) {
-            onRequestGitMode?.()
+            if (moduleMode !== "git") {
+              onRequestGitMode?.()
+            }
             return
           }
         } catch {
@@ -377,7 +379,7 @@ export function RightPanel({
       onRequestPreviewMode?.()
     }
     void handleResourceEventWithoutEdits()
-  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode, currentThreadId])
+  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode, currentThreadId, moduleMode])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -401,17 +403,21 @@ export function RightPanel({
       if (data.threadId === currentThreadId) {
         window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
           if (summary.isGitRepo ?? summary.isWorktree) {
-            onRequestGitMode?.()
+            if (moduleMode !== "git") {
+              onRequestGitMode?.()
+            }
             return
           }
-          onRequestPreviewMode?.()
+          if (moduleMode !== "preview") {
+            onRequestPreviewMode?.()
+          }
         }).catch(() => {
           // ignore summary refresh errors
         })
       }
     })
     return cleanup
-  }, [currentThreadId, previewPath, onRequestGitMode, onRequestPreviewMode])
+  }, [currentThreadId, previewPath, moduleMode, onRequestGitMode, onRequestPreviewMode])
 
   useEffect(() => {
     const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {

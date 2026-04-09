@@ -457,6 +457,13 @@ const api = {
         steps?: Array<{ step: "pull" | "commit" | "push" | "verify" | "final"; status: "ok" | "failed" | "skipped"; detail: string }>
       }>
     },
+    pullWorktree: (threadId: string): Promise<{ success: boolean; detail?: string; error?: string }> => {
+      return ipcRenderer.invoke("workspace:pullWorktree", { threadId }) as Promise<{
+        success: boolean
+        detail?: string
+        error?: string
+      }>
+    },
     rejectWorktreeChanges: (threadId: string): Promise<{ success: boolean; error?: string }> => {
       return ipcRenderer.invoke("workspace:rejectWorktreeChanges", { threadId }) as Promise<{
         success: boolean

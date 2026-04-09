@@ -239,6 +239,11 @@ interface CustomAPI {
         detail: string
       }>
     }>
+    pullWorktree: (threadId: string) => Promise<{
+      success: boolean
+      detail?: string
+      error?: string
+    }>
     rejectWorktreeChanges: (threadId: string) => Promise<{
       success: boolean
       error?: string

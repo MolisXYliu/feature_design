@@ -1480,7 +1480,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             try {
               await runGit(worktreePath, ["rebase", "--abort"])
             } catch {
-              // ignore abort failure; keep original pull error details
+              // ignore
             }
             const detail = getExecErrorText(pullError)
             if (isRebaseConflictError(pullError)) {
@@ -1622,6 +1622,44 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
     }
   )
+
+  ipcMain.handle("workspace:pullWorktree", async (_event, { threadId }: { threadId: string }) => {
+    try {
+      logGitStep(threadId, "pull", "开始拉取远端代码")
+      const context = await resolveThreadWorkspaceContext(threadId)
+      const worktreePath = context.workspacePath
+      if (!worktreePath || !context.isGitRepo) {
+        logGitStep(threadId, "pull", "失败：当前任务不在 Git 仓库中")
+        return { success: false, error: "当前任务不在 Git 仓库中" }
+      }
+      const branch =
+        context.worktreeBranch || (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
+      logGitStep(threadId, "pull", `执行 pull --rebase origin ${branch}`)
+      try {
+        await runGit(worktreePath, ["pull", "--rebase", "origin", branch])
+      } catch (pullError) {
+        if (isMissingRemoteBranchError(pullError)) {
+          logGitStep(threadId, "pull", `远端不存在分支 ${branch}，跳过`)
+          return { success: true, detail: `远端不存在分支 ${branch}，无需拉取` }
+        }
+        try {
+          await runGit(worktreePath, ["rebase", "--abort"])
+        } catch {
+          // ignore
+        }
+        const detail = getExecErrorText(pullError)
+        logGitStep(threadId, "pull", `失败：${detail}`)
+        return { success: false, error: detail || "拉取失败" }
+      }
+      notifyWorkspaceFilesChanged(threadId, worktreePath)
+      logGitStep(threadId, "pull", "拉取成功")
+      return { success: true }
+    } catch (e) {
+      const detail = getExecErrorText(e)
+      logGitStep(threadId, "pull", `异常：${detail || (e instanceof Error ? e.message : "拉取失败")}`)
+      return { success: false, error: detail || (e instanceof Error ? e.message : "拉取失败") }
+    }
+  })
 
   ipcMain.handle("workspace:rejectWorktreeChanges", async (_event, { threadId }: { threadId: string }) => {
     try {
