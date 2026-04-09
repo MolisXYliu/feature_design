@@ -658,7 +658,7 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
 
 /** Specific non-5xx status codes that should trigger a retry on the SAME model/endpoint.
  *  All 5xx are also retryable (handled by isRetryableStatus below). */
-const RETRYABLE_NON_5XX_STATUS = new Set([404, 408, 409, 429, 432, 433])
+const RETRYABLE_NON_5XX_STATUS = new Set([408, 409, 429, 432, 433])
 
 function isRetryableStatus(status: number): boolean {
   return status >= 500 || RETRYABLE_NON_5XX_STATUS.has(status)
