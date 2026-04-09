@@ -1335,6 +1335,28 @@ const api = {
       ipcRenderer.on("update:error", wrapper)
       return () => ipcRenderer.removeListener("update:error", wrapper)
     }
+  },
+  git: {
+    currentBranch: (cwd?: string): Promise<{ isGitRepo: boolean; branch: string | null; isWorktree: boolean }> =>
+      ipcRenderer.invoke("git:currentBranch", cwd) as Promise<{
+        isGitRepo: boolean
+        branch: string | null
+        isWorktree: boolean
+      }>,
+    listBranches: (cwd?: string): Promise<{ success: boolean; branches: string[]; error?: string }> =>
+      ipcRenderer.invoke("git:listBranches", cwd) as Promise<{
+        success: boolean
+        branches: string[]
+        error?: string
+      }>,
+    switchBranch: (
+      branch: string,
+      cwd?: string
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("git:switchBranch", { branch, cwd }) as Promise<{
+        success: boolean
+        error?: string
+      }>
   }
 }
 
