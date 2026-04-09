@@ -603,13 +603,13 @@ export async function closeCheckpointer(threadId: string): Promise<void> {
 
 /** Specific non-5xx status codes that should trigger a retry on the SAME model/endpoint.
  *  All 5xx are also retryable (handled by isRetryableStatus below). */
-const RETRYABLE_NON_5XX_STATUS = new Set([404, 408, 409, 429, 432, 433])
+const RETRYABLE_NON_5XX_STATUS = new Set([408, 409, 429, 432, 433])
 
 function isRetryableStatus(status: number): boolean {
   return status >= 500 || RETRYABLE_NON_5XX_STATUS.has(status)
 }
 
-const RETRY_MAX_ATTEMPTS = 5 // 1 initial + 4 retries
+const DEFAULT_RETRY_MAX_ATTEMPTS = 6 // 1 initial + 5 retries (used when caller does not specify)
 const RETRY_BASE_DELAY_MS = 1000 // exponential: 1s, 2s, 4s, 8s
 /** Per-attempt timeout — guards against half-open / stalled connections
  *  (cases where TCP stays up but no bytes flow). Each attempt gets its own
@@ -672,13 +672,17 @@ export interface ModelRetryHooks {
  * does not poison the next one (avoids the "stuck signal" pitfall that
  * happens when SDK-level timeout aborts the shared signal).
  */
-function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
-  const maxRetries = RETRY_MAX_ATTEMPTS - 1
+function createRetryingFetch(
+  hooks?: ModelRetryHooks,
+  maxAttempts: number = DEFAULT_RETRY_MAX_ATTEMPTS
+): typeof fetch {
+  const totalAttempts = Math.max(1, maxAttempts)
+  const maxRetries = totalAttempts - 1
   return async (input, init) => {
     const parentSignal = (init?.signal ?? undefined) as AbortSignal | undefined
     let lastError: unknown = undefined
 
-    for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= totalAttempts; attempt++) {
       if (parentSignal?.aborted) throw new DOMException("Aborted", "AbortError")
 
       // Per-attempt controller: fresh each iteration so a timeout on attempt N
@@ -715,7 +719,7 @@ function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
         }
 
         // Retryable HTTP status.
-        if (attempt >= RETRY_MAX_ATTEMPTS) return res // exhausted — return so caller sees the real status
+        if (attempt >= totalAttempts) return res // exhausted — return so caller sees the real status
 
         // Drain body to free the connection before retrying.
         try {
@@ -749,7 +753,7 @@ function createRetryingFetch(hooks?: ModelRetryHooks): typeof fetch {
         const reason = isTimeout ? `timeout after ${PER_ATTEMPT_TIMEOUT_MS}ms` : rawMsg
 
         lastError = err
-        if (attempt >= RETRY_MAX_ATTEMPTS) throw err
+        if (attempt >= totalAttempts) throw err
 
         const delay = computeBackoffDelay(attempt)
         console.warn(
@@ -782,7 +786,8 @@ function getModelInstance(
     apiKey?: string
     interleavedThinking?: boolean
   },
-  retryHooks?: ModelRetryHooks
+  retryHooks?: ModelRetryHooks,
+  maxRetryAttempts?: number
 ): ChatOpenAI {
   const apiKey = customConfig.apiKey
   if (!apiKey) {
@@ -805,7 +810,10 @@ function getModelInstance(
     maxRetries: 0,
     configuration: {
       baseURL: customConfig.baseUrl,
-      fetch: retryHooks ? createRetryingFetch(retryHooks) : defaultRetryingFetch
+      fetch:
+        retryHooks || maxRetryAttempts !== undefined
+          ? createRetryingFetch(retryHooks, maxRetryAttempts)
+          : defaultRetryingFetch
     }
   }
 
@@ -836,13 +844,18 @@ export interface CreateAgentRuntimeOptions {
   abortSignal?: AbortSignal
   /** Optional hooks invoked when the model fetch layer retries / resolves. */
   retryHooks?: ModelRetryHooks
+  /** Max fetch attempts (1 initial + N-1 retries). Caller may vary this based
+   *  on routing mode — pinned mode benefits from more retries since there is
+   *  no failover fallback, while auto-routing can retry less and failover more. */
+  maxRetryAttempts?: number
 }
 
 // Create agent runtime with configured model and checkpointer
 export type AgentRuntime = ReturnType<typeof createAgent>
 
 export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Promise<DeepAgent> {
-  const { threadId, workspacePath, modelId, extraSystemPrompt, retryHooks } = options
+  const { threadId, workspacePath, modelId, extraSystemPrompt, retryHooks, maxRetryAttempts } =
+    options
 
   if (!threadId) {
     throw new Error("Thread ID is required for checkpointing.")
@@ -870,7 +883,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
     throw new Error("Custom model not configured. Please configure a model in Settings.")
   }
 
-  const model = getModelInstance(customConfig, retryHooks)
+  const model = getModelInstance(customConfig, retryHooks, maxRetryAttempts)
   console.log("[Runtime] Model instance created")
 
   const checkpointer = await getCheckpointer(threadId)

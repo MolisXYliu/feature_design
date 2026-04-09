@@ -460,15 +460,7 @@ export function SkillsPanel(): React.JSX.Element {
   )
 
   return (
-    <div
-      className="contents select-none"
-      onCopy={(e) => e.preventDefault()}
-      onKeyDown={(e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "c") {
-          e.preventDefault()
-        }
-      }}
-    >
+    <div className="contents">
       <div className="w-[330px] shrink-0 border-r border-border flex flex-col">
         <div className="p-3 border-b border-border space-y-2">
           <div className="flex items-center justify-between gap-2">
@@ -826,7 +818,15 @@ export function SkillDetail(props: {
 
   if (!skill) {
     return (
-      <div className="flex-1 flex items-center justify-center overflow-y-auto p-8">
+      <div
+        className="flex-1 flex items-center justify-center overflow-y-auto p-8 select-none"
+        onCopy={(e) => e.preventDefault()}
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+            e.preventDefault()
+          }
+        }}
+      >
         <div className="max-w-md space-y-6">
           <div className="text-center space-y-3">
             <div className="size-14 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
@@ -900,7 +900,15 @@ export function SkillDetail(props: {
   const isLoading = !!selectedFilePath && content === null && binaryBase64 === null
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+    <div
+      className="flex-1 flex flex-col min-w-0 overflow-hidden select-none"
+      onCopy={(e) => e.preventDefault()}
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+          e.preventDefault()
+        }
+      }}
+    >
       <div className="p-4 border-b border-border flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold truncate">{skill.name}</h2>
