@@ -216,19 +216,40 @@ function App(): React.JSX.Element {
   }, [])
 
   const selectPreviewModule = useCallback(() => {
-    setRightModule("preview")
-    handlePreviewExpand()
-  }, [handlePreviewExpand])
+    if (rightModule === "preview") {
+      toggleRightPanel()
+    } else {
+      if (rightPanelCollapsed) {
+        toggleRightPanel()
+      }
+      setRightModule("preview")
+      handlePreviewExpand()
+    }
+  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
 
   const selectWorkModule = useCallback(() => {
-    setRightModule("work")
-    handlePreviewCollapse()
-  }, [handlePreviewCollapse])
+    if (rightModule === "work") {
+      toggleRightPanel()
+    } else {
+      if (rightPanelCollapsed) {
+        toggleRightPanel()
+      }
+      setRightModule("work")
+      handlePreviewCollapse()
+    }
+  }, [handlePreviewCollapse, rightModule, rightPanelCollapsed, toggleRightPanel])
 
   const selectGitModule = useCallback(() => {
-    setRightModule("git")
-    handlePreviewExpand()
-  }, [handlePreviewExpand])
+    if (rightModule === "git") {
+      toggleRightPanel()
+    } else {
+      if (rightPanelCollapsed) {
+        toggleRightPanel()
+      }
+      setRightModule("git")
+      handlePreviewExpand()
+    }
+  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
 
   useEffect(() => {
     let cancelled = false
@@ -466,14 +487,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    rightModule === "preview"
+                    !rightPanelCollapsed && rightModule === "preview"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
                   aria-label="文件预览"
-                  aria-pressed={rightModule === "preview"}
+                  aria-pressed={!rightPanelCollapsed && rightModule === "preview"}
                 >
                   <Eye size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>文件预览</span>
@@ -481,7 +502,7 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    rightModule === "git"
+                    !rightPanelCollapsed && rightModule === "git"
                       ? moduleActiveClass
                       : hasPendingGitDiff
                         ? "text-foreground border-status-warning/40 hover:bg-muted/45"
@@ -490,7 +511,7 @@ function App(): React.JSX.Element {
                   onClick={selectGitModule}
                   title="Git 操作"
                   aria-label="Git 操作"
-                  aria-pressed={rightModule === "git"}
+                  aria-pressed={!rightPanelCollapsed && rightModule === "git"}
                 >
                   <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>Git 操作</span>
@@ -498,14 +519,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    rightModule === "work"
+                    !rightPanelCollapsed && rightModule === "work"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
                   aria-label="工作目录"
-                  aria-pressed={rightModule === "work"}
+                  aria-pressed={!rightPanelCollapsed && rightModule === "work"}
                 >
                   <Briefcase size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>工作目录</span>
