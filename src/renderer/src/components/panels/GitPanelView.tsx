@@ -354,7 +354,7 @@ export function GitPanelView({
               </div>
             ) : (
               <>
-                {state.files.map((file) => (
+                {state.files.filter((file) => file.diff && file.diff.trim() !== "").map((file) => (
                   <div key={file.path} className="rounded-md border border-border/70 p-2 bg-white">
                     <button
                       type="button"
