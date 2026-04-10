@@ -1200,12 +1200,14 @@ export function saveHeartbeatContent(content: string): void {
 // ── LSP Config ──
 
 const LSP_CONFIG_FILE = join(OPENWORK_DIR, "lsp-config.json")
+const LSP_RUNTIME_NAMES = ["JavaSE-1.8", "JavaSE-11", "JavaSE-17", "JavaSE-21"] as const
 
 function defaultLspConfig(): import("./types").LspConfig {
   return {
     enabled: false,
     maxHeapMb: 1024,
-    lastError: null
+    lastError: null,
+    manualJavaHome: null
   }
 }
 
@@ -1216,10 +1218,26 @@ export function getLspConfig(): import("./types").LspConfig {
     const content = readFileSync(LSP_CONFIG_FILE, "utf-8")
     const parsed = JSON.parse(content) as Record<string, unknown>
     const defaults = defaultLspConfig()
+    let manualJavaHome = typeof parsed.manualJavaHome === "string" && parsed.manualJavaHome.trim()
+      ? parsed.manualJavaHome.trim()
+      : defaults.manualJavaHome
+
+    // Backward compatibility: migrate the first legacy per-version path into the single manual override.
+    if (!manualJavaHome && parsed.javaRuntimePaths && typeof parsed.javaRuntimePaths === "object") {
+      for (const name of LSP_RUNTIME_NAMES) {
+        const value = (parsed.javaRuntimePaths as Record<string, unknown>)[name]
+        if (typeof value === "string" && value.trim()) {
+          manualJavaHome = value.trim()
+          break
+        }
+      }
+    }
+
     return {
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
       maxHeapMb: typeof parsed.maxHeapMb === "number" ? parsed.maxHeapMb : defaults.maxHeapMb,
-      lastError: typeof parsed.lastError === "string" ? parsed.lastError : defaults.lastError
+      lastError: typeof parsed.lastError === "string" ? parsed.lastError : defaults.lastError,
+      manualJavaHome
     }
   } catch {
     return defaultLspConfig()

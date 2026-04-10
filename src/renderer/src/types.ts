@@ -74,7 +74,8 @@ import type {
   LspSymbol,
   LspCallHierarchyItem,
   LspCallHierarchyIncomingCall,
-  LspCallHierarchyOutgoingCall
+  LspCallHierarchyOutgoingCall,
+  LspStatus
 } from "../../main/types"
 
 export type {
@@ -98,7 +99,8 @@ export type {
   LspSymbol,
   LspCallHierarchyItem,
   LspCallHierarchyIncomingCall,
-  LspCallHierarchyOutgoingCall
+  LspCallHierarchyOutgoingCall,
+  LspStatus
 }
 
 export type StreamEvent =

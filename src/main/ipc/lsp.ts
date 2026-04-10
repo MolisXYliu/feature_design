@@ -1,9 +1,18 @@
-import { BrowserWindow, IpcMain } from "electron"
+import { BrowserWindow, IpcMain, dialog } from "electron"
+import { createWriteStream, mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
+import { basename, join } from "path"
+import { Readable } from "stream"
+import { pipeline } from "stream/promises"
 import { getLspConfig, saveLspConfig, resetLspConfig } from "../storage"
+import { importUserVsix, importUserVsixBuffer, getVsixDownloadTarget } from "../lsp/server"
+import { invalidateJavaRuntimeCache } from "../lsp/runtimes"
 import {
   startLsp,
   stopLsp,
+  stopAllLsp,
   isLspRunning,
+  getLspStatus,
   lspDefinition,
   lspReferences,
   lspHover,
@@ -17,6 +26,70 @@ import {
   detectJavaProject
 } from "../lsp"
 import type { LspConfig } from "../types"
+
+const RESTART_RELEVANT_CONFIG_KEYS: Array<keyof LspConfig> = ["enabled", "maxHeapMb", "manualJavaHome"]
+
+function getMarketplaceApiBaseUrl(): string {
+  const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/+$/, "")
+  if (!baseUrl) {
+    throw new Error("VITE_API_BASE_URL 未配置，无法下载 Java LSP 运行时")
+  }
+  return `${baseUrl}/api/trajectories/marketplace`
+}
+
+function getMarketplaceDownloadUrl(resourceType: string, name: string): string {
+  return `${getMarketplaceApiBaseUrl()}/download/${encodeURIComponent(resourceType)}/${encodeURIComponent(name)}`
+}
+
+function getContentDispositionFilename(header: string | null, fallback: string): string {
+  const encodedMatch = header?.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].replace(/^"|"$/g, ""))
+    } catch {
+      return fallback
+    }
+  }
+  const quotedMatch = header?.match(/filename="([^"]+)"/i)
+  if (quotedMatch?.[1]) return quotedMatch[1]
+  const plainMatch = header?.match(/filename=([^;]+)/i)
+  return plainMatch?.[1]?.trim() || fallback
+}
+
+function getSafeTempFilename(fileName: string): string {
+  return (basename(fileName).replace(/[\\/]/g, "_").trim() || "java-lsp.vsix")
+}
+
+async function downloadLspVsixToTempFile(name: string): Promise<{ tempDir: string; filePath: string; fileName: string }> {
+  const response = await fetch(getMarketplaceDownloadUrl("lsp", name), {
+    method: "GET",
+    headers: {
+      Authorization: "Bearer your-api-token"
+    }
+  })
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  if (!response.body) {
+    throw new Error("LSP VSIX download response body is empty")
+  }
+
+  const fileName = getContentDispositionFilename(response.headers.get("Content-Disposition"), `${name}.vsix`)
+  const tempDir = mkdtempSync(join(tmpdir(), "cmb-lsp-vsix-"))
+  const filePath = join(tempDir, getSafeTempFilename(fileName))
+  try {
+    await pipeline(
+      Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+      createWriteStream(filePath)
+    )
+  } catch (error) {
+    rmSync(tempDir, { recursive: true, force: true })
+    throw error
+  }
+
+  return { tempDir, filePath, fileName }
+}
 
 function notifyChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -34,13 +107,27 @@ export function registerLspHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(
     "lsp:saveConfig",
     async (_event, updates: Partial<LspConfig>): Promise<void> => {
+      const current = getLspConfig()
+      const shouldStopServers = RESTART_RELEVANT_CONFIG_KEYS.some((key) => (
+        Object.prototype.hasOwnProperty.call(updates, key) && updates[key] !== current[key]
+      ))
       saveLspConfig(updates)
+      if (Object.prototype.hasOwnProperty.call(updates, "manualJavaHome")) {
+        invalidateJavaRuntimeCache()
+      }
+      if (shouldStopServers) {
+        await stopAllLsp()
+      }
       notifyChanged()
     }
   )
 
   ipcMain.handle("lsp:resetConfig", async (): Promise<LspConfig> => {
     const defaults = resetLspConfig()
+    invalidateJavaRuntimeCache()
+    if (!defaults.enabled) {
+      await stopAllLsp()
+    }
     notifyChanged()
     return defaults
   })
@@ -63,6 +150,84 @@ export function registerLspHandlers(ipcMain: IpcMain): void {
     "lsp:isRunning",
     async (_event, projectRoot: string): Promise<boolean> => {
       return isLspRunning(projectRoot)
+    }
+  )
+
+  ipcMain.handle(
+    "lsp:getStatus",
+    async (_event, projectRoot: string | null) => {
+      return getLspStatus(projectRoot)
+    }
+  )
+
+  ipcMain.handle("lsp:getDownloadTarget", async (): Promise<{ name: string; filenames: string[] }> => {
+    return getVsixDownloadTarget()
+  })
+
+  ipcMain.handle("lsp:downloadVsix", async (): Promise<{ success: boolean; path?: string; error?: string }> => {
+    let tempDir: string | null = null
+    try {
+      const target = getVsixDownloadTarget()
+      const downloaded = await downloadLspVsixToTempFile(target.name)
+      tempDir = downloaded.tempDir
+      const imported = importUserVsix(downloaded.filePath, downloaded.fileName)
+      saveLspConfig({ lastError: null })
+      notifyChanged()
+      return { success: true, path: imported.path }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    } finally {
+      if (tempDir) rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  ipcMain.handle("lsp:importVsix", async (): Promise<{ success: boolean; path?: string; error?: string }> => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openFile"],
+      title: "选择 Java LSP VSIX 文件",
+      message: "导入当前平台的 Java 扩展 .vsix 文件",
+      filters: [{ name: "VSIX Files", extensions: ["vsix"] }]
+    })
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, error: "已取消导入" }
+    }
+
+    try {
+      const imported = importUserVsix(result.filePaths[0])
+      saveLspConfig({ lastError: null })
+      notifyChanged()
+      return { success: true, path: imported.path }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  ipcMain.handle(
+    "lsp:saveDownloadedVsix",
+    async (_event, payload: { buffer: ArrayBuffer; fileName?: string }): Promise<{ success: boolean; path?: string; error?: string }> => {
+      const { buffer, fileName } = payload || {}
+      if (!buffer) {
+        return { success: false, error: "Invalid VSIX buffer" }
+      }
+
+      try {
+        const imported = importUserVsixBuffer(buffer, fileName)
+        saveLspConfig({ lastError: null })
+        notifyChanged()
+        return { success: true, path: imported.path }
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      }
     }
   )
 

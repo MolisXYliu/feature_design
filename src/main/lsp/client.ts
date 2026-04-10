@@ -1,4 +1,5 @@
 import { ChildProcess } from "child_process"
+import { fileURLToPath, pathToFileURL } from "url"
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -11,7 +12,7 @@ import {
 } from "vscode-jsonrpc/node"
 import type {
   LspDiagnostic, LspLocation, LspHoverResult, LspSymbol,
-  LspCallHierarchyItem, LspCallHierarchyIncomingCall, LspCallHierarchyOutgoingCall
+  LspCallHierarchyItem, LspCallHierarchyIncomingCall, LspCallHierarchyOutgoingCall, LspJavaRuntimeName
 } from "../types"
 
 // LSP protocol types (subset)
@@ -123,35 +124,16 @@ const DIAGNOSTICS_DEBOUNCE_MS = 150
 
 function uriToPath(uri: string): string {
   if (!uri.startsWith("file://")) return uri
-  let p = uri.slice(7) // strip "file://"
-  // Windows: file:///C:/foo → /C:/foo, strip leading slash → C:/foo
-  if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1)
-  p = decodeURIComponent(p)
-  // On Windows, normalize back to backslashes for OS-native paths
-  if (process.platform === "win32") p = p.replace(/\//g, "\\")
-  return p
+  try {
+    return fileURLToPath(uri)
+  } catch {
+    return uri
+  }
 }
 
 function pathToUri(filePath: string): string {
   if (filePath.startsWith("file://")) return filePath
-  const normalized = filePath.replace(/\\/g, "/")
-  // Windows path with drive letter: preserve "C:" verbatim, encode the rest
-  if (/^[a-zA-Z]:/.test(normalized)) {
-    const drive = normalized.slice(0, 2) // "C:"
-    const rest = normalized.slice(2)     // "/Users/foo.java" or "Users/foo.java"
-    const encodedRest = rest
-      .split("/")
-      .map((seg) => encodeURIComponent(seg))
-      .join("/")
-    const sep = encodedRest.startsWith("/") ? "" : "/"
-    return `file:///${drive}${sep}${encodedRest}`
-  }
-  // POSIX path
-  const encoded = normalized
-    .split("/")
-    .map((seg) => encodeURIComponent(seg))
-    .join("/")
-  return `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`
+  return pathToFileURL(filePath).href
 }
 
 function convertLocation(loc: Location): LspLocation {
@@ -203,7 +185,14 @@ function extractHoverContent(contents: Hover["contents"]): string {
   return String(contents)
 }
 
+const TERMINAL_PROJECT_STATUSES = new Set(["OK", "WARNING", "ERROR"])
+
+function isTerminalProjectStatus(message: string | null): boolean {
+  return message !== null && TERMINAL_PROJECT_STATUSES.has(message)
+}
+
 export type DiagnosticsCallback = (diagnostics: LspDiagnostic[]) => void
+export type StartupStatusChangeCallback = () => void
 
 const INIT_TIMEOUT = 45_000
 const SERVICE_READY_TIMEOUT = 60_000
@@ -213,11 +202,17 @@ const HOVER_RETRY_DELAY = 50
 const SHUTDOWN_REQUEST = new RequestType0<unknown, unknown>("shutdown")
 const EXIT_NOTIFICATION = new NotificationType0("exit")
 
+interface ProjectRuntimeSetting {
+  name: LspJavaRuntimeName
+  path: string
+  default?: boolean
+}
+
 export class LspClient {
   private connection: MessageConnection
   private process: ChildProcess
   private projectRoot: string
-  private javaHome: string | undefined
+  private projectRuntimes: ProjectRuntimeSetting[]
   private initialized = false
   /** Map of file URI → version. File stays "open" for the LSP session lifetime. */
   private openFiles = new Map<string, number>()
@@ -228,13 +223,28 @@ export class LspClient {
   private serviceReadyResolve: (() => void) | null = null
   private serviceReadyPromise: Promise<void>
   private projectReadyResolve: (() => void) | null = null
-  private projectReadyPromise: Promise<void>
+  private projectImportCompletePromise: Promise<void>
   private initSettings: Record<string, unknown> | null = null
+  private onStartupStatusChange: StartupStatusChangeCallback | null = null
+  private lastLanguageStatusType: string | null = null
+  private lastLanguageStatusMessage: string | null = null
+  private startupStatusSnapshot = ""
+  private serviceReady = false
+  private serviceReadyTimedOut = false
+  private projectReady = false
+  private projectReadyTimedOut = false
+  private projectStatus: string | null = null
 
-  constructor(childProcess: ChildProcess, projectRoot: string, javaHome?: string) {
+  constructor(
+    childProcess: ChildProcess,
+    projectRoot: string,
+    options?: {
+      projectRuntimes?: ProjectRuntimeSetting[]
+    }
+  ) {
     this.process = childProcess
     this.projectRoot = projectRoot
-    this.javaHome = javaHome
+    this.projectRuntimes = options?.projectRuntimes ?? []
 
     // Early failure detection: check if process is already dead
     if (childProcess.exitCode !== null) {
@@ -247,7 +257,7 @@ export class LspClient {
 
     // Setup ready events for waiting on index completion
     this.serviceReadyPromise = new Promise<void>((resolve) => { this.serviceReadyResolve = resolve })
-    this.projectReadyPromise = new Promise<void>((resolve) => { this.projectReadyResolve = resolve })
+    this.projectImportCompletePromise = new Promise<void>((resolve) => { this.projectReadyResolve = resolve })
 
     this.connection = createMessageConnection(
       new StreamMessageReader(childProcess.stdout),
@@ -259,12 +269,45 @@ export class LspClient {
       new NotificationType<{ type: string; message: string }>("language/status"),
       (params) => {
         console.log("[LSP] language/status:", params.type, params.message)
+        let changed = false
+        const nextType = params.type ?? null
+        const nextMessage = params.message ?? null
+        if (this.lastLanguageStatusType !== nextType || this.lastLanguageStatusMessage !== nextMessage) {
+          this.lastLanguageStatusType = nextType
+          this.lastLanguageStatusMessage = nextMessage
+          changed = true
+        }
         if (params.type === "ServiceReady" && params.message === "ServiceReady") {
+          if (!this.serviceReady) {
+            this.serviceReady = true
+            changed = true
+          }
+          if (this.serviceReadyTimedOut) {
+            this.serviceReadyTimedOut = false
+            changed = true
+          }
           this.serviceReadyResolve?.()
         }
-        if (params.type === "ProjectStatus" && params.message === "OK") {
-          this.projectReadyResolve?.()
+        if (params.type === "ProjectStatus") {
+          if (this.projectStatus !== nextMessage) {
+            this.projectStatus = nextMessage
+            changed = true
+          }
+          if (isTerminalProjectStatus(nextMessage)) {
+            if (this.projectReadyTimedOut) {
+              this.projectReadyTimedOut = false
+              changed = true
+            }
+            this.projectReadyResolve?.()
+          }
+          if (params.message === "OK") {
+            if (!this.projectReady) {
+              this.projectReady = true
+              changed = true
+            }
+          }
         }
+        if (changed) this.emitStartupStatusChange()
       }
     )
 
@@ -322,6 +365,10 @@ export class LspClient {
     this.onDiagnosticsChange = cb
   }
 
+  setStartupStatusCallback(cb: StartupStatusChangeCallback | null): void {
+    this.onStartupStatusChange = cb
+  }
+
   async initialize(): Promise<void> {
     const rootUri = pathToUri(this.projectRoot)
 
@@ -334,10 +381,8 @@ export class LspClient {
 
     const settings: Record<string, unknown> = {
       java: {
-        home: this.javaHome ?? null,
         jdt: {
           ls: {
-            java: { home: this.javaHome ?? null },
             lombokSupport: { enabled: true }
           }
         },
@@ -349,9 +394,7 @@ export class LspClient {
             globalSettings: null,
             notCoveredPluginExecutionSeverity: "warning"
           },
-          runtimes: this.javaHome ? [
-            { name: "JavaSE-21", path: this.javaHome, default: true }
-          ] : []
+          runtimes: this.projectRuntimes
         },
         import: {
           maven: { enabled: true, offline: { enabled: false } },
@@ -449,29 +492,60 @@ export class LspClient {
 
     // Wait for JDTLS service to be ready
     console.log("[LSP] Waiting for service ready...")
-    await Promise.race([
-      this.serviceReadyPromise,
-      new Promise<void>((resolve) => setTimeout(() => {
-        console.warn("[LSP] Service ready timeout, proceeding anyway")
-        resolve()
-      }, SERVICE_READY_TIMEOUT))
-    ])
+    const serviceReady = await this.waitForReady(this.serviceReadyPromise, SERVICE_READY_TIMEOUT, () => {
+      if (!this.serviceReadyTimedOut) {
+        this.serviceReadyTimedOut = true
+        this.emitStartupStatusChange()
+      }
+      console.warn("[LSP] Service ready timeout, proceeding anyway")
+    })
+    if (serviceReady && !this.serviceReady) {
+      this.serviceReady = true
+      this.emitStartupStatusChange()
+    }
     console.log("[LSP] Service ready")
 
     // Wait for project import to complete (Maven/Gradle)
     console.log("[LSP] Waiting for project import...")
-    await Promise.race([
-      this.projectReadyPromise,
-      new Promise<void>((resolve) => setTimeout(() => {
-        console.warn("[LSP] Project ready timeout after 20s, proceeding anyway")
-        resolve()
-      }, PROJECT_READY_TIMEOUT))
-    ])
-    console.log("[LSP] Project ready, startup complete")
+    await this.waitForReady(this.projectImportCompletePromise, PROJECT_READY_TIMEOUT, () => {
+      if (!this.projectReadyTimedOut) {
+        this.projectReadyTimedOut = true
+        this.emitStartupStatusChange()
+      }
+      console.warn(`[LSP] Project ready timeout after ${Math.round(PROJECT_READY_TIMEOUT / 1000)}s, proceeding anyway`)
+    })
+    console.log(`[LSP] Project import complete, startup complete (status=${this.projectStatus ?? "unknown"})`)
   }
 
   isReady(): boolean {
     return this.initialized
+  }
+
+  getStartupStatus(): {
+    serviceReady: boolean
+    serviceReadyTimedOut: boolean
+    projectReady: boolean
+    projectReadyTimedOut: boolean
+    projectStatus: string | null
+    languageStatusType: string | null
+    languageStatusMessage: string | null
+  } {
+    return {
+      serviceReady: this.serviceReady,
+      serviceReadyTimedOut: this.serviceReadyTimedOut,
+      projectReady: this.projectReady,
+      projectReadyTimedOut: this.projectReadyTimedOut,
+      projectStatus: this.projectStatus,
+      languageStatusType: this.lastLanguageStatusType,
+      languageStatusMessage: this.lastLanguageStatusMessage
+    }
+  }
+
+  private emitStartupStatusChange(): void {
+    const nextSnapshot = JSON.stringify(this.getStartupStatus())
+    if (nextSnapshot === this.startupStatusSnapshot) return
+    this.startupStatusSnapshot = nextSnapshot
+    this.onStartupStatusChange?.()
   }
 
   async openFile(filePath: string, text: string): Promise<void> {
@@ -548,6 +622,27 @@ export class LspClient {
       }
     }
     throw new Error("unreachable")
+  }
+
+  private async waitForReady(
+    promise: Promise<void>,
+    timeoutMs: number,
+    onTimeout: () => void
+  ): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        promise.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => {
+            onTimeout()
+            resolve(false)
+          }, timeoutMs)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   // All public methods use 1-based line/column
@@ -762,6 +857,7 @@ export class LspClient {
     this.callHierarchyCache.clear()
 
     if (!this.initialized) {
+      this.disposeConnection()
       this.killProcessTree("SIGKILL")
       return
     }
@@ -788,9 +884,7 @@ export class LspClient {
     }
 
     // Close stdin to signal EOF before terminating
-    this.connection.end()
-
-    this.connection.dispose()
+    this.disposeConnection()
 
     // If JDTLS already exited (graceful shutdown succeeded), we're done.
     if (this.hasExited()) {
@@ -835,6 +929,15 @@ export class LspClient {
         this.process.kill(signal)
       }
     } catch { /* process already exited */ }
+  }
+
+  private disposeConnection(): void {
+    try {
+      this.connection.end()
+    } catch { /* connection already closed */ }
+    try {
+      this.connection.dispose()
+    } catch { /* connection already disposed */ }
   }
 
   private flattenSymbols(symbols: (SymbolInformation | DocumentSymbol)[], filePath: string): LspSymbol[] {

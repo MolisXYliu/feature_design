@@ -84,10 +84,6 @@
       {
         "from": "resources/bin",
         "to": "bin"
-      },
-      {
-        "from": "resources/lsp-vsix",
-        "to": "lsp-vsix"
       }
     ],
     "electronVersion": "39.8.0"

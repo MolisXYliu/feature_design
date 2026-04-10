@@ -10,6 +10,15 @@ import type {
   ScheduledTask,
   ScheduledTaskUpsert,
   HeartbeatConfig,
+  LspConfig,
+  LspDiagnostic,
+  LspLocation,
+  LspHoverResult,
+  LspSymbol,
+  LspCallHierarchyItem,
+  LspCallHierarchyIncomingCall,
+  LspCallHierarchyOutgoingCall,
+  LspStatus,
   ChatXConfig,
   PluginMetadata,
   PluginManifest
@@ -314,6 +323,32 @@ interface CustomAPI {
       indexSize: number
       enabled: boolean
     }>
+    onChanged: (callback: () => void) => () => void
+  }
+  lsp: {
+    getConfig: () => Promise<LspConfig>
+    saveConfig: (updates: Partial<LspConfig>) => Promise<void>
+    resetConfig: () => Promise<LspConfig>
+    start: (projectRoot: string) => Promise<void>
+    stop: (projectRoot: string) => Promise<void>
+    isRunning: (projectRoot: string) => Promise<boolean>
+    getStatus: (projectRoot: string | null) => Promise<LspStatus>
+    getDownloadTarget: () => Promise<{ name: string; filenames: string[] }>
+    downloadVsix: () => Promise<{ success: boolean; path?: string; error?: string }>
+    importVsix: () => Promise<{ success: boolean; path?: string; error?: string }>
+    saveDownloadedVsix: (buffer: ArrayBuffer, fileName?: string) => Promise<{ success: boolean; path?: string; error?: string }>
+    definition: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspLocation[]>
+    references: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspLocation[]>
+    hover: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspHoverResult | null>
+    implementation: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspLocation[]>
+    documentSymbols: (params: { projectRoot: string; filePath: string }) => Promise<LspSymbol[]>
+    workspaceSymbol: (params: { projectRoot: string; query: string }) => Promise<LspSymbol[]>
+    diagnostics: (params: { projectRoot: string; filePath?: string }) => Promise<LspDiagnostic[]>
+    prepareCallHierarchy: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspCallHierarchyItem[]>
+    incomingCalls: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspCallHierarchyIncomingCall[]>
+    outgoingCalls: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspCallHierarchyOutgoingCall[]>
+    detectJavaProject: (dirPath: string) => Promise<boolean>
+    onDiagnostics: (callback: (diagnostics: LspDiagnostic[]) => void) => () => void
     onChanged: (callback: () => void) => () => void
   }
   terminal: {

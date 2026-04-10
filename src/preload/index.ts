@@ -19,6 +19,7 @@ import type {
   LspCallHierarchyItem,
   LspCallHierarchyIncomingCall,
   LspCallHierarchyOutgoingCall,
+  LspStatus,
   PluginMetadata,
   PluginManifest,
   ChatXConfig
@@ -585,6 +586,16 @@ const api = {
       ipcRenderer.invoke("lsp:stop", projectRoot) as Promise<void>,
     isRunning: (projectRoot: string): Promise<boolean> =>
       ipcRenderer.invoke("lsp:isRunning", projectRoot) as Promise<boolean>,
+    getStatus: (projectRoot: string | null): Promise<LspStatus> =>
+      ipcRenderer.invoke("lsp:getStatus", projectRoot) as Promise<LspStatus>,
+    getDownloadTarget: (): Promise<{ name: string; filenames: string[] }> =>
+      ipcRenderer.invoke("lsp:getDownloadTarget") as Promise<{ name: string; filenames: string[] }>,
+    downloadVsix: (): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke("lsp:downloadVsix") as Promise<{ success: boolean; path?: string; error?: string }>,
+    importVsix: (): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke("lsp:importVsix") as Promise<{ success: boolean; path?: string; error?: string }>,
+    saveDownloadedVsix: (buffer: ArrayBuffer, fileName?: string): Promise<{ success: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke("lsp:saveDownloadedVsix", { buffer, fileName }) as Promise<{ success: boolean; path?: string; error?: string }>,
     definition: (params: { projectRoot: string; filePath: string; line: number; column: number }): Promise<LspLocation[]> =>
       ipcRenderer.invoke("lsp:definition", params) as Promise<LspLocation[]>,
     references: (params: { projectRoot: string; filePath: string; line: number; column: number }): Promise<LspLocation[]> =>

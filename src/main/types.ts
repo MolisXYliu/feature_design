@@ -314,10 +314,61 @@ export interface PluginMcpServerConfig {
 }
 
 // LSP types
+export const LSP_JAVA_RUNTIME_NAMES = ["JavaSE-1.8", "JavaSE-11", "JavaSE-17", "JavaSE-21"] as const
+export type LspJavaRuntimeName = typeof LSP_JAVA_RUNTIME_NAMES[number]
+export type LspJavaRuntimeSource = "configured" | "env" | "java_home" | "scan"
+export type LspServerState = "stopped" | "starting" | "running" | "error"
+export type LspLifecycleState = "stopped" | "starting" | "importing" | "ready" | "degraded" | "error"
+
+export interface LspJavaRuntime {
+  name: LspJavaRuntimeName
+  path: string
+  source: LspJavaRuntimeSource
+  version: string | null
+  valid: boolean
+  error?: string
+}
+
+export interface LspProjectRequirement {
+  javaVersion: string
+  runtimeName: LspJavaRuntimeName
+  source: "pom.xml" | "build.gradle" | "build.gradle.kts" | ".classpath"
+}
+
+export interface LspStatus {
+  projectRoot: string | null
+  state: LspServerState
+  lifecycle: LspLifecycleState
+  statusText: string
+  projectStatusText: string
+  progressMessage: string | null
+  vsixAvailable: boolean
+  vsixSource: "user" | null
+  vsixPath: string | null
+  serviceReady: boolean
+  serviceReadyTimedOut: boolean
+  projectReady: boolean
+  projectReadyTimedOut: boolean
+  projectStatus: string | null
+  projectRequirement: LspProjectRequirement | null
+  runtimes: LspJavaRuntime[]
+  selectedRuntime: LspJavaRuntime | null
+  manualJavaHomeStatus: {
+    path: string
+    version: string | null
+    valid: boolean
+    error?: string
+  } | null
+  missingRuntime: LspJavaRuntimeName | null
+  degradedReason: string | null
+  warningReason: string | null
+}
+
 export interface LspConfig {
   enabled: boolean
   maxHeapMb: number
   lastError: string | null
+  manualJavaHome: string | null
 }
 
 export interface LspDiagnostic {
@@ -444,4 +495,3 @@ export interface SkillMetadata {
   metadata?: Record<string, string>
   allowedTools?: string[]
 }
-
