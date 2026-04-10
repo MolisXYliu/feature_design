@@ -82,6 +82,7 @@ import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
 import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
+import { registerCodeExecToolsHandlers } from "./ipc/code-exec-tools"
 import { registerRoutingHandlers } from "./ipc/routing"
 import { setTraceReporter } from "./agent/trace/collector"
 import { CloudTraceReporter } from "./agent/trace/cloud-reporter"
@@ -317,6 +318,7 @@ if (!gotTheLock) {
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
     registerTerminalHandlers(ipcMain)
+    registerCodeExecToolsHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
     registerUpdaterHandlers()
 
