@@ -1,0 +1,420 @@
+/**
+ * Dashboard IPC Handlers
+ *
+ * Proxies Elasticsearch queries for the operations dashboard.
+ * The renderer never connects to ES directly — all queries go through
+ * these IPC handlers for security.
+ */
+
+import { ipcMain } from "electron"
+import { getUserInfo } from "../storage"
+
+// ─────────────────────────────────────────────────────────
+// ES Configuration (from .env)
+// ─────────────────────────────────────────────────────────
+
+function getEsNodes(): string[] {
+  const raw = import.meta.env.VITE_ES_NODES as string | undefined
+  if (!raw) return []
+  return raw.split(",").map((n) => n.trim()).filter(Boolean)
+}
+
+function getEsAuth(): { username: string; password: string } | null {
+  const username = import.meta.env.VITE_ES_USERNAME as string | undefined
+  const password = import.meta.env.VITE_ES_PASSWORD as string | undefined
+  if (!username || !password) return null
+  return { username, password }
+}
+
+function getEsIndex(type: "trace" | "event"): string {
+  if (type === "trace") return (import.meta.env.VITE_ES_INDEX_TRACE as string) || "devclaw_trace"
+  return (import.meta.env.VITE_ES_INDEX_EVENT as string) || "devclaw_event"
+}
+
+const ALLOWED_YST_IDS_RAW = (import.meta.env.VITE_DASHBOARD_ALLOWED_YST_IDS as string) || ""
+const ALLOWED_YST_IDS = new Set(
+  ALLOWED_YST_IDS_RAW.split(",").map((s) => s.trim()).filter(Boolean)
+)
+
+// ─────────────────────────────────────────────────────────
+// ES HTTP helper
+// ─────────────────────────────────────────────────────────
+
+let nodeIndex = 0
+
+async function esQuery(index: string, body: Record<string, unknown>): Promise<unknown> {
+  const nodes = getEsNodes()
+  if (nodes.length === 0) throw new Error("ES_NODES not configured")
+
+  const auth = getEsAuth()
+  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  if (auth) {
+    headers["Authorization"] = "Basic " + Buffer.from(`${auth.username}:${auth.password}`).toString("base64")
+  }
+
+  // Round-robin with fallback
+  const startIdx = nodeIndex
+  let lastError: Error | null = null
+
+  for (let i = 0; i < nodes.length; i++) {
+    const idx = (startIdx + i) % nodes.length
+    const url = `${nodes[idx]}/${index}/_search`
+    nodeIndex = (idx + 1) % nodes.length
+
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000)
+      })
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "")
+        throw new Error(`ES ${resp.status}: ${text.slice(0, 200)}`)
+      }
+      return await resp.json()
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e))
+      console.warn(`[Dashboard] ES node ${nodes[idx]} failed:`, lastError.message)
+    }
+  }
+
+  throw lastError ?? new Error("All ES nodes failed")
+}
+
+// ─────────────────────────────────────────────────────────
+// Query builders
+// ─────────────────────────────────────────────────────────
+
+interface TimeRange {
+  from: string  // ISO string
+  to: string    // ISO string
+}
+
+type Granularity = "day" | "week" | "month" | "custom"
+
+function getCalendarInterval(granularity: Granularity, from: string, to: string): string {
+  if (granularity === "day") return "hour"
+  if (granularity === "custom") {
+    const diffMs = new Date(to).getTime() - new Date(from).getTime()
+    const diffDays = diffMs / (1000 * 60 * 60 * 24)
+    if (diffDays <= 1) return "hour"
+    if (diffDays <= 14) return "day"
+    return "week"
+  }
+  return "day" // week or month → bucket by day
+}
+
+function timeRangeFilter(field: string, range: TimeRange): Record<string, unknown> {
+  return { range: { [field]: { gte: range.from, lte: range.to } } }
+}
+
+// ─────────────────────────────────────────────────────────
+// Dashboard data fetchers
+// ─────────────────────────────────────────────────────────
+
+async function fetchOverview(range: TimeRange, granularity: Granularity): Promise<unknown> {
+  const interval = getCalendarInterval(granularity, range.from, range.to)
+  const body = {
+    size: 0,
+    query: { bool: { filter: [timeRangeFilter("startedAt", range)] } },
+    aggs: {
+      total_calls:        { value_count: { field: "traceId" } },
+      active_users:       { cardinality: { field: "sapId" } },
+      avg_duration:       { avg: { field: "durationMs" } },
+      total_input_tokens: { sum: { field: "totalInputTokens" } },
+      total_output_tokens:{ sum: { field: "totalOutputTokens" } },
+      trend: {
+        date_histogram: { field: "startedAt", calendar_interval: interval },
+        aggs: {
+          users: { cardinality: { field: "sapId" } }
+        }
+      }
+    }
+  }
+  return esQuery(getEsIndex("trace"), body)
+}
+
+async function fetchModelStats(range: TimeRange, _granularity: Granularity): Promise<unknown> {
+  const body = {
+    size: 0,
+    query: { bool: { filter: [timeRangeFilter("startedAt", range)] } },
+    aggs: {
+      by_model: {
+        terms: { field: "modelName", size: 30 },
+        aggs: {
+          total_input_tokens:  { sum: { field: "totalInputTokens" } },
+          total_output_tokens: { sum: { field: "totalOutputTokens" } }
+        }
+      },
+      by_tier: {
+        terms: { field: "routing.resolvedTier", size: 5 }
+      },
+      by_layer: {
+        terms: { field: "routing.decidedByLayer", size: 10 }
+      }
+    }
+  }
+  return esQuery(getEsIndex("trace"), body)
+}
+
+async function fetchUserStats(range: TimeRange, _granularity: Granularity): Promise<unknown> {
+  const body = {
+    size: 0,
+    query: { bool: { filter: [timeRangeFilter("startedAt", range)] } },
+    aggs: {
+      top_users: {
+        terms: { field: "sapId", size: 50 },
+        aggs: {
+          user_name: { terms: { field: "userName",  size: 1 } },
+          org_name:  { terms: { field: "orgName",   size: 1 } }
+        }
+      },
+      by_org:     { terms: { field: "orgName",     size: 30 } },
+      by_version: { terms: { field: "appVersion",  size: 20 } }
+    }
+  }
+  return esQuery(getEsIndex("trace"), body)
+}
+
+async function fetchProductivity(range: TimeRange, granularity: Granularity): Promise<unknown> {
+  const interval = getCalendarInterval(granularity, range.from, range.to)
+  const body = {
+    size: 0,
+    query: {
+      bool: {
+        filter: [
+          timeRangeFilter("eventTime", range),
+          { term: { "eventName": "git.commit.created" } }
+        ]
+      }
+    },
+    aggs: {
+      commit_trend: {
+        date_histogram: { field: "eventTime", calendar_interval: interval }
+      },
+      total_insertions: { sum: { field: "properties.insertions" } },
+      total_deletions: { sum: { field: "properties.deletions" } },
+      total_files_changed: { sum: { field: "properties.filesChanged" } },
+      active_users: { cardinality: { field: "sapId" } },
+      total_commits: { value_count: { field: "eventId" } }
+    }
+  }
+  return esQuery(getEsIndex("event"), body)
+}
+
+// ─────────────────────────────────────────────────────────
+// Dev mock data
+// ─────────────────────────────────────────────────────────
+
+function makeMockOverview(range: TimeRange): unknown {
+  const from = new Date(range.from).getTime()
+  const to = new Date(range.to).getTime()
+  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
+  const buckets = Math.min(24, Math.round(diffHours))
+  const step = (to - from) / buckets
+
+  const trend = Array.from({ length: buckets }, (_, i) => {
+    const t = new Date(from + i * step)
+    return {
+      key_as_string: t.toISOString(),
+      key: t.getTime(),
+      doc_count: Math.floor(30 + Math.random() * 80),
+      users: { value: Math.floor(5 + Math.random() * 20) }
+    }
+  })
+
+  return {
+    aggregations: {
+      total_calls: { value: 1247 },
+      active_users: { value: 38 },
+      avg_duration: { value: 4320 },
+      total_input_tokens: { value: 2_340_000 },
+      total_output_tokens: { value: 890_000 },
+      outcome_dist: {
+        buckets: [
+          { key: "success", doc_count: 1102 },
+          { key: "error", doc_count: 98 },
+          { key: "cancelled", doc_count: 47 }
+        ]
+      },
+      trend: { buckets: trend }
+    }
+  }
+}
+
+function makeMockModelStats(): unknown {
+  return {
+    aggregations: {
+      by_model: {
+        buckets: [
+          { key: "claude-sonnet-4-6", doc_count: 620, success_count: { doc_count: 578 }, avg_duration: { value: 3800 }, total_input_tokens: { value: 1_200_000 }, total_output_tokens: { value: 430_000 } },
+          { key: "claude-opus-4-6",   doc_count: 280, success_count: { doc_count: 265 }, avg_duration: { value: 8200 }, total_input_tokens: { value: 780_000 },  total_output_tokens: { value: 310_000 } },
+          { key: "claude-haiku-4-5",  doc_count: 347, success_count: { doc_count: 259 }, avg_duration: { value: 1100 }, total_input_tokens: { value: 360_000 },  total_output_tokens: { value: 150_000 } }
+        ]
+      },
+      by_tier: {
+        buckets: [
+          { key: "high",   doc_count: 280 },
+          { key: "medium", doc_count: 620 },
+          { key: "low",    doc_count: 347 }
+        ]
+      },
+      by_layer: {
+        buckets: [
+          { key: "user_explicit",   doc_count: 210 },
+          { key: "skill_override",  doc_count: 390 },
+          { key: "auto_routing",    doc_count: 647 }
+        ]
+      }
+    }
+  }
+}
+
+function makeMockUserStats(range: TimeRange): unknown {
+  const from = new Date(range.from).getTime()
+  const to = new Date(range.to).getTime()
+  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
+  const buckets = Math.min(24, Math.round(diffHours))
+  const step = (to - from) / buckets
+
+  const trend = Array.from({ length: buckets }, (_, i) => {
+    const t = new Date(from + i * step)
+    return {
+      key_as_string: t.toISOString(),
+      key: t.getTime(),
+      doc_count: 0,
+      users: { value: Math.floor(3 + Math.random() * 15) }
+    }
+  })
+
+  return {
+    aggregations: {
+      top_users: {
+        buckets: [
+          { key: "10010001", doc_count: 142, user_name: { buckets: [{ key: "张三", doc_count: 142 }] }, org_name: { buckets: [{ key: "零售一部", doc_count: 142 }] }, success_count: { doc_count: 130 } },
+          { key: "10010002", doc_count: 118, user_name: { buckets: [{ key: "李四", doc_count: 118 }] }, org_name: { buckets: [{ key: "零售二部", doc_count: 118 }] }, success_count: { doc_count: 110 } },
+          { key: "10010003", doc_count: 97,  user_name: { buckets: [{ key: "王五", doc_count: 97  }] }, org_name: { buckets: [{ key: "企业金融部", doc_count: 97  }] }, success_count: { doc_count: 89  } },
+          { key: "10010004", doc_count: 85,  user_name: { buckets: [{ key: "赵六", doc_count: 85  }] }, org_name: { buckets: [{ key: "零售一部", doc_count: 85  }] }, success_count: { doc_count: 72  } },
+          { key: "10010005", doc_count: 73,  user_name: { buckets: [{ key: "钱七", doc_count: 73  }] }, org_name: { buckets: [{ key: "风险管理部", doc_count: 73  }] }, success_count: { doc_count: 68  } },
+          { key: "10010006", doc_count: 61,  user_name: { buckets: [{ key: "孙八", doc_count: 61  }] }, org_name: { buckets: [{ key: "科技部",    doc_count: 61  }] }, success_count: { doc_count: 55  } }
+        ]
+      },
+      by_org: {
+        buckets: [
+          { key: "零售一部", doc_count: 430 },
+          { key: "零售二部", doc_count: 318 },
+          { key: "企业金融部", doc_count: 245 },
+          { key: "风险管理部", doc_count: 189 },
+          { key: "科技部", doc_count: 65 }
+        ]
+      },
+      by_version: {
+        buckets: [
+          { key: "1.3.0", doc_count: 512 },
+          { key: "1.2.5", doc_count: 298 },
+          { key: "1.2.0", doc_count: 187 },
+          { key: "1.1.x", doc_count: 143 },
+          { key: "1.0.x", doc_count: 107 }
+        ]
+      },
+      user_trend: { buckets: trend }
+    }
+  }
+}
+
+function makeMockProductivity(range: TimeRange): unknown {
+  const from = new Date(range.from).getTime()
+  const to = new Date(range.to).getTime()
+  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
+  const buckets = Math.min(24, Math.round(diffHours))
+  const step = (to - from) / buckets
+
+  const trend = Array.from({ length: buckets }, (_, i) => {
+    const t = new Date(from + i * step)
+    return {
+      key_as_string: t.toISOString(),
+      key: t.getTime(),
+      doc_count: Math.floor(2 + Math.random() * 12)
+    }
+  })
+
+  return {
+    aggregations: {
+      commit_trend: { buckets: trend },
+      total_insertions:   { value: 14820 },
+      total_deletions:    { value: 6430 },
+      total_files_changed:{ value: 892 },
+      total_commits:      { value: 187 },
+      active_users:       { value: 24 }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// IPC Registration
+// ─────────────────────────────────────────────────────────
+
+export function registerDashboardHandlers(_ipcMain: typeof ipcMain): void {
+  // Check if current user is allowed to see the dashboard
+  _ipcMain.handle("dashboard:isAllowed", async () => {
+    // In development mode, always allow access
+    if (import.meta.env.DEV) return true
+    const userInfo = getUserInfo()
+    const ystId = userInfo?.ystId?.trim()
+    if (!ystId) return false
+    return ALLOWED_YST_IDS.has(ystId)
+  })
+
+  _ipcMain.handle(
+    "dashboard:overview",
+    async (_, range: TimeRange, granularity: Granularity) => {
+      if (import.meta.env.DEV) return { success: true, data: makeMockOverview(range) }
+      try {
+        return { success: true, data: await fetchOverview(range, granularity) }
+      } catch (e) {
+        console.error("[Dashboard] overview error:", e)
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  _ipcMain.handle(
+    "dashboard:modelStats",
+    async (_, range: TimeRange, granularity: Granularity) => {
+      if (import.meta.env.DEV) return { success: true, data: makeMockModelStats() }
+      try {
+        return { success: true, data: await fetchModelStats(range, granularity) }
+      } catch (e) {
+        console.error("[Dashboard] modelStats error:", e)
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  _ipcMain.handle(
+    "dashboard:userStats",
+    async (_, range: TimeRange, granularity: Granularity) => {
+      if (import.meta.env.DEV) return { success: true, data: makeMockUserStats(range) }
+      try {
+        return { success: true, data: await fetchUserStats(range, granularity) }
+      } catch (e) {
+        console.error("[Dashboard] userStats error:", e)
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  _ipcMain.handle(
+    "dashboard:productivity",
+    async (_, range: TimeRange, granularity: Granularity) => {
+      if (import.meta.env.DEV) return { success: true, data: makeMockProductivity(range) }
+      try {
+        return { success: true, data: await fetchProductivity(range, granularity) }
+      } catch (e) {
+        console.error("[Dashboard] productivity error:", e)
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+}

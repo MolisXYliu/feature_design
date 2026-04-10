@@ -14,6 +14,7 @@ import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
 import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
+import { DashboardView } from "@/components/dashboard/DashboardView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -571,7 +572,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : mainView !== "claudecode" ? (
+        ) : mainView !== "claudecode" && mainView !== "dashboard" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -624,6 +625,23 @@ function App(): React.JSX.Element {
             )}
           </div>
         ) : null}
+
+        {/* Dashboard 面板 */}
+        {mainView === "dashboard" && (
+          <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
+            {!sidebarCollapsed && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0">
+                  <ThreadSidebar />
+                </div>
+                <ResizeHandle onDrag={handleLeftResize} />
+              </>
+            )}
+            <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+              <DashboardView />
+            </main>
+          </div>
+        )}
 
         {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
         <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>

@@ -632,6 +632,25 @@ interface CustomAPI {
     getMode: () => Promise<"auto" | "pinned">
     setMode: (mode: "auto" | "pinned") => Promise<void>
   }
+  dashboard: {
+    isAllowed: () => Promise<boolean>
+    overview: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    modelStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    userStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    productivity: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+  }
   update: {
     check: () => Promise<
       | { hasUpdate: false }
