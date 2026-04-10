@@ -77,6 +77,11 @@ import type {
   LspCallHierarchyOutgoingCall,
   LspStatus
 } from "../../main/types"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../../main/ipc/code-exec-tools"
 
 export type {
   McpConnectorAdvanced,
@@ -101,6 +106,12 @@ export type {
   LspCallHierarchyIncomingCall,
   LspCallHierarchyOutgoingCall,
   LspStatus
+}
+
+export type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
 }
 
 export type StreamEvent =

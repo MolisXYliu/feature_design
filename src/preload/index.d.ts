@@ -25,11 +25,19 @@ import type {
 } from "../main/types"
 import { UserInfoConfig } from "../main/storage"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewPayload,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../main/ipc/code-exec-tools"
 
 interface ElectronAPI {
   openExternal: Promise
   openLoginWindow: () => void
   closeLoginWindow: () => void
+  openLoginPage: () => void
+  closeLoginPage: () => void
   onNotifyMsg: (callback: (msg: string) => void) => void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
@@ -93,6 +101,7 @@ interface CustomAPI {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
         tier?: "premium" | "economy"
       }>
     >
@@ -103,6 +112,7 @@ interface CustomAPI {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     } | null>
     setCustomConfig: (config: {
@@ -112,6 +122,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<void>
     // Backward-compatible alias, prefer upsertCustomConfig in new code.
@@ -122,6 +133,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<{ id: string }>
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
@@ -429,6 +441,8 @@ interface CustomAPI {
       requestId: string
       type: string
       tool_call_id: string
+      savedToolName?: string
+      savedToolDescription?: string
     }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
     onApprovalTimeout: (
@@ -638,6 +652,16 @@ interface CustomAPI {
     update: (config: HookUpsert & { id: string }) => Promise<{ id: string }>
     delete: (id: string) => Promise<void>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
+  }
+  codeExecTools: {
+    list: () => Promise<ManagedSavedCodeExecTool[]>
+    getSettings: () => Promise<{ codeExecEnabled: boolean }>
+    setCodeExecEnabled: (enabled: boolean) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<ManagedSavedCodeExecTool>
+    setLastPreviewParams: (id: string, params: Record<string, unknown>) => Promise<ManagedSavedCodeExecTool>
+    update: (payload: SavedCodeExecToolUpdatePayload) => Promise<ManagedSavedCodeExecTool>
+    delete: (id: string) => Promise<void>
+    runPreview: (payload: SavedCodeExecPreviewPayload) => Promise<SavedCodeExecPreviewResult>
   }
   routing: {
     getMode: () => Promise<"auto" | "pinned">

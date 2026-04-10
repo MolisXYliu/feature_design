@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { ArrowLeft, Brain, Clock, Code2, GitBranch, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser, Webhook } from "lucide-react"
+import { ArrowLeft, Brain, Clock, Code2, GitBranch, HeartPulse, Plug, Puzzle, Sparkles, ShoppingBag, Shield, Cpu, CircleUser, Webhook, Wrench } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -16,6 +16,7 @@ import { ChatXPanel } from "./ChatXPanel"
 import { UserInfoPanel } from "./UserInfoPanel"
 import { HooksPanel } from "./HooksPanel"
 import { LspPanel } from "./LspPanel"
+import { CodeExecToolsPanel } from "./CodeExecToolsPanel"
 
 type CustomizeTab =
   | "skills"
@@ -31,6 +32,7 @@ type CustomizeTab =
   | "userinfo"
   | "hooks"
   | "lsp"
+  | "codeExecTools"
 
 export function CustomizeView(): React.JSX.Element {
   const {
@@ -233,6 +235,19 @@ export function CustomizeView(): React.JSX.Element {
             <Webhook className="size-4 shrink-0" />
             钩子
           </button>
+          <button
+            className={cn(
+              "flex items-center gap-3 w-full rounded-md px-2.5 py-1.5 text-sm transition-colors",
+              activeTab === "codeExecTools"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/50"
+            )}
+            onClick={() => setActiveTab("codeExecTools")}
+          >
+            <Wrench className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate whitespace-nowrap">编程式工具调用</span>
+            <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+          </button>
         </nav>
       </div>
 
@@ -263,6 +278,10 @@ export function CustomizeView(): React.JSX.Element {
       ) : activeTab === "hooks" ? (
         <div className="flex flex-1 overflow-hidden">
           <HooksPanel />
+        </div>
+      ) : activeTab === "codeExecTools" ? (
+        <div className="flex flex-1 overflow-hidden">
+          <CodeExecToolsPanel />
         </div>
       ) : null}
     </div>
