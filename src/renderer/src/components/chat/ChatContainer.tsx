@@ -117,6 +117,52 @@ const MAX_ATTACHMENTS = 3
 const MAX_TOTAL_CHARS = 24_000
 const escXml = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 
+const ROTATING_WORDS = [
+  "编写代码", "调试问题", "创建技能", "管理任务",
+  "重构项目", "解答疑惑", "审查代码", "优化性能",
+  "编写测试", "设计方案", "分析日志", "部署上线"
+]
+
+function RotatingHeadline() {
+  const [wordIndex, setWordIndex] = useState(0)
+  const [displayed, setDisplayed] = useState("")
+  const [phase, setPhase] = useState<"typing" | "showing" | "erasing">("typing")
+
+  useEffect(() => {
+    const word = ROTATING_WORDS[wordIndex]
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    if (phase === "typing") {
+      if (displayed.length < word.length) {
+        timer = setTimeout(() => setDisplayed(word.slice(0, displayed.length + 1)), 150)
+      } else {
+        setPhase("showing")
+      }
+    } else if (phase === "showing") {
+      timer = setTimeout(() => setPhase("erasing"), 2000)
+    } else if (phase === "erasing") {
+      if (displayed.length > 0) {
+        timer = setTimeout(() => setDisplayed(displayed.slice(0, -1)), 80)
+      } else {
+        setWordIndex((i) => (i + 1) % ROTATING_WORDS.length)
+        setPhase("typing")
+      }
+    }
+
+    return () => { if (timer) clearTimeout(timer) }
+  }, [displayed, phase, wordIndex])
+
+  return (
+    <div className="mb-6 flex items-center justify-start">
+      <div className="text-2xl md:text-3xl font-bold tracking-tight leading-none">
+        <span className="text-foreground">为你</span>
+        <span className="text-[#D97757] mx-3">{'>'}</span>
+        <span className="text-[#D97757]">{displayed}</span>
+      </div>
+    </div>
+  )
+}
+
 export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -1638,11 +1684,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
           <div className="max-w-3xl mx-auto space-y-4">
             {displayMessages.length === 0 && !isLoading && (
               <div className="pt-14 pb-8">
-                <div className="mb-6 flex items-center justify-start">
-                  <div className="text-2xl md:text-3xl font-bold tracking-tight text-foreground leading-none">
-                    我能帮你做什么？
-                  </div>
-                </div>
+                <RotatingHeadline />
                 {skillsLoading ? (
                   <div className="text-sm text-muted-foreground text-center py-10">正在加载技能列表...</div>
                 ) : skills.length === 0 ? null : (
