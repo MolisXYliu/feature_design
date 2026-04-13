@@ -1365,6 +1365,15 @@ function ResourcePreview({
 }): React.JSX.Element {
   const fileName = filePath.split(/[\\/]/).pop() || filePath
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview")
+  const extension = getPathExtension(filePath).toLowerCase()
+  const supportsSourceView =
+    !codeDiff &&
+    (extension === "md" ||
+      extension === "markdown" ||
+      extension === "mdx" ||
+      extension === "html" ||
+      extension === "htm")
 
   const resolved = useMemo(
     () => resolvePreviewPaths(filePath, workspacePath),
@@ -1424,6 +1433,36 @@ function ResourcePreview({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {supportsSourceView ? (
+            <div className="inline-flex items-center rounded-md border border-border bg-background text-[11px]">
+              <button
+                type="button"
+                onClick={() => setPreviewMode("preview")}
+                aria-pressed={previewMode === "preview"}
+                className={cn(
+                  "px-2 py-0.5 transition-colors",
+                  previewMode === "preview"
+                    ? "bg-background-interactive text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                预览
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode("source")}
+                aria-pressed={previewMode === "source"}
+                className={cn(
+                  "border-l border-border px-2 py-0.5 transition-colors",
+                  previewMode === "source"
+                    ? "bg-background-interactive text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                源码
+              </button>
+            </div>
+          ) : null}
           <button
             onClick={onReload}
             className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
@@ -1473,6 +1512,7 @@ function ResourcePreview({
             externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
             htmlFillHeight={isFullscreen}
             reloadToken={reloadToken}
+            previewMode={supportsSourceView ? previewMode : undefined}
           />
         )}
       </div>

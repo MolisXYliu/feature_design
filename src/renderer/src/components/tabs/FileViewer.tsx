@@ -16,6 +16,7 @@ interface FileViewerProps {
   externalFullPath?: string
   htmlFillHeight?: boolean
   reloadToken?: number
+  previewMode?: "preview" | "source"
 }
 
 function formatFileLoadError(rawError: string): {
@@ -56,7 +57,8 @@ export function FileViewer({
   threadId,
   externalFullPath,
   htmlFillHeight = false,
-  reloadToken
+  reloadToken,
+  previewMode
 }: FileViewerProps): React.JSX.Element | null {
   const { fileContents, setFileContents } = useCurrentThread(threadId)
   const [isLoading, setIsLoading] = useState(false)
@@ -238,6 +240,8 @@ export function FileViewer({
           content={content}
           path={displayPath}
           showHeader={false}
+          showModeToggle={false}
+          viewMode={previewMode}
           whiteBackground
           className="markdown-preview"
         />
@@ -246,7 +250,16 @@ export function FileViewer({
   }
 
   if (htmlLike && content !== undefined) {
-    return <HtmlPreview content={content} path={displayPath} fillHeight={htmlFillHeight} />
+    return (
+      <HtmlPreview
+        content={content}
+        path={displayPath}
+        fillHeight={htmlFillHeight}
+        showHeader={false}
+        showModeToggle={false}
+        viewMode={previewMode}
+      />
+    )
   }
 
   // Default to code/text viewer
