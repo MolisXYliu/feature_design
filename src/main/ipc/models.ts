@@ -141,20 +141,165 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
   return Array.from(result).filter(Boolean)
 }
 
+function isRenameOrCopyStatus(status: string): boolean {
+  const x = status[0]
+  const y = status[1]
+  return x === "R" || x === "C" || y === "R" || y === "C"
+}
+
+function decodeGitQuotedPath(rawPath: string): string {
+  const quoted = rawPath.startsWith("\"") && rawPath.endsWith("\"")
+  if (!quoted) return rawPath
+  const source = quoted ? rawPath.slice(1, -1) : rawPath
+  const bytes: number[] = []
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    if (ch !== "\\") {
+      const chunk = Buffer.from(ch, "utf8")
+      for (const byte of chunk) bytes.push(byte)
+      continue
+    }
+
+    if (i + 1 >= source.length) {
+      bytes.push("\\".charCodeAt(0))
+      break
+    }
+
+    const next = source[++i]
+    if (next === "\\" || next === "\"") {
+      bytes.push(next.charCodeAt(0))
+      continue
+    }
+
+    if (next >= "0" && next <= "7") {
+      let octal = next
+      while (
+        i + 1 < source.length &&
+        octal.length < 3 &&
+        source[i + 1] >= "0" &&
+        source[i + 1] <= "7"
+      ) {
+        octal += source[++i]
+      }
+      bytes.push(Number.parseInt(octal, 8))
+      continue
+    }
+
+    let escaped = ""
+    switch (next) {
+      case "n":
+        escaped = "\n"
+        break
+      case "r":
+        escaped = "\r"
+        break
+      case "t":
+        escaped = "\t"
+        break
+      case "b":
+        escaped = "\b"
+        break
+      case "f":
+        escaped = "\f"
+        break
+      case "v":
+        escaped = "\v"
+        break
+      default:
+        escaped = next
+        break
+    }
+
+    const chunk = Buffer.from(escaped, "utf8")
+    for (const byte of chunk) bytes.push(byte)
+  }
+
+  return Buffer.from(bytes).toString("utf8")
+}
+
 function parsePorcelainPaths(output: string): string[] {
+  // Prefer NUL-delimited porcelain (`git status --porcelain -z`) to avoid
+  // C-style quoted paths (e.g. "\\345\\220...") being misparsed as "345/220/...".
+  if (output.includes("\0")) {
+    const entries = output.split("\0").filter(Boolean)
+    const files: string[] = []
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      if (entry.length < 4) continue
+      const status = entry.slice(0, 2)
+      const rawPath = entry.slice(3)
+      if (!rawPath) continue
+      files.push(normalizeGitRelativePath(rawPath))
+
+      // In -z mode, rename/copy records are followed by an extra path token
+      // (the source/original path). We only track the destination/current path.
+      if (isRenameOrCopyStatus(status) && i + 1 < entries.length) {
+        i += 1
+      }
+    }
+    return files
+  }
+
+  // Fallback for newline-delimited porcelain output.
   const lines = output.split("\n").map((line) => line.trimEnd()).filter(Boolean)
   const files: string[] = []
   for (const line of lines) {
     if (line.length < 4) continue
+    const status = line.slice(0, 2)
     let rawPath = line.slice(3).trim()
     if (!rawPath) continue
-    if (rawPath.includes(" -> ")) {
+    if (isRenameOrCopyStatus(status) && rawPath.includes(" -> ")) {
       rawPath = rawPath.split(" -> ").pop() || rawPath
     }
-    rawPath = rawPath.replace(/^"(.*)"$/, "$1").replace(/\\"/g, "\"")
+    rawPath = decodeGitQuotedPath(rawPath)
     files.push(normalizeGitRelativePath(rawPath))
   }
   return files
+}
+
+async function runStatusPorcelain(
+  worktreePath: string,
+  pathspecs: string[],
+  options?: { silent?: boolean }
+): Promise<string> {
+  const silent = Boolean(options?.silent)
+
+  try {
+    return await runGit(
+      worktreePath,
+      ["-c", "core.quotepath=false", "status", "--porcelain", "-z", "--", ...pathspecs],
+      { silent }
+    )
+  } catch {
+    // Older Git may not support `-z` with this porcelain invocation.
+    // Fallback keeps compatibility, and parsePorcelainPaths handles quoted paths.
+    return runGit(
+      worktreePath,
+      ["-c", "core.quotepath=false", "status", "--porcelain", "--", ...pathspecs],
+      { silent }
+    )
+  }
+}
+
+function parseNumstatTotals(output: string): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  const lines = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const parts = line.split("\t")
+    if (parts.length < 2) continue
+    const added = Number.parseInt(parts[0], 10)
+    const deleted = Number.parseInt(parts[1], 10)
+    if (Number.isFinite(added)) additions += added
+    if (Number.isFinite(deleted)) deletions += deleted
+  }
+
+  return { additions, deletions }
 }
 
 function getExecErrorText(error: unknown): string {
@@ -498,6 +643,7 @@ async function buildGitPanelState(
     }
   }
   const normalizedTrackedFiles = Array.from(trackedSet)
+  const filterByTracked = normalizedTrackedFiles.length > 0 && !includeAllWhenNoTracked
 
   const parseChangedFromStatus = (statusOutput: string): string[] => {
     const parsed = parsePorcelainPaths(statusOutput)
@@ -505,7 +651,7 @@ async function buildGitPanelState(
     for (const raw of parsed) {
       const candidates = toWorktreeRelativePath(worktreePath, raw)
       if (candidates.length === 0) continue
-      if (normalizedTrackedFiles.length > 0) {
+      if (filterByTracked) {
         const matched = candidates.find((c) => trackedSet.has(c))
         if (matched) changedSet.add(matched)
         continue
@@ -520,18 +666,9 @@ async function buildGitPanelState(
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
-  const statusArgs = normalizedTrackedFiles.length > 0
-    ? ["status", "--porcelain", "--", ...normalizedTrackedFiles]
-    : ["status", "--porcelain", "--", "."]
-  const statusOut = await runGit(worktreePath, statusArgs, { silent })
-  let changedFiles = parseChangedFromStatus(statusOut)
-
-  // If tracked files exist but none matches current workspace changes,
-  // fallback to workspace-wide scan to avoid stale-tracked false negatives.
-  if (changedFiles.length === 0 && includeAllWhenNoTracked && normalizedTrackedFiles.length > 0) {
-    const fallbackStatusOut = await runGit(worktreePath, ["status", "--porcelain", "--", "."], { silent })
-    changedFiles = parseChangedFromStatus(fallbackStatusOut)
-  }
+  const statusPathspecs = filterByTracked ? normalizedTrackedFiles : ["."]
+  const statusOut = await runStatusPorcelain(worktreePath, statusPathspecs, { silent })
+  const changedFiles = parseChangedFromStatus(statusOut)
 
   if (changedFiles.length === 0) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
@@ -545,21 +682,36 @@ async function buildGitPanelState(
     let diffText = ""
     let additions = 0
     let deletions = 0
+    let hasDiffStats = false
 
+    // Compare against HEAD so staged-only changes also produce patch/stats.
+    let numstatOut = ""
     try {
-      diffText = await runGit(worktreePath, ["diff", "--", relPath], { silent })
+      diffText = await runGit(worktreePath, ["diff", "HEAD", "--", relPath], { silent })
+      numstatOut = await runGit(worktreePath, ["diff", "--numstat", "HEAD", "--", relPath], { silent })
     } catch {
-      diffText = ""
+      // Fallback for repos where HEAD is not available (e.g. unborn branch).
+      const cachedDiff = await runGit(worktreePath, ["diff", "--cached", "--", relPath], { silent }).catch(() => "")
+      const worktreeDiff = await runGit(worktreePath, ["diff", "--", relPath], { silent }).catch(() => "")
+      diffText = [cachedDiff, worktreeDiff].filter(Boolean).join("\n")
+
+      const cachedNumstat = await runGit(worktreePath, ["diff", "--numstat", "--cached", "--", relPath], { silent }).catch(() => "")
+      const worktreeNumstat = await runGit(worktreePath, ["diff", "--numstat", "--", relPath], { silent }).catch(() => "")
+      const cachedTotals = parseNumstatTotals(cachedNumstat)
+      const worktreeTotals = parseNumstatTotals(worktreeNumstat)
+      additions = cachedTotals.additions + worktreeTotals.additions
+      deletions = cachedTotals.deletions + worktreeTotals.deletions
+      hasDiffStats = additions > 0 || deletions > 0
     }
 
-    const numstatOut = await runGit(worktreePath, ["diff", "--numstat", "--", relPath], { silent }).catch(() => "")
     if (numstatOut.trim()) {
-      const first = numstatOut.trim().split("\n")[0].split("\t")
-      const a = Number(first[0])
-      const d = Number(first[1])
-      additions = Number.isFinite(a) ? a : 0
-      deletions = Number.isFinite(d) ? d : 0
-    } else {
+      const totals = parseNumstatTotals(numstatOut)
+      additions = totals.additions
+      deletions = totals.deletions
+      hasDiffStats = additions > 0 || deletions > 0
+    }
+
+    if (!hasDiffStats && !diffText.trim()) {
       // New untracked file: synthesize a minimal unified diff and stats.
       const absPath = path.join(worktreePath, relPath)
       try {
@@ -572,6 +724,11 @@ async function buildGitPanelState(
       } catch {
         // Keep empty if file disappeared between scans.
       }
+    }
+
+    const hasRenderableDiff = diffText.trim().length > 0 || additions > 0 || deletions > 0
+    if (!hasRenderableDiff) {
+      continue
     }
 
     additionsTotal += additions
