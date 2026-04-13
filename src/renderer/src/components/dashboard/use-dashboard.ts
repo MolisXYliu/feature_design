@@ -21,6 +21,8 @@ export interface OverviewData {
   inputTokens: number
   outputTokens: number
   trend: Array<{ time: string; count: number; users: number }>
+  bySkill: Array<{ skill: string; count: number }>
+  byTool: Array<{ tool: string; count: number }>
 }
 
 export interface ModelStatsData {
@@ -159,7 +161,21 @@ export function navigateRange(
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-function parseOverview(raw: any): OverviewData {
+/** 根据粒度将 ES 返回的 ISO 时间串格式化为可读刻度 */
+function formatTrendTime(isoStr: string, granularity: Granularity): string {
+  const d = new Date(isoStr)
+  if (isNaN(d.getTime())) return isoStr
+  const mm  = String(d.getMonth() + 1).padStart(2, "0")
+  const dd  = String(d.getDate()).padStart(2, "0")
+  const hh  = String(d.getHours()).padStart(2, "0")
+  const min = String(d.getMinutes()).padStart(2, "0")
+  if (granularity === "day") return `${hh}:${min}`
+  if (granularity === "week" || granularity === "month") return `${mm}-${dd}`
+  // custom：根据时间跨度自动选择
+  return `${mm}-${dd} ${hh}:${min}`
+}
+
+function parseOverview(raw: any, granularity: Granularity): OverviewData {
   const aggs = raw?.aggregations ?? {}
   const totalCalls = aggs.total_calls?.value ?? 0
   const activeUsers = aggs.active_users?.value ?? 0
@@ -168,12 +184,22 @@ function parseOverview(raw: any): OverviewData {
   const outputTokens = aggs.total_output_tokens?.value ?? 0
 
   const trend: OverviewData["trend"] = (aggs.trend?.buckets ?? []).map((b: any) => ({
-    time: b.key_as_string ?? new Date(b.key).toISOString(),
+    time: formatTrendTime(b.key_as_string ?? new Date(b.key).toISOString(), granularity),
     count: b.doc_count,
     users: b.users?.value ?? 0
   }))
 
-  return { totalCalls, activeUsers, avgDurationMs, inputTokens, outputTokens, trend }
+  const bySkill: OverviewData["bySkill"] = (aggs.by_skill?.buckets ?? []).map((b: any) => ({
+    skill: b.key || "unknown",
+    count: b.doc_count
+  }))
+
+  const byTool: OverviewData["byTool"] = (aggs.by_tool?.buckets ?? []).map((b: any) => ({
+    tool: b.key || "unknown",
+    count: b.doc_count
+  }))
+
+  return { totalCalls, activeUsers, avgDurationMs, inputTokens, outputTokens, trend, bySkill, byTool }
 }
 
 function parseModelStats(raw: any): ModelStatsData {
@@ -227,14 +253,14 @@ function parseUserStats(raw: any): UserStatsData {
   return { topUsers, byOrg, byVersion, userTrend }
 }
 
-function parseProductivity(raw: any): ProductivityData {
+function parseProductivity(raw: any, granularity: Granularity): ProductivityData {
   const aggs = raw?.aggregations ?? {}
   const totalCommits = aggs.total_commits?.value ?? 0
   const activeUsers = aggs.active_users?.value ?? 0
 
   return {
     commitTrend: (aggs.commit_trend?.buckets ?? []).map((b: any) => ({
-      time: b.key_as_string ?? new Date(b.key).toISOString(),
+      time: formatTrendTime(b.key_as_string ?? new Date(b.key).toISOString(), granularity),
       count: b.doc_count
     })),
     totalInsertions: aggs.total_insertions?.value ?? 0,
@@ -286,10 +312,10 @@ export function useDashboard() {
       if (!usRes.success) throw new Error(usRes.error ?? "获取用户数据失败")
       if (!prRes.success) throw new Error(prRes.error ?? "获取生产力数据失败")
 
-      setOverview(parseOverview(ovRes.data))
+      setOverview(parseOverview(ovRes.data, g))
       setModelStats(parseModelStats(msRes.data))
       setUserStats(parseUserStats(usRes.data))
-      setProductivity(parseProductivity(prRes.data))
+      setProductivity(parseProductivity(prRes.data, g))
     } catch (e) {
       if (id !== fetchIdRef.current) return
       setError(e instanceof Error ? e.message : String(e))

@@ -124,8 +124,24 @@ async function fetchOverview(range: TimeRange, granularity: Granularity): Promis
       avg_duration:       { avg: { field: "durationMs" } },
       total_input_tokens: { sum: { field: "totalInputTokens" } },
       total_output_tokens:{ sum: { field: "totalOutputTokens" } },
+      by_skill: { terms: { field: "usedSkills",  size: 10 } },
+      by_tool: {
+        terms: {
+          field: "toolNames",
+          size: 10,
+          exclude: [
+            // Claude Code 内置文件 / 系统工具
+            "execute", "read_file", "write_file", "glob", "grep",
+            "list_directory", "task", "task_output",
+            // 工具搜索 / 元工具
+            "search_tool", "inspect_tool", "invoke_deferred_tool",
+            // 内置代码执行辅助
+            "code_exec", "prepare_save_code_exec_tool", "save_code_exec_tool"
+          ]
+        }
+      },
       trend: {
-        date_histogram: { field: "startedAt", calendar_interval: interval },
+        date_histogram: { field: "startedAt", calendar_interval: interval, time_zone: "Asia/Shanghai" },
         aggs: {
           users: { cardinality: { field: "sapId" } }
         }
@@ -191,7 +207,7 @@ async function fetchProductivity(range: TimeRange, granularity: Granularity): Pr
     },
     aggs: {
       commit_trend: {
-        date_histogram: { field: "eventTime", calendar_interval: interval }
+        date_histogram: { field: "eventTime", calendar_interval: interval, time_zone: "Asia/Shanghai" }
       },
       total_insertions: { sum: { field: "properties.insertions" } },
       total_deletions: { sum: { field: "properties.deletions" } },
@@ -208,21 +224,44 @@ async function fetchProductivity(range: TimeRange, granularity: Granularity): Pr
 // ─────────────────────────────────────────────────────────
 
 function makeMockOverview(range: TimeRange): unknown {
-  const from = new Date(range.from).getTime()
-  const to = new Date(range.to).getTime()
-  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
-  const buckets = Math.min(24, Math.round(diffHours))
-  const step = (to - from) / buckets
+  const from = new Date(range.from)
+  const to = new Date(range.to)
+  const diffMs = to.getTime() - from.getTime()
+  const diffDays = diffMs / (1000 * 60 * 60 * 24)
 
-  const trend = Array.from({ length: buckets }, (_, i) => {
-    const t = new Date(from + i * step)
-    return {
-      key_as_string: t.toISOString(),
-      key: t.getTime(),
-      doc_count: Math.floor(30 + Math.random() * 80),
-      users: { value: Math.floor(5 + Math.random() * 20) }
+  // Align buckets to calendar boundaries, same as ES calendar_interval
+  const buckets: Date[] = []
+  if (diffDays <= 1) {
+    // hour-aligned buckets
+    const start = new Date(from)
+    start.setMinutes(0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 60 * 60 * 1000)) {
+      buckets.push(new Date(t))
     }
-  })
+  } else if (diffDays <= 14) {
+    // day-aligned buckets
+    const start = new Date(from)
+    start.setHours(0, 0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 24 * 60 * 60 * 1000)) {
+      buckets.push(new Date(t))
+    }
+  } else {
+    // week-aligned buckets (Monday)
+    const start = new Date(from)
+    const day = start.getDay()
+    start.setDate(start.getDate() - (day === 0 ? 6 : day - 1))
+    start.setHours(0, 0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 7 * 24 * 60 * 60 * 1000)) {
+      buckets.push(new Date(t))
+    }
+  }
+
+  const trend = buckets.map((t) => ({
+    key_as_string: t.toISOString(),
+    key: t.getTime(),
+    doc_count: Math.floor(30 + Math.random() * 80),
+    users: { value: Math.floor(5 + Math.random() * 20) }
+  }))
 
   return {
     aggregations: {
@@ -231,11 +270,32 @@ function makeMockOverview(range: TimeRange): unknown {
       avg_duration: { value: 4320 },
       total_input_tokens: { value: 2_340_000 },
       total_output_tokens: { value: 890_000 },
-      outcome_dist: {
+      by_skill: {
         buckets: [
-          { key: "success", doc_count: 1102 },
-          { key: "error", doc_count: 98 },
-          { key: "cancelled", doc_count: 47 }
+          { key: "代码审查",     doc_count: 312 },
+          { key: "需求分析",     doc_count: 278 },
+          { key: "文档生成",     doc_count: 245 },
+          { key: "单元测试",     doc_count: 198 },
+          { key: "SQL优化",      doc_count: 167 },
+          { key: "接口设计",     doc_count: 143 },
+          { key: "日志分析",     doc_count: 121 },
+          { key: "数据清洗",     doc_count: 98  },
+          { key: "性能诊断",     doc_count: 87  },
+          { key: "安全扫描",     doc_count: 62  }
+        ]
+      },
+      by_tool: {
+        buckets: [
+          { key: "git_workflow",       doc_count: 412 },
+          { key: "browser_playwright", doc_count: 356 },
+          { key: "manage_skill",       doc_count: 298 },
+          { key: "manage_scheduler",   doc_count: 241 },
+          { key: "web_search",         doc_count: 198 },
+          { key: "db_query",           doc_count: 163 },
+          { key: "create_pr",          doc_count: 134 },
+          { key: "run_tests",          doc_count: 112 },
+          { key: "search_code",        doc_count: 98  },
+          { key: "notify",             doc_count: 76  }
         ]
       },
       trend: { buckets: trend }
@@ -272,21 +332,26 @@ function makeMockModelStats(): unknown {
 }
 
 function makeMockUserStats(range: TimeRange): unknown {
-  const from = new Date(range.from).getTime()
-  const to = new Date(range.to).getTime()
-  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
-  const buckets = Math.min(24, Math.round(diffHours))
-  const step = (to - from) / buckets
+  const from = new Date(range.from)
+  const to = new Date(range.to)
+  const diffMs = to.getTime() - from.getTime()
+  const diffDays = diffMs / (1000 * 60 * 60 * 24)
 
-  const trend = Array.from({ length: buckets }, (_, i) => {
-    const t = new Date(from + i * step)
-    return {
-      key_as_string: t.toISOString(),
-      key: t.getTime(),
-      doc_count: 0,
-      users: { value: Math.floor(3 + Math.random() * 15) }
-    }
-  })
+  const trendBuckets: Date[] = []
+  if (diffDays <= 1) {
+    const start = new Date(from); start.setMinutes(0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 60 * 60 * 1000)) trendBuckets.push(new Date(t))
+  } else {
+    const start = new Date(from); start.setHours(0, 0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 24 * 60 * 60 * 1000)) trendBuckets.push(new Date(t))
+  }
+
+  const trend = trendBuckets.map((t) => ({
+    key_as_string: t.toISOString(),
+    key: t.getTime(),
+    doc_count: 0,
+    users: { value: Math.floor(3 + Math.random() * 15) }
+  }))
 
   return {
     aggregations: {
@@ -324,20 +389,25 @@ function makeMockUserStats(range: TimeRange): unknown {
 }
 
 function makeMockProductivity(range: TimeRange): unknown {
-  const from = new Date(range.from).getTime()
-  const to = new Date(range.to).getTime()
-  const diffHours = Math.max(1, (to - from) / (1000 * 60 * 60))
-  const buckets = Math.min(24, Math.round(diffHours))
-  const step = (to - from) / buckets
+  const from = new Date(range.from)
+  const to = new Date(range.to)
+  const diffMs = to.getTime() - from.getTime()
+  const diffDays = diffMs / (1000 * 60 * 60 * 24)
 
-  const trend = Array.from({ length: buckets }, (_, i) => {
-    const t = new Date(from + i * step)
-    return {
-      key_as_string: t.toISOString(),
-      key: t.getTime(),
-      doc_count: Math.floor(2 + Math.random() * 12)
-    }
-  })
+  const trendBuckets: Date[] = []
+  if (diffDays <= 1) {
+    const start = new Date(from); start.setMinutes(0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 60 * 60 * 1000)) trendBuckets.push(new Date(t))
+  } else {
+    const start = new Date(from); start.setHours(0, 0, 0, 0)
+    for (let t = new Date(start); t <= to; t = new Date(t.getTime() + 24 * 60 * 60 * 1000)) trendBuckets.push(new Date(t))
+  }
+
+  const trend = trendBuckets.map((t) => ({
+    key_as_string: t.toISOString(),
+    key: t.getTime(),
+    doc_count: Math.floor(2 + Math.random() * 12)
+  }))
 
   return {
     aggregations: {

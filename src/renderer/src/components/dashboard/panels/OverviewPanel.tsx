@@ -44,17 +44,6 @@ function formatNumber(n: number): string {
   return String(Math.round(n))
 }
 
-function formatTime(timeStr: string): string {
-  const d = new Date(timeStr)
-  const h = d.getHours()
-  const m = String(d.getMinutes()).padStart(2, "0")
-  const mo = String(d.getMonth() + 1).padStart(2, "0")
-  const day = String(d.getDate()).padStart(2, "0")
-  // If includes day info
-  if (h === 0 && m === "00") return `${mo}-${day}`
-  return `${h}:${m}`
-}
-
 export function OverviewPanel({
   data,
   loading
@@ -67,10 +56,7 @@ export function OverviewPanel({
   }
   if (!data) return null
 
-  const trendData = data.trend.map((t) => ({
-    ...t,
-    time: formatTime(t.time)
-  }))
+  const trendData = data.trend
 
   return (
     <div className="space-y-4">
@@ -106,6 +92,67 @@ export function OverviewPanel({
           value={formatNumber(data.outputTokens)}
           color="bg-rose-500"
         />
+      </div>
+
+      {/* Skill & Tool Top 10 */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Skill Top 10 */}
+        <div className="rounded-xl border border-border bg-card p-4">
+          <h3 className="text-xs font-medium text-muted-foreground mb-3">Skill 使用 Top 10</h3>
+          {data.bySkill.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-4">暂无数据</div>
+          ) : (
+            <div className="space-y-1.5">
+              {data.bySkill.map((item, i) => {
+                const max = data.bySkill[0].count
+                const pct = max > 0 ? (item.count / max) * 100 : 0
+                return (
+                  <div key={item.skill} className="flex items-center gap-2">
+                    <span className="w-4 text-[10px] text-muted-foreground text-right">{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-xs truncate text-foreground">{item.skill}</span>
+                        <span className="text-[11px] text-muted-foreground ml-2 shrink-0">{item.count}</span>
+                      </div>
+                      <div className="h-1 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Tool Top 10 */}
+        <div className="rounded-xl border border-border bg-card p-4">
+          <h3 className="text-xs font-medium text-muted-foreground mb-3">Tool 使用 Top 10</h3>
+          {data.byTool.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-4">暂无数据</div>
+          ) : (
+            <div className="space-y-1.5">
+              {data.byTool.map((item, i) => {
+                const max = data.byTool[0].count
+                const pct = max > 0 ? (item.count / max) * 100 : 0
+                return (
+                  <div key={item.tool} className="flex items-center gap-2">
+                    <span className="w-4 text-[10px] text-muted-foreground text-right">{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span className="text-xs truncate text-foreground font-mono">{item.tool}</span>
+                        <span className="text-[11px] text-muted-foreground ml-2 shrink-0">{item.count}</span>
+                      </div>
+                      <div className="h-1 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full bg-violet-500" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Trend chart */}

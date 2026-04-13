@@ -35,16 +35,6 @@ function formatNumber(n: number): string {
   return String(Math.round(n))
 }
 
-function formatTime(timeStr: string): string {
-  const d = new Date(timeStr)
-  const mo = String(d.getMonth() + 1).padStart(2, "0")
-  const day = String(d.getDate()).padStart(2, "0")
-  const h = d.getHours()
-  const m = String(d.getMinutes()).padStart(2, "0")
-  if (h === 0 && m === "00") return `${mo}-${day}`
-  return `${h}:${m}`
-}
-
 export function ProductivityPanel({
   data,
   loading
@@ -57,10 +47,7 @@ export function ProductivityPanel({
   }
   if (!data) return null
 
-  const trendData = data.commitTrend.map((t) => ({
-    ...t,
-    time: formatTime(t.time)
-  }))
+  const trendData = data.commitTrend
 
   return (
     <div className="space-y-4">

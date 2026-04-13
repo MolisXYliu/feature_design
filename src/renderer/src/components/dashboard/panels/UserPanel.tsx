@@ -113,20 +113,20 @@ export function UserPanel({
         </div>
       </div>
 
-      {/* Version distribution */}
-      <PiePanel
-        title="版本占比"
-        data={data.byVersion as Record<string, unknown>[]}
-        dataKey="count"
-        nameKey="version"
-      />
-
       {/* Org distribution */}
       <PiePanel
         title="部门分布"
         data={data.byOrg as Record<string, unknown>[]}
         dataKey="count"
         nameKey="org"
+      />
+
+      {/* Version distribution */}
+      <PiePanel
+        title="版本占比"
+        data={data.byVersion as Record<string, unknown>[]}
+        dataKey="count"
+        nameKey="version"
       />
     </div>
   )
