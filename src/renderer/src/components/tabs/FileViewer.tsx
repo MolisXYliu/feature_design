@@ -56,7 +56,7 @@ export function FileViewer({
   filePath,
   threadId,
   externalFullPath,
-  htmlFillHeight = false,
+  htmlFillHeight = true,
   reloadToken,
   previewMode
 }: FileViewerProps): React.JSX.Element | null {

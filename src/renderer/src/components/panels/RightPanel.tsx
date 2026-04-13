@@ -28,9 +28,12 @@ import {
   Maximize2,
   Minimize2,
   EyeOff,
-  Loader2
+  Loader2,
+  Copy,
+  Check
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
 import { useShallow } from "zustand/react/shallow"
 import { useThreadState, useThreadStream } from "@/lib/thread-context"
@@ -1366,6 +1369,7 @@ function ResourcePreview({
   const fileName = filePath.split(/[\\/]/).pop() || filePath
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview")
+  const [copySuccess, setCopySuccess] = useState(false)
   const extension = getPathExtension(filePath).toLowerCase()
   const supportsSourceView =
     !codeDiff &&
@@ -1374,6 +1378,8 @@ function ResourcePreview({
       extension === "mdx" ||
       extension === "html" ||
       extension === "htm")
+  const previewFileType = useMemo(() => getFileType(fileName), [fileName])
+  const canCopyContent = !codeDiff && (previewFileType.type === "code" || previewFileType.type === "text")
 
   const resolved = useMemo(
     () => resolvePreviewPaths(filePath, workspacePath),
@@ -1400,6 +1406,32 @@ function ResourcePreview({
     onFullscreenChange?.(false)
     onHidePreview?.()
   }
+
+  const handleCopyFileContent = useCallback(async () => {
+    if (!canCopyContent) {
+      toast.error("当前文件类型不支持复制内容")
+      return
+    }
+
+    try {
+      const result = resolved.inWorkspace
+        ? await window.api.workspace.readFile(threadId, resolved.workspaceFilePath)
+        : await window.api.workspace.readExternalFile(resolved.fullPath)
+
+      if (!result.success || result.content === undefined) {
+        toast.error(result.error || "复制失败，请重试")
+        return
+      }
+
+      await navigator.clipboard.writeText(result.content)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 2000)
+      toast.success("文件内容已复制")
+    } catch (error) {
+      console.error("[ResourcePreview] Failed to copy file content:", error)
+      toast.error("复制失败，请重试")
+    }
+  }, [canCopyContent, resolved, threadId])
 
   useEffect(() => {
     if (!isFullscreen) return
@@ -1464,6 +1496,15 @@ function ResourcePreview({
             </div>
           ) : null}
           <button
+            onClick={handleCopyFileContent}
+            disabled={!canCopyContent}
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground enabled:hover:text-foreground enabled:hover:bg-background-interactive transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title={canCopyContent ? "复制文件内容" : "当前文件类型不支持复制"}
+            aria-label={canCopyContent ? "复制文件内容" : "当前文件类型不支持复制"}
+          >
+            {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+          </button>
+          <button
             onClick={onReload}
             className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="刷新预览"
@@ -1510,7 +1551,7 @@ function ResourcePreview({
             threadId={threadId}
             filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
             externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
-            htmlFillHeight={isFullscreen}
+            htmlFillHeight
             reloadToken={reloadToken}
             previewMode={supportsSourceView ? previewMode : undefined}
           />
