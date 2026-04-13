@@ -133,10 +133,13 @@ async function fetchOverview(range: TimeRange, granularity: Granularity): Promis
             // Claude Code 内置文件 / 系统工具
             "execute", "read_file", "write_file", "glob", "grep",
             "list_directory", "task", "task_output",
+            "ls", "edit_file",
             // 工具搜索 / 元工具
             "search_tool", "inspect_tool", "invoke_deferred_tool",
             // 内置代码执行辅助
-            "code_exec", "prepare_save_code_exec_tool", "save_code_exec_tool"
+            "code_exec", "prepare_save_code_exec_tool", "save_code_exec_tool",
+            // 内置任务管理
+            "write_todos"
           ]
         }
       },
