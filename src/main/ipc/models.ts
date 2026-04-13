@@ -70,6 +70,7 @@ function normalizeGitRelativePath(input: string): string {
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "")
     .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
 }
 
 function toPosixRelative(input: string): string {
@@ -268,7 +269,16 @@ async function runStatusPorcelain(
   try {
     return await runGit(
       worktreePath,
-      ["-c", "core.quotepath=false", "status", "--porcelain", "-z", "--", ...pathspecs],
+      [
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "-z",
+        "--",
+        ...pathspecs
+      ],
       { silent }
     )
   } catch {
@@ -276,7 +286,15 @@ async function runStatusPorcelain(
     // Fallback keeps compatibility, and parsePorcelainPaths handles quoted paths.
     return runGit(
       worktreePath,
-      ["-c", "core.quotepath=false", "status", "--porcelain", "--", ...pathspecs],
+      [
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        ...pathspecs
+      ],
       { silent }
     )
   }
@@ -679,6 +697,22 @@ async function buildGitPanelState(
   let deletionsTotal = 0
 
   for (const relPath of changedFiles) {
+    const targetPath = normalizeGitRelativePath(relPath)
+    if (!targetPath) {
+      continue
+    }
+
+    // Guard against directory-only entries (e.g. untracked directory placeholders).
+    // Git panel should show file-level diffs only.
+    try {
+      const stat = await fs.stat(path.join(worktreePath, targetPath))
+      if (stat.isDirectory()) {
+        continue
+      }
+    } catch {
+      // Ignore stat errors (deleted paths are valid diff targets).
+    }
+
     let diffText = ""
     let additions = 0
     let deletions = 0
@@ -687,16 +721,16 @@ async function buildGitPanelState(
     // Compare against HEAD so staged-only changes also produce patch/stats.
     let numstatOut = ""
     try {
-      diffText = await runGit(worktreePath, ["diff", "HEAD", "--", relPath], { silent })
-      numstatOut = await runGit(worktreePath, ["diff", "--numstat", "HEAD", "--", relPath], { silent })
+      diffText = await runGit(worktreePath, ["diff", "HEAD", "--", targetPath], { silent })
+      numstatOut = await runGit(worktreePath, ["diff", "--numstat", "HEAD", "--", targetPath], { silent })
     } catch {
       // Fallback for repos where HEAD is not available (e.g. unborn branch).
-      const cachedDiff = await runGit(worktreePath, ["diff", "--cached", "--", relPath], { silent }).catch(() => "")
-      const worktreeDiff = await runGit(worktreePath, ["diff", "--", relPath], { silent }).catch(() => "")
+      const cachedDiff = await runGit(worktreePath, ["diff", "--cached", "--", targetPath], { silent }).catch(() => "")
+      const worktreeDiff = await runGit(worktreePath, ["diff", "--", targetPath], { silent }).catch(() => "")
       diffText = [cachedDiff, worktreeDiff].filter(Boolean).join("\n")
 
-      const cachedNumstat = await runGit(worktreePath, ["diff", "--numstat", "--cached", "--", relPath], { silent }).catch(() => "")
-      const worktreeNumstat = await runGit(worktreePath, ["diff", "--numstat", "--", relPath], { silent }).catch(() => "")
+      const cachedNumstat = await runGit(worktreePath, ["diff", "--numstat", "--cached", "--", targetPath], { silent }).catch(() => "")
+      const worktreeNumstat = await runGit(worktreePath, ["diff", "--numstat", "--", targetPath], { silent }).catch(() => "")
       const cachedTotals = parseNumstatTotals(cachedNumstat)
       const worktreeTotals = parseNumstatTotals(worktreeNumstat)
       additions = cachedTotals.additions + worktreeTotals.additions
@@ -713,14 +747,14 @@ async function buildGitPanelState(
 
     if (!hasDiffStats && !diffText.trim()) {
       // New untracked file: synthesize a minimal unified diff and stats.
-      const absPath = path.join(worktreePath, relPath)
+      const absPath = path.join(worktreePath, targetPath)
       try {
         const content = await fs.readFile(absPath, "utf-8")
         const lines = content.split("\n")
         additions = lines.length
         deletions = 0
         const body = lines.map((line) => `+${line}`).join("\n")
-        diffText = `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
+        diffText = `diff --git a/${targetPath} b/${targetPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${targetPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
       } catch {
         // Keep empty if file disappeared between scans.
       }
@@ -734,7 +768,7 @@ async function buildGitPanelState(
     additionsTotal += additions
     deletionsTotal += deletions
     fileDiffs.push({
-      path: relPath,
+      path: targetPath,
       diff: diffText,
       additions,
       deletions
