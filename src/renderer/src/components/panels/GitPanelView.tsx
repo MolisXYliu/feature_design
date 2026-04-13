@@ -232,10 +232,11 @@ export function GitPanelView({
   }, [threadId, refresh, showToast])
 
   const hasPending = Boolean(state?.hasPendingDiff)
-  const hasPushableCommit = Boolean(state?.hasPushableCommit)
   const hasGitRepo = Boolean(state?.isGitRepo ?? state?.isWorktree)
   const isWorktreePath = Boolean(state?.isWorktree)
-  const canShowSubmit = hasGitRepo && (hasPending || hasPushableCommit)
+  // Keep the submit entry visible for git repos so users can push right after commit,
+  // even if pushability detection lags or temporarily reports false.
+  const canShowSubmit = hasGitRepo
   const workspaceName = workspacePath
     ? workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath
     : "未关联路径"
