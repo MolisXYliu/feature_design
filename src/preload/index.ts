@@ -585,7 +585,7 @@ const api = {
       ipcRenderer.invoke("mcp:testConnection", params)
   },
   terminal: {
-    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }): Promise<string> =>
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string; syncSkills?: boolean; syncMemory?: boolean }): Promise<string> =>
       ipcRenderer.invoke("terminal:create", opts),
     write: (id: string, data: string): void =>
       ipcRenderer.send("terminal:write", { id, data }),
