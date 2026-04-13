@@ -651,13 +651,12 @@ export interface ModelRetryInfo {
   delayMs: number
 }
 
-/** Hooks invoked by the retrying fetch wrapper so the UI can display status.
- *  Note: there is intentionally no "resolved" hook — the renderer clears the
- *  retry indicator via stream-level signals (message-delta arrival, stream
- *  end, or explicit error), which covers every termination path with one
- *  unified mechanism. */
+/** Hooks invoked by the retrying fetch wrapper so the UI can display/clear status. */
 export interface ModelRetryHooks {
   onRetry?: (info: ModelRetryInfo) => void
+  /** Called when a retry attempt succeeds (fetch returns a non-retryable response).
+   *  The UI should clear the retry indicator immediately on this callback. */
+  onRetrySuccess?: () => void
 }
 
 /**
@@ -717,6 +716,9 @@ function createRetryingFetch(
 
         // Success or non-retryable error — return as-is.
         if (!isRetryableStatus(res.status)) {
+          // If this is a successful retry (not the first attempt), notify the UI
+          // so the retry indicator can be cleared immediately.
+          if (attempt > 1) hooks?.onRetrySuccess?.()
           return res
         }
 

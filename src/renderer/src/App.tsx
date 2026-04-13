@@ -14,6 +14,7 @@ import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
 import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
+import { DashboardView } from "@/components/dashboard/DashboardView"
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -81,10 +82,6 @@ function App(): React.JSX.Element {
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
 
-  useEffect(() => {
-    initUser()
-  }, [])
-
   const initUser = () => {
     window.api.models.getUserInfo().then(user => {
         const userInfo = user || {} as UserInfoConfig
@@ -105,6 +102,17 @@ function App(): React.JSX.Element {
                 }else{
                   setBus(false)
                 }
+                window.api.models.upsertUserInfo({
+                    sapId: resBody.sapId,//8
+                    ystId: resBody.ystId,//6
+                    userName: resBody.userName,
+                    originOrgId: resBody.originOrgId,
+                    orgName: resBody.orgName,
+                    ystRefreshToken: resBody.ystRefreshToken,
+                    ystCode: userInfo.ystCode,
+                    ystIdToken:resBody.ystIdToken,
+                    ystAccessToken: resBody.ystAccessToken
+                })
               } else{
                 window.electron.openLoginPage()
               }
@@ -125,6 +133,7 @@ function App(): React.JSX.Element {
       }
     });
     initMMJ()
+    initUser()
   }, []);
 
   // Track drag start widths
@@ -216,40 +225,19 @@ function App(): React.JSX.Element {
   }, [])
 
   const selectPreviewModule = useCallback(() => {
-    if (rightModule === "preview") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("preview")
-      handlePreviewExpand()
-    }
-  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("preview")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
 
   const selectWorkModule = useCallback(() => {
-    if (rightModule === "work") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("work")
-      handlePreviewCollapse()
-    }
-  }, [handlePreviewCollapse, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("work")
+    handlePreviewCollapse()
+  }, [handlePreviewCollapse])
 
   const selectGitModule = useCallback(() => {
-    if (rightModule === "git") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("git")
-      handlePreviewExpand()
-    }
-  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("git")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
 
   useEffect(() => {
     let cancelled = false
@@ -487,14 +475,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "preview"
+                    rightModule === "preview"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
                   aria-label="文件预览"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "preview"}
+                  aria-pressed={rightModule === "preview"}
                 >
                   <Eye size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>文件预览</span>
@@ -502,7 +490,7 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "git"
+                    rightModule === "git"
                       ? moduleActiveClass
                       : hasPendingGitDiff
                         ? "text-foreground border-status-warning/40 hover:bg-muted/45"
@@ -511,7 +499,7 @@ function App(): React.JSX.Element {
                   onClick={selectGitModule}
                   title="Git 操作"
                   aria-label="Git 操作"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "git"}
+                  aria-pressed={rightModule === "git"}
                 >
                   <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>Git 操作</span>
@@ -519,14 +507,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "work"
+                    rightModule === "work"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
                   aria-label="工作目录"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "work"}
+                  aria-pressed={rightModule === "work"}
                 >
                   <Briefcase size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>工作目录</span>
@@ -571,7 +559,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : mainView !== "claudecode" ? (
+        ) : mainView !== "claudecode" && mainView !== "dashboard" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -624,6 +612,23 @@ function App(): React.JSX.Element {
             )}
           </div>
         ) : null}
+
+        {/* Dashboard 面板 */}
+        {mainView === "dashboard" && (
+          <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
+            {!sidebarCollapsed && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0">
+                  <ThreadSidebar />
+                </div>
+                <ResizeHandle onDrag={handleLeftResize} />
+              </>
+            )}
+            <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+              <DashboardView />
+            </main>
+          </div>
+        )}
 
         {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
         <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>

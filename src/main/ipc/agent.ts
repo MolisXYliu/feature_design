@@ -176,10 +176,13 @@ function buildModelRetryHooks(window: BrowserWindow, channel: string): ModelRetr
           delayMs: info.delayMs
         }
       })
+    },
+    onRetrySuccess: () => {
+      safeSend({
+        type: "custom",
+        data: { type: "model_retry_clear" }
+      })
     }
-    // No onRetryResolved: the renderer clears the indicator via stream-end
-    // (handleStreamUpdate) and message-delta defensive clears, which together
-    // cover every termination path without needing an explicit clear event.
   }
 }
 

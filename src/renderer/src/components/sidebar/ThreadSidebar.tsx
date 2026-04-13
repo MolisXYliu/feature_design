@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio, Terminal } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio, Terminal, BarChart3 } from "lucide-react"
 import type { ChatXRobotConfig } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -193,10 +193,18 @@ export function ThreadSidebar(): React.JSX.Element {
     showKanbanView,
     setShowKanbanView,
     showClaudeCodeView,
-    setShowClaudeCodeView
+    setShowClaudeCodeView,
+    showDashboardView,
+    setShowDashboardView
   } = useAppStore()
 
   const { cleanupThread } = useThreadContext()
+
+  const [dashboardAllowed, setDashboardAllowed] = useState(false)
+
+  useEffect(() => {
+    window.api.dashboard.isAllowed().then(setDashboardAllowed).catch(() => setDashboardAllowed(false))
+  }, [])
 
   const [robots, setRobots] = useState<ChatXRobotConfig[]>([])
   const [showRobotPicker, setShowRobotPicker] = useState(false)
@@ -389,6 +397,22 @@ export function ThreadSidebar(): React.JSX.Element {
           </div>
           <span className="text-muted-foreground">Claude Code</span>
         </Button>
+        {dashboardAllowed && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "w-full justify-start gap-2 text-sm font-semibold",
+              showDashboardView && "bg-muted"
+            )}
+            onClick={() => setShowDashboardView(!showDashboardView)}
+          >
+            <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+              <BarChart3 className="size-3" />
+            </div>
+            <span className="text-muted-foreground">运营面板</span>
+          </Button>
+        )}
         {robots.length > 0 && (
           <div className="relative" ref={robotPickerRef}>
             <Button

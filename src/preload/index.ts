@@ -650,7 +650,7 @@ const api = {
     }
   },
   terminal: {
-    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }): Promise<string> =>
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string; syncSkills?: boolean; syncMemory?: boolean }): Promise<string> =>
       ipcRenderer.invoke("terminal:create", opts),
     write: (id: string, data: string): void =>
       ipcRenderer.send("terminal:write", { id, data }),
@@ -1351,6 +1351,29 @@ const api = {
   routing: {
     getMode: (): Promise<"auto" | "pinned"> => ipcRenderer.invoke("routing:getMode"),
     setMode: (mode: "auto" | "pinned"): Promise<void> => ipcRenderer.invoke("routing:setMode", mode)
+  },
+  dashboard: {
+    isAllowed: (): Promise<boolean> => ipcRenderer.invoke("dashboard:isAllowed"),
+    overview: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> =>
+      ipcRenderer.invoke("dashboard:overview", range, granularity),
+    modelStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> =>
+      ipcRenderer.invoke("dashboard:modelStats", range, granularity),
+    userStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> =>
+      ipcRenderer.invoke("dashboard:userStats", range, granularity),
+    productivity: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> =>
+      ipcRenderer.invoke("dashboard:productivity", range, granularity)
   },
   update: {
     check: (): Promise<

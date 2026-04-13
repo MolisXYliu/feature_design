@@ -84,6 +84,7 @@ import { registerHooksHandlers } from "./ipc/hooks"
 import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { registerCodeExecToolsHandlers } from "./ipc/code-exec-tools"
 import { registerRoutingHandlers } from "./ipc/routing"
+import { registerDashboardHandlers } from "./ipc/dashboard"
 import { registerLspHandlers } from "./ipc/lsp"
 import { stopAllLsp } from "./lsp"
 import { setTraceReporter } from "./agent/trace/collector"
@@ -322,6 +323,7 @@ if (!gotTheLock) {
     registerTerminalHandlers(ipcMain)
     registerCodeExecToolsHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
+    registerDashboardHandlers(ipcMain)
     registerUpdaterHandlers()
     registerLspHandlers(ipcMain)
 

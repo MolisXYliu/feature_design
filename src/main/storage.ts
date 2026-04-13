@@ -465,6 +465,60 @@ export async function getEnabledSkillsSources(): Promise<string[]> {
   return enabledDirs.filter(dir => existsSync(dir))
 }
 
+const CMB_SKILL_PREFIX = "_cmb_"
+
+/**
+ * Remove all _cmb_ prefixed skill directories from {workDir}/.claude/skills/.
+ */
+export async function cleanCmbSkillsFromClaudeDir(workDir: string): Promise<void> {
+  const claudeSkillsDir = join(workDir, ".claude", "skills")
+  try {
+    const existing = await readdir(claudeSkillsDir, { withFileTypes: true })
+    for (const entry of existing) {
+      if (entry.isDirectory() && entry.name.startsWith(CMB_SKILL_PREFIX)) {
+        await rm(join(claudeSkillsDir, entry.name), { recursive: true, force: true })
+      }
+    }
+  } catch { /* directory may not exist yet */ }
+}
+
+/**
+ * Sync CmbCowork enabled skills to {workDir}/.claude/skills/ so that
+ * Claude Code can discover them natively. Only manages _cmb_ prefixed
+ * directories — leaves other skills untouched.
+ */
+export async function syncSkillsToClaudeDir(workDir: string): Promise<void> {
+  const claudeSkillsDir = join(workDir, ".claude", "skills")
+  await mkdir(claudeSkillsDir, { recursive: true })
+
+  // Clean up old _cmb_ skills
+  await cleanCmbSkillsFromClaudeDir(workDir)
+
+  // Copy enabled skills
+  const sourceDirs = await getEnabledSkillsSources()
+  let count = 0
+  for (const sourceDir of sourceDirs) {
+    if (!existsSync(sourceDir)) continue
+    const entries = await readdir(sourceDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const skillMdPath = join(sourceDir, entry.name, "SKILL.md")
+      if (!existsSync(skillMdPath)) continue
+      const dest = join(claudeSkillsDir, CMB_SKILL_PREFIX + entry.name)
+      try {
+        // Remove existing dest to avoid merge with prior copy (e.g. builtin vs custom same name)
+        if (existsSync(dest)) await rm(dest, { recursive: true, force: true })
+        await copyDirRecursive(join(sourceDir, entry.name), dest)
+        count++
+      } catch (e) {
+        console.warn(`[Storage] Failed to sync skill ${entry.name} to Claude dir:`, e)
+        try { await rm(dest, { recursive: true, force: true }) } catch { /* ignore */ }
+      }
+    }
+  }
+  console.log(`[Storage] Synced ${count} skills to ${claudeSkillsDir}`)
+}
+
 // Custom model configurations stored as JSON in ~/.cmbcoworkagent/custom-models.json
 export interface CustomModelConfig {
   id: string

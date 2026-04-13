@@ -364,7 +364,7 @@ interface CustomAPI {
     onChanged: (callback: () => void) => () => void
   }
   terminal: {
-    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }) => Promise<string>
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string; syncSkills?: boolean; syncMemory?: boolean }) => Promise<string>
     write: (id: string, data: string) => void
     resize: (id: string, cols: number, rows: number) => void
     dispose: (id: string) => Promise<void>
@@ -666,6 +666,25 @@ interface CustomAPI {
   routing: {
     getMode: () => Promise<"auto" | "pinned">
     setMode: (mode: "auto" | "pinned") => Promise<void>
+  }
+  dashboard: {
+    isAllowed: () => Promise<boolean>
+    overview: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    modelStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    userStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    productivity: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
   }
   update: {
     check: () => Promise<
