@@ -1423,6 +1423,14 @@ const api = {
       ipcRenderer.invoke("git:switchBranch", { branch, cwd }) as Promise<{
         success: boolean
         error?: string
+      }>,
+    createBranch: (
+      branch: string,
+      cwd?: string
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("git:createBranch", { branch, cwd }) as Promise<{
+        success: boolean
+        error?: string
       }>
   }
 }

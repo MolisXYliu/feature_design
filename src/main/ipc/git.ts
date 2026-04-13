@@ -475,6 +475,48 @@ function switchBranch(branch: string, cwd?: string): { success: boolean; error?:
   }
 }
 
+// 创建并切换到新分支（兼容 Windows 和低版本 git）
+function createBranch(branch: string, cwd?: string): { success: boolean; error?: string } {
+  const workingDir = cwd || getCurrentWorkingDirectory()
+  const branchName = branch.trim()
+  if (!branchName) {
+    return { success: false, error: "分支名不能为空" }
+  }
+
+  const escapedBranch = branchName.replace(/"/g, '\\"')
+  try {
+    // Validate branch name format before creating.
+    execSync(`git check-ref-format --branch "${escapedBranch}"`, {
+      encoding: "utf-8",
+      cwd: workingDir,
+      timeout: 10000,
+      shell: platform() === "win32" ? "cmd.exe" : "/bin/bash"
+    })
+  } catch {
+    return { success: false, error: "分支名不合法" }
+  }
+
+  try {
+    // `checkout -b` works on older git versions.
+    execSync(`git checkout -b "${escapedBranch}"`, {
+      encoding: "utf-8",
+      cwd: workingDir,
+      timeout: 30000,
+      shell: platform() === "win32" ? "cmd.exe" : "/bin/bash"
+    })
+    return { success: true }
+  } catch (rawError: unknown) {
+    const err = rawError as ExecCommandError
+    const stderr =
+      typeof err.stderr === "string" ? err.stderr.trim() : String(err.stderr || "").trim()
+    const text = (stderr || err.message || "").toLowerCase()
+    if (text.includes("already exists")) {
+      return { success: false, error: "分支已存在" }
+    }
+    return { success: false, error: stderr || err.message || "创建分支失败" }
+  }
+}
+
 // 注册Git相关的IPC处理器
 export function registerGitHandlers(): void {
   // 获取Git状态
@@ -597,6 +639,22 @@ export function registerGitHandlers(): void {
         return switchBranch(branch, cwd)
       } catch (error) {
         console.error("[IPC] git:switchBranch error:", error)
+        return { success: false, error: String(error) }
+      }
+    }
+  )
+
+  // 创建分支并切换
+  ipcMain.handle(
+    "git:createBranch",
+    async (
+      _,
+      { branch, cwd }: { branch: string; cwd?: string }
+    ): Promise<{ success: boolean; error?: string }> => {
+      try {
+        return createBranch(branch, cwd)
+      } catch (error) {
+        console.error("[IPC] git:createBranch error:", error)
         return { success: false, error: String(error) }
       }
     }
