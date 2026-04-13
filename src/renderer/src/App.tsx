@@ -82,10 +82,6 @@ function App(): React.JSX.Element {
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
 
-  useEffect(() => {
-    initUser()
-  }, [])
-
   const initUser = () => {
     window.api.models.getUserInfo().then(user => {
         const userInfo = user || {} as UserInfoConfig
@@ -106,6 +102,17 @@ function App(): React.JSX.Element {
                 }else{
                   setBus(false)
                 }
+                window.api.models.upsertUserInfo({
+                    sapId: resBody.sapId,//8
+                    ystId: resBody.ystId,//6
+                    userName: resBody.userName,
+                    originOrgId: resBody.originOrgId,
+                    orgName: resBody.orgName,
+                    ystRefreshToken: resBody.ystRefreshToken,
+                    ystCode: userInfo.ystCode,
+                    ystIdToken:resBody.ystIdToken,
+                    ystAccessToken: resBody.ystAccessToken
+                })
               } else{
                 window.electron.openLoginPage()
               }
@@ -126,6 +133,7 @@ function App(): React.JSX.Element {
       }
     });
     initMMJ()
+    initUser()
   }, []);
 
   // Track drag start widths
@@ -217,40 +225,19 @@ function App(): React.JSX.Element {
   }, [])
 
   const selectPreviewModule = useCallback(() => {
-    if (rightModule === "preview") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("preview")
-      handlePreviewExpand()
-    }
-  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("preview")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
 
   const selectWorkModule = useCallback(() => {
-    if (rightModule === "work") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("work")
-      handlePreviewCollapse()
-    }
-  }, [handlePreviewCollapse, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("work")
+    handlePreviewCollapse()
+  }, [handlePreviewCollapse])
 
   const selectGitModule = useCallback(() => {
-    if (rightModule === "git") {
-      toggleRightPanel()
-    } else {
-      if (rightPanelCollapsed) {
-        toggleRightPanel()
-      }
-      setRightModule("git")
-      handlePreviewExpand()
-    }
-  }, [handlePreviewExpand, rightModule, rightPanelCollapsed, toggleRightPanel])
+    setRightModule("git")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
 
   useEffect(() => {
     let cancelled = false
@@ -488,14 +475,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "preview"
+                    rightModule === "preview"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
                   aria-label="文件预览"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "preview"}
+                  aria-pressed={rightModule === "preview"}
                 >
                   <Eye size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>文件预览</span>
@@ -503,7 +490,7 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "git"
+                    rightModule === "git"
                       ? moduleActiveClass
                       : hasPendingGitDiff
                         ? "text-foreground border-status-warning/40 hover:bg-muted/45"
@@ -512,7 +499,7 @@ function App(): React.JSX.Element {
                   onClick={selectGitModule}
                   title="Git 操作"
                   aria-label="Git 操作"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "git"}
+                  aria-pressed={rightModule === "git"}
                 >
                   <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>Git 操作</span>
@@ -520,14 +507,14 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    !rightPanelCollapsed && rightModule === "work"
+                    rightModule === "work"
                       ? moduleActiveClass
                       : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
                   aria-label="工作目录"
-                  aria-pressed={!rightPanelCollapsed && rightModule === "work"}
+                  aria-pressed={rightModule === "work"}
                 >
                   <Briefcase size={16} className="shrink-0" strokeWidth={1.8} />
                   <span>工作目录</span>
