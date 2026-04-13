@@ -286,11 +286,10 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         if (prev[threadId] === data.isLoading) return prev
         return { ...prev, [threadId]: data.isLoading }
       })
-      // Defensive clear: drop the retry indicator only when the stream stops
-      // (isLoading=false). Mid-stream clearing is handled by the message-delta
-      // defensive clear (line ~926) which fires when real tokens start flowing
-      // after a successful retry. Clearing unconditionally here would race
-      // against the model_retry custom event and hide the indicator immediately.
+      // Fallback clear: drop the retry indicator when the stream stops (isLoading=false).
+      // The primary clear path is the explicit model_retry_clear custom event sent by
+      // the main process when a retry succeeds. This fallback covers error paths and
+      // any edge case where model_retry_clear was not sent.
       if (!data.isLoading) {
         setThreadStates((prev) => {
           const cur = prev[threadId]
@@ -493,10 +492,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
             }))
           }
           break
-        // No `model_retry_clear` case: clearing is handled uniformly by
-        // (1) message-delta defensive clear (mid-stream resumption),
-        // (2) handleStreamUpdate isLoading=false (any stream end),
-        // (3) handleError (explicit error path).
+        case "model_retry_clear":
+          updateThreadState(threadId, () => ({ modelRetry: null }))
+          break
         case "token_usage":
           // Only update if we have meaningful token values (> 0)
           // This prevents resetting the usage when streaming ends
