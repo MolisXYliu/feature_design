@@ -254,6 +254,32 @@ export function setMemoryEnabled(enabled: boolean): void {
   writeFileSync(MEMORY_SETTINGS_FILE, JSON.stringify({ enabled }, null, 2))
 }
 
+// ── Code exec settings ──
+
+const CODE_EXEC_SETTINGS_FILE = join(OPENWORK_DIR, "code-exec-settings.json")
+
+interface CodeExecSettings {
+  enabled?: boolean
+}
+
+function readCodeExecSettings(): CodeExecSettings {
+  if (!existsSync(CODE_EXEC_SETTINGS_FILE)) return {}
+  try {
+    return JSON.parse(readFileSync(CODE_EXEC_SETTINGS_FILE, "utf-8")) as CodeExecSettings
+  } catch {
+    return {}
+  }
+}
+
+export function isCodeExecEnabled(): boolean {
+  return readCodeExecSettings().enabled !== false
+}
+
+export function setCodeExecEnabled(enabled: boolean): void {
+  getOpenworkDir()
+  writeFileSync(CODE_EXEC_SETTINGS_FILE, JSON.stringify({ enabled }, null, 2))
+}
+
 // ── Skills ──
 
 const DISABLED_SKILLS_FILE = join(OPENWORK_DIR, "disabled-skills.json")
@@ -439,6 +465,60 @@ export async function getEnabledSkillsSources(): Promise<string[]> {
   return enabledDirs.filter(dir => existsSync(dir))
 }
 
+const CMB_SKILL_PREFIX = "_cmb_"
+
+/**
+ * Remove all _cmb_ prefixed skill directories from {workDir}/.claude/skills/.
+ */
+export async function cleanCmbSkillsFromClaudeDir(workDir: string): Promise<void> {
+  const claudeSkillsDir = join(workDir, ".claude", "skills")
+  try {
+    const existing = await readdir(claudeSkillsDir, { withFileTypes: true })
+    for (const entry of existing) {
+      if (entry.isDirectory() && entry.name.startsWith(CMB_SKILL_PREFIX)) {
+        await rm(join(claudeSkillsDir, entry.name), { recursive: true, force: true })
+      }
+    }
+  } catch { /* directory may not exist yet */ }
+}
+
+/**
+ * Sync CmbCowork enabled skills to {workDir}/.claude/skills/ so that
+ * Claude Code can discover them natively. Only manages _cmb_ prefixed
+ * directories — leaves other skills untouched.
+ */
+export async function syncSkillsToClaudeDir(workDir: string): Promise<void> {
+  const claudeSkillsDir = join(workDir, ".claude", "skills")
+  await mkdir(claudeSkillsDir, { recursive: true })
+
+  // Clean up old _cmb_ skills
+  await cleanCmbSkillsFromClaudeDir(workDir)
+
+  // Copy enabled skills
+  const sourceDirs = await getEnabledSkillsSources()
+  let count = 0
+  for (const sourceDir of sourceDirs) {
+    if (!existsSync(sourceDir)) continue
+    const entries = await readdir(sourceDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const skillMdPath = join(sourceDir, entry.name, "SKILL.md")
+      if (!existsSync(skillMdPath)) continue
+      const dest = join(claudeSkillsDir, CMB_SKILL_PREFIX + entry.name)
+      try {
+        // Remove existing dest to avoid merge with prior copy (e.g. builtin vs custom same name)
+        if (existsSync(dest)) await rm(dest, { recursive: true, force: true })
+        await copyDirRecursive(join(sourceDir, entry.name), dest)
+        count++
+      } catch (e) {
+        console.warn(`[Storage] Failed to sync skill ${entry.name} to Claude dir:`, e)
+        try { await rm(dest, { recursive: true, force: true }) } catch { /* ignore */ }
+      }
+    }
+  }
+  console.log(`[Storage] Synced ${count} skills to ${claudeSkillsDir}`)
+}
+
 // Custom model configurations stored as JSON in ~/.cmbcoworkagent/custom-models.json
 export interface CustomModelConfig {
   id: string
@@ -447,6 +527,7 @@ export interface CustomModelConfig {
   model: string
   apiKey?: string
   maxTokens?: number
+  interleavedThinking?: boolean
   tier?: "premium" | "economy"
 }
 
@@ -473,6 +554,7 @@ export interface CustomModelPublicConfig {
   model: string
   hasApiKey: boolean
   maxTokens: number
+  interleavedThinking?: boolean
   tier?: "premium" | "economy"
 }
 
@@ -482,6 +564,7 @@ interface StoredCustomModelRecord {
   baseUrl: string
   model: string
   maxTokens?: number
+  interleavedThinking?: boolean
   tier?: "premium" | "economy"
 }
 
@@ -495,6 +578,14 @@ function normalizeMaxTokens(value: unknown): number {
   }
 
   return Math.min(MAX_MAX_TOKENS, Math.max(MIN_MAX_TOKENS, Math.floor(value)))
+}
+
+function defaultInterleavedThinkingForModel(model: string): boolean {
+  return /minimax/i.test(model)
+}
+
+function resolveInterleavedThinkingSetting(model: string, value: unknown): boolean {
+  return typeof value === "boolean" ? value : defaultInterleavedThinkingForModel(model)
 }
 
 function getCustomApiKeyEnvName(id: string): string {
@@ -659,6 +750,7 @@ function toPublicConfig(config: StoredCustomModelRecord, env?: Record<string, st
     model: config.model,
     hasApiKey: !!getCustomModelApiKey(config.id, env),
     maxTokens: normalizeMaxTokens(config.maxTokens),
+    interleavedThinking: resolveInterleavedThinkingSetting(config.model, config.interleavedThinking),
     ...(config.tier !== undefined && { tier: config.tier })
   }
 }
@@ -673,6 +765,7 @@ export function getCustomModelConfigs(): CustomModelConfig[] {
     model: item.model,
     apiKey: getCustomModelApiKey(item.id, env),
     maxTokens: normalizeMaxTokens(item.maxTokens),
+    interleavedThinking: resolveInterleavedThinkingSetting(item.model, item.interleavedThinking),
     ...(item.tier !== undefined && { tier: item.tier })
   }))
 }
@@ -688,6 +781,7 @@ export function getCustomModelConfigById(id: string): CustomModelConfig | null {
     model: record.model,
     apiKey: getCustomModelApiKey(record.id),
     maxTokens: normalizeMaxTokens(record.maxTokens),
+    interleavedThinking: resolveInterleavedThinkingSetting(record.model, record.interleavedThinking),
     ...(record.tier !== undefined && { tier: record.tier })
   }
 }
@@ -741,6 +835,7 @@ export function upsertCustomModelConfig(
     baseUrl: validatedBaseUrl,
     model: normalizedModel,
     maxTokens: validatedMaxTokens,
+    interleavedThinking: resolveInterleavedThinkingSetting(normalizedModel, config.interleavedThinking),
     ...(config.tier !== undefined && { tier: config.tier })
   }
 

@@ -17,6 +17,12 @@ import type {
 } from "../main/types"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
 import { UserInfoConfig } from "../main/storage"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewPayload,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../main/ipc/code-exec-tools"
 
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
@@ -192,6 +198,8 @@ const api = {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
+        tier?: "premium" | "economy"
       }>
     > => {
       return ipcRenderer.invoke("models:getCustomConfigs") as Promise<
@@ -202,6 +210,8 @@ const api = {
           model: string
           hasApiKey: boolean
           maxTokens: number
+          interleavedThinking?: boolean
+          tier?: "premium" | "economy"
         }>
       >
     },
@@ -214,6 +224,8 @@ const api = {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     } | null> => {
       return ipcRenderer.invoke("models:getCustomConfig", id) as Promise<{
         id: string
@@ -222,6 +234,8 @@ const api = {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
+        tier?: "premium" | "economy"
       } | null>
     },
     setCustomConfig: (config: {
@@ -231,6 +245,8 @@ const api = {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     }): Promise<void> => {
       return ipcRenderer.invoke("models:setCustomConfig", config) as Promise<void>
     },
@@ -241,6 +257,8 @@ const api = {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
+      tier?: "premium" | "economy"
     }): Promise<{ id: string }> => {
       return ipcRenderer.invoke("models:upsertCustomConfig", config) as Promise<{ id: string }>
     },
@@ -576,7 +594,7 @@ const api = {
       ipcRenderer.invoke("mcp:testConnection", params)
   },
   terminal: {
-    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string }): Promise<string> =>
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string; syncSkills?: boolean; syncMemory?: boolean }): Promise<string> =>
       ipcRenderer.invoke("terminal:create", opts),
     write: (id: string, data: string): void =>
       ipcRenderer.send("terminal:write", { id, data }),
@@ -877,7 +895,9 @@ const api = {
     sendApprovalDecision: (decision: {
       requestId: string
       type: string
-      tool_call_id: string
+      tool_call_id: string,
+      savedToolName?: string
+      savedToolDescription?: string
     }): void => {
       ipcRenderer.send("sandbox:approvalDecision", decision)
     },
@@ -1256,6 +1276,21 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke("hooks:delete", id),
     setEnabled: (id: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke("hooks:setEnabled", { id, enabled })
+  },
+  codeExecTools: {
+    list: (): Promise<ManagedSavedCodeExecTool[]> => ipcRenderer.invoke("codeExecTools:list"),
+    getSettings: (): Promise<{ codeExecEnabled: boolean }> => ipcRenderer.invoke("codeExecTools:getSettings"),
+    setCodeExecEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke("codeExecTools:setCodeExecEnabled", enabled),
+    setEnabled: (id: string, enabled: boolean): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:setEnabled", { id, enabled }),
+    setLastPreviewParams: (id: string, params: Record<string, unknown>): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:setLastPreviewParams", { id, params }),
+    update: (payload: SavedCodeExecToolUpdatePayload): Promise<ManagedSavedCodeExecTool> =>
+      ipcRenderer.invoke("codeExecTools:update", payload),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke("codeExecTools:delete", id),
+    runPreview: (payload: SavedCodeExecPreviewPayload): Promise<SavedCodeExecPreviewResult> =>
+      ipcRenderer.invoke("codeExecTools:runPreview", payload)
   },
   routing: {
     getMode: (): Promise<"auto" | "pinned"> => ipcRenderer.invoke("routing:getMode"),
