@@ -1544,6 +1544,39 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     )
   }
 
+  const extractMessageText = useCallback((content: Message["content"]): string => {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+
+    return content
+      .map((block) => {
+        if (block.type === "text") return block.text ?? ""
+        if (typeof block.content === "string") return block.content
+        return ""
+      })
+      .filter(Boolean)
+      .join("\n")
+  }, [])
+
+  const handleEditUserMessage = useCallback(
+    (message: Message): void => {
+      const original = extractMessageText(message.content)
+      const withoutAttachmentPreview = original.replace(/^(?:📎[^\n]*\n)+(?:\n)?/u, "").trim()
+      const nextInput = withoutAttachmentPreview || original
+      setInput(nextInput)
+
+      requestAnimationFrame(() => {
+        const textarea = inputRef.current
+        if (!textarea) return
+        textarea.focus()
+        const cursor = nextInput.length
+        textarea.setSelectionRange(cursor, cursor)
+      })
+      toast.success("已填充到输入框，编辑后可重新发送")
+    },
+    [extractMessageText, setInput]
+  )
+
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
       {/* Skill creation confirmation dialog */}
@@ -1940,6 +1973,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
               const isLastMessage = index === displayMessages.length - 1;
+              const nextNonToolMessage =
+                displayMessages.slice(index + 1).find((m) => m.role !== "tool") ?? null;
+              const showAssistantMeta =
+                message.role !== "assistant" ||
+                !nextNonToolMessage ||
+                nextNonToolMessage.role !== "assistant";
 
               return (
                 <MessageBubble
@@ -1947,9 +1986,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   message={message}
                   previousMessage={previousMessage}
                   isStreaming={isLastMessage && isLoading}
+                  showAssistantMeta={showAssistantMeta}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  onEditUserMessage={handleEditUserMessage}
                   threadId={threadId}
                 />
               );
