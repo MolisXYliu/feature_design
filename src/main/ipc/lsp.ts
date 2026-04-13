@@ -1,5 +1,5 @@
 import { BrowserWindow, IpcMain, dialog } from "electron"
-import { createWriteStream, mkdtempSync, rmSync } from "fs"
+import { createWriteStream, mkdtempSync, readdirSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { basename, join } from "path"
 import { getLspConfig, saveLspConfig, resetLspConfig } from "../storage"
@@ -76,6 +76,18 @@ function getSafeTempFilename(fileName: string): string {
   return (basename(fileName).replace(/[\\/]/g, "_").trim() || "java-lsp.vsix")
 }
 
+function cleanupStaleVsixTempDirs(): void {
+  const tempRoot = tmpdir()
+  for (const entry of readdirSync(tempRoot)) {
+    if (!entry.startsWith("cmb-lsp-vsix-")) continue
+    try {
+      rmSync(join(tempRoot, entry), { recursive: true, force: true })
+    } catch {
+      // Ignore stale temp cleanup failures; a fresh temp dir is still created below.
+    }
+  }
+}
+
 async function downloadLspVsixToTempFileWithProgress(
   name: string,
   onProgress: (progress: LspDownloadProgress) => void
@@ -95,6 +107,7 @@ async function downloadLspVsixToTempFileWithProgress(
   }
 
   const fileName = getContentDispositionFilename(response.headers.get("Content-Disposition"), `${name}.vsix`)
+  cleanupStaleVsixTempDirs()
   const tempDir = mkdtempSync(join(tmpdir(), "cmb-lsp-vsix-"))
   const filePath = join(tempDir, getSafeTempFilename(fileName))
   const total = Number(response.headers.get("Content-Length") ?? 0)

@@ -39,10 +39,8 @@ function isVsixMissingError(message: string | null | undefined): boolean {
   return /lsp-vsix|vsix|运行时缺失/.test(message)
 }
 
-function formatSize(bytes: number): string {
-  if (bytes <= 0) return "0 KB"
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
 }
 
 interface LspPanelProps {
@@ -425,12 +423,13 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
       : "未探测到可用的本机 JDK"
   const showVsixImportCard = status ? !status.vsixAvailable : false
   const vsixActionBusy = downloadingVsix || importingVsix
-  const downloadPercent = downloadProgress?.percent ?? 0
+  const downloadDisplayTotalBytes = 130 * 1024 * 1024
+  const downloadProgressWidth = downloadProgress
+    ? Math.min(100, Math.round((downloadProgress.transferred / downloadDisplayTotalBytes) * 100))
+    : 0
   const downloadMetaText = downloadProgress
-    ? downloadProgress.total > 0
-      ? `${formatSize(downloadProgress.transferred)} / ${formatSize(downloadProgress.total)}`
-      : `已下载 ${formatSize(downloadProgress.transferred)}`
-    : "准备下载..."
+    ? `已下载 ${formatMegabytes(downloadProgress.transferred)} / 130MB`
+    : "已下载 0.0MB / 130MB"
 
   return (
     <div className={cn("flex-1", !embedded && "overflow-auto")}>
@@ -573,13 +572,10 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
                   <div className="w-full bg-muted/80 rounded-full h-2 overflow-hidden">
                     <div
                       className="bg-primary h-full rounded-full transition-all duration-300"
-                      style={{ width: `${downloadPercent}%` }}
+                      style={{ width: `${downloadProgressWidth}%` }}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-xs text-amber-700 dark:text-amber-300">
-                    <span>{downloadMetaText}</span>
-                    <span>{downloadProgress ? `${downloadPercent}%` : ""}</span>
-                  </div>
+                  <div className="text-xs text-amber-700 dark:text-amber-300">{downloadMetaText}</div>
                 </div>
               )}
             </div>
