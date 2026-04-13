@@ -40,7 +40,7 @@ import { Badge } from "@/components/ui/badge"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
 import { FileViewer } from "@/components/tabs/FileViewer"
 import { onOpenResourcePreview } from "@/lib/resource-preview-events"
-import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
+import type { Todo, SkillMetadata, PluginMetadata, LspConfig, LspStatus } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 import { GitPanelView } from "@/components/panels/GitPanelView"
 import { LspPanel } from "@/components/customize/LspPanel"
@@ -60,6 +60,7 @@ interface SectionHeaderProps {
   title: string
   icon: React.ElementType
   badge?: number
+  detail?: React.ReactNode
   isOpen: boolean
   onToggle: () => void
 }
@@ -68,6 +69,7 @@ function SectionHeader({
   title,
   icon: Icon,
   badge,
+  detail,
   isOpen,
   onToggle
 }: SectionHeaderProps): React.JSX.Element {
@@ -85,6 +87,7 @@ function SectionHeader({
       />
       <Icon className="size-4.5 text-foreground/70" />
       <span className="flex-1 text-left text-[16px] font-semibold leading-none">{title}</span>
+      {detail && <div className="shrink-0">{detail}</div>}
       {badge !== undefined && badge > 0 && (
         <span className="text-xs text-muted-foreground tabular-nums">{badge}</span>
       )}
@@ -187,6 +190,8 @@ export function RightPanel({
   const [pluginsOpen, setPluginsOpen] = useState(false)
   const [hooksOpen, setHooksOpen] = useState(false)
   const [lspOpen, setLspOpen] = useState(false)
+  const [lspConfig, setLspConfig] = useState<LspConfig | null>(null)
+  const [lspStatus, setLspStatus] = useState<LspStatus | null>(null)
   const [skills, setSkills] = useState<SkillMetadata[]>([])
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set())
   const [plugins, setPlugins] = useState<PluginMetadata[]>([])
@@ -212,12 +217,65 @@ export function RightPanel({
     window.api.plugins.list().then(setPlugins).catch(console.error)
   }, [pluginVersion])
 
+  useEffect(() => {
+    let cancelled = false
+
+    const loadLspSummary = async (): Promise<void> => {
+      try {
+        const cfg = await window.api.lsp.getConfig()
+        if (cancelled) return
+        setLspConfig(cfg)
+
+        const workspacePath = threadState?.workspacePath ?? null
+        const currentStatus = await window.api.lsp.getStatus(workspacePath)
+        if (!cancelled) {
+          setLspStatus(currentStatus)
+        }
+      } catch (error) {
+        console.error("[RightPanel] Failed to load LSP summary:", error)
+      }
+    }
+
+    void loadLspSummary()
+    const unsubscribe = window.api.lsp.onChanged(() => { void loadLspSummary() })
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [currentThreadId, threadState?.workspacePath])
+
   // Auto-open agents panel when skill generation starts
   useEffect(() => {
     if (skillGenerationAgent.phase === "generating") {
       setAgentsOpen(true)
     }
   }, [skillGenerationAgent.phase])
+
+  const lspHeaderStatus = useMemo(() => {
+    if (!lspConfig) return null
+
+    const statusText = !lspConfig.enabled
+      ? "已禁用"
+      : currentThreadId && !threadState?.workspacePath
+        ? "未关联工作目录"
+        : lspStatus?.statusText ?? "已停止"
+
+    const statusClass = cn(
+      "text-xs font-medium tabular-nums",
+      lspStatus?.lifecycle === "ready"
+        ? "text-green-500"
+        : lspStatus?.lifecycle === "degraded"
+          ? "text-amber-600 dark:text-amber-400"
+          : lspStatus?.lifecycle === "starting" || lspStatus?.lifecycle === "importing"
+            ? "text-sky-600 dark:text-sky-400"
+            : lspStatus?.lifecycle === "error"
+              ? "text-destructive"
+              : "text-muted-foreground"
+    )
+
+    return <span className={statusClass}>{statusText}</span>
+  }, [currentThreadId, lspConfig, lspStatus, threadState?.workspacePath])
 
   // Auto-clear only for "done" phase (3 s brief confirmation).
   // "error" is intentionally NOT auto-cleared — it stays visible so the user
@@ -1062,6 +1120,7 @@ export function RightPanel({
         <SectionHeader
           title="LSP"
           icon={Code2}
+          detail={lspHeaderStatus}
           isOpen={lspOpen}
           onToggle={() => setLspOpen((prev) => !prev)}
         />

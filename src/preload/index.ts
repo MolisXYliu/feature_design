@@ -33,6 +33,17 @@ import type {
   SavedCodeExecToolUpdatePayload
 } from "../main/ipc/code-exec-tools"
 
+interface LspDownloadProgress {
+  percent: number
+  transferred: number
+  total: number
+}
+
+interface LspDownloadState {
+  isDownloading: boolean
+  progress: LspDownloadProgress | null
+}
+
 // Simple electron API - replaces @electron-toolkit/preload
 const electronAPI = {
   openExternal: (url: string) => shell.openExternal(url),
@@ -610,6 +621,8 @@ const api = {
       ipcRenderer.invoke("lsp:getStatus", projectRoot) as Promise<LspStatus>,
     getDownloadTarget: (): Promise<{ name: string; filenames: string[] }> =>
       ipcRenderer.invoke("lsp:getDownloadTarget") as Promise<{ name: string; filenames: string[] }>,
+    getDownloadState: (): Promise<LspDownloadState> =>
+      ipcRenderer.invoke("lsp:getDownloadState") as Promise<LspDownloadState>,
     downloadVsix: (): Promise<{ success: boolean; path?: string; error?: string }> =>
       ipcRenderer.invoke("lsp:downloadVsix") as Promise<{ success: boolean; path?: string; error?: string }>,
     importVsix: (): Promise<{ success: boolean; path?: string; error?: string }> =>
@@ -647,6 +660,11 @@ const api = {
       const handler = (): void => { callback() }
       ipcRenderer.on("lsp:changed", handler)
       return () => { ipcRenderer.removeListener("lsp:changed", handler) }
+    },
+    onDownloadState: (callback: (state: LspDownloadState) => void): (() => void) => {
+      const handler = (_: unknown, state: LspDownloadState): void => { callback(state) }
+      ipcRenderer.on("lsp:download-state", handler)
+      return () => { ipcRenderer.removeListener("lsp:download-state", handler) }
     }
   },
   terminal: {

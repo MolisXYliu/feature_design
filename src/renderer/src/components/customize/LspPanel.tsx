@@ -23,9 +23,26 @@ const SOURCE_LABELS = {
   scan: "目录扫描"
 } as const
 
+interface VsixDownloadProgress {
+  percent: number
+  transferred: number
+  total: number
+}
+
+interface VsixDownloadState {
+  isDownloading: boolean
+  progress: VsixDownloadProgress | null
+}
+
 function isVsixMissingError(message: string | null | undefined): boolean {
   if (!message) return false
   return /lsp-vsix|vsix|运行时缺失/.test(message)
+}
+
+function formatSize(bytes: number): string {
+  if (bytes <= 0) return "0 KB"
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 interface LspPanelProps {
@@ -40,10 +57,12 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
   const [jdkHomeInput, setJdkHomeInput] = useState("")
   const [jdkFallbackNotice, setJdkFallbackNotice] = useState<string | null>(null)
   const [downloadingVsix, setDownloadingVsix] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState<VsixDownloadProgress | null>(null)
   const [importingVsix, setImportingVsix] = useState(false)
   const [busyAction, setBusyAction] = useState<"start" | "stop" | null>(null)
   const [projectRoot, setProjectRoot] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const hasReceivedDownloadStatePushRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
@@ -93,6 +112,31 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
   useEffect(() => {
     return window.api.lsp.onChanged(() => { loadAll() })
   }, [loadAll])
+
+  const loadDownloadState = useCallback(async () => {
+    try {
+      const state = await window.api.lsp.getDownloadState()
+      if (!mountedRef.current || hasReceivedDownloadStatePushRef.current) return
+      setDownloadingVsix(state.isDownloading)
+      setDownloadProgress(state.progress)
+    } catch (e) {
+      console.error("[LspPanel] load download state error:", e)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadDownloadState()
+  }, [loadDownloadState])
+
+  useEffect(() => {
+    return window.api.lsp.onDownloadState((state: VsixDownloadState) => {
+      if (mountedRef.current) {
+        hasReceivedDownloadStatePushRef.current = true
+        setDownloadingVsix(state.isDownloading)
+        setDownloadProgress(state.progress)
+      }
+    })
+  }, [])
 
   const saveConfig = useCallback(async (updates: Partial<LspConfig>) => {
     try {
@@ -194,6 +238,7 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
   const handleDownloadVsix = useCallback(async () => {
     try {
       setDownloadingVsix(true)
+      setDownloadProgress({ percent: 0, transferred: 0, total: 0 })
       const result = await marketApi.downloadLspVsix()
       if (!result.success) {
         await loadAll()
@@ -205,9 +250,11 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
       const msg = e instanceof Error ? e.message : String(e)
       alert(`下载 VSIX 失败: ${msg}`)
     } finally {
-      if (mountedRef.current) setDownloadingVsix(false)
+      if (mountedRef.current) {
+        void loadDownloadState()
+      }
     }
-  }, [loadAll])
+  }, [loadAll, loadDownloadState])
 
   const handleImportVsix = useCallback(async () => {
     try {
@@ -257,6 +304,7 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
   const visibleLastError = status?.vsixAvailable && isVsixMissingError(config.lastError)
     ? null
     : config.lastError
+  const showEmbeddedStatusRow = !(embedded && statusOnly)
 
   const statusCard = (
     <div className="rounded-md border border-border p-4 space-y-3">
@@ -291,8 +339,12 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 text-sm">
-        <div className="text-muted-foreground">状态</div>
-        <div className={statusClass}>{statusText}</div>
+        {showEmbeddedStatusRow && (
+          <>
+            <div className="text-muted-foreground">状态</div>
+            <div className={statusClass}>{statusText}</div>
+          </>
+        )}
         <div className="text-muted-foreground">当前会话工作目录</div>
         <div className="text-xs truncate">
           {projectRoot || (threadId ? "当前会话未关联文件夹" : "未选择会话")}
@@ -373,6 +425,12 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
       : "未探测到可用的本机 JDK"
   const showVsixImportCard = status ? !status.vsixAvailable : false
   const vsixActionBusy = downloadingVsix || importingVsix
+  const downloadPercent = downloadProgress?.percent ?? 0
+  const downloadMetaText = downloadProgress
+    ? downloadProgress.total > 0
+      ? `${formatSize(downloadProgress.transferred)} / ${formatSize(downloadProgress.total)}`
+      : `已下载 ${formatSize(downloadProgress.transferred)}`
+    : "准备下载..."
 
   return (
     <div className={cn("flex-1", !embedded && "overflow-auto")}>
@@ -382,20 +440,15 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
             <div className="flex items-center gap-2">
               <Code2 className="size-5 text-orange-400" />
               <h2 className="text-lg font-semibold">Java LSP</h2>
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">Beta</span>
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                Beta
+              </span>
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">
-              当前工作目录的 Java 语义服务配置
-            </div>
+            <div className="text-sm text-muted-foreground">当前工作目录的 Java 语义服务配置</div>
           )}
           <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              title="重置为默认配置"
-            >
+            <Button variant="ghost" size="sm" onClick={handleReset} title="重置为默认配置">
               <RotateCcw className="size-4 mr-1" />
               重置
             </Button>
@@ -427,6 +480,11 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
         <p className="text-sm text-muted-foreground">
           为CmbDevClaw 添加Java LSP工具，进行精确的代码跳转、查找引用、类型信息查询等操作。
           需要配置项目对应的JDK 用于符号分析。
+        </p>
+
+        <p className="text-sm text-muted-foreground">
+          每个被选中的工作区都需要单独启动LSP服务，为避免占用过多资源请控制启动的LSP服务数量并及时关闭
+          不再使用的LSP服务。
         </p>
 
         {/* Settings */}
@@ -469,9 +527,7 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
                 {jdkFallbackNotice}
               </div>
             )}
-            <div className="text-xs text-muted-foreground break-all">
-              {jdkHelpText}
-            </div>
+            <div className="text-xs text-muted-foreground break-all">{jdkHelpText}</div>
           </div>
 
           {showVsixImportCard && (
@@ -479,7 +535,9 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
               <div className="flex items-start gap-2">
                 <AlertTriangle className="size-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" />
                 <div className="space-y-1">
-                  <div className="text-sm font-medium text-amber-800 dark:text-amber-200">缺少 Java LSP 运行时文件</div>
+                  <div className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                    缺少 Java LSP 运行时文件
+                  </div>
                   <div className="text-xs text-amber-700 dark:text-amber-300">
                     下载或导入当前平台的 Java 扩展 `.vsix` 文件，才可以启用Java LSP服务。
                   </div>
@@ -487,11 +545,7 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  size="sm"
-                  onClick={handleDownloadVsix}
-                  disabled={vsixActionBusy}
-                >
+                <Button size="sm" onClick={handleDownloadVsix} disabled={vsixActionBusy}>
                   {downloadingVsix ? (
                     <Loader2 className="size-4 mr-1 animate-spin" />
                   ) : (
@@ -513,6 +567,21 @@ export function LspPanel({ threadId, embedded = false, statusOnly = false }: Lsp
                   {importingVsix ? "导入中..." : "导入 .vsix"}
                 </Button>
               </div>
+
+              {downloadingVsix && (
+                <div className="space-y-2">
+                  <div className="w-full bg-muted/80 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-primary h-full rounded-full transition-all duration-300"
+                      style={{ width: `${downloadPercent}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-amber-700 dark:text-amber-300">
+                    <span>{downloadMetaText}</span>
+                    <span>{downloadProgress ? `${downloadPercent}%` : ""}</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

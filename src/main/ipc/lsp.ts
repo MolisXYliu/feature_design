@@ -2,8 +2,6 @@ import { BrowserWindow, IpcMain, dialog } from "electron"
 import { createWriteStream, mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { basename, join } from "path"
-import { Readable } from "stream"
-import { pipeline } from "stream/promises"
 import { getLspConfig, saveLspConfig, resetLspConfig } from "../storage"
 import { importUserVsix, importUserVsixBuffer, getVsixDownloadTarget } from "../lsp/server"
 import { invalidateJavaRuntimeCache } from "../lsp/runtimes"
@@ -28,6 +26,24 @@ import {
 import type { LspConfig } from "../types"
 
 const RESTART_RELEVANT_CONFIG_KEYS: Array<keyof LspConfig> = ["enabled", "maxHeapMb", "manualJavaHome"]
+
+interface LspDownloadProgress {
+  percent: number
+  transferred: number
+  total: number
+}
+
+interface LspDownloadState {
+  isDownloading: boolean
+  progress: LspDownloadProgress | null
+}
+
+let currentDownloadState: LspDownloadState = {
+  isDownloading: false,
+  progress: null
+}
+
+let activeVsixDownload: Promise<{ success: boolean; path?: string; error?: string }> | null = null
 
 function getMarketplaceApiBaseUrl(): string {
   const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/+$/, "")
@@ -60,7 +76,10 @@ function getSafeTempFilename(fileName: string): string {
   return (basename(fileName).replace(/[\\/]/g, "_").trim() || "java-lsp.vsix")
 }
 
-async function downloadLspVsixToTempFile(name: string): Promise<{ tempDir: string; filePath: string; fileName: string }> {
+async function downloadLspVsixToTempFileWithProgress(
+  name: string,
+  onProgress: (progress: LspDownloadProgress) => void
+): Promise<{ tempDir: string; filePath: string; fileName: string }> {
   const response = await fetch(getMarketplaceDownloadUrl("lsp", name), {
     method: "GET",
     headers: {
@@ -78,15 +97,50 @@ async function downloadLspVsixToTempFile(name: string): Promise<{ tempDir: strin
   const fileName = getContentDispositionFilename(response.headers.get("Content-Disposition"), `${name}.vsix`)
   const tempDir = mkdtempSync(join(tmpdir(), "cmb-lsp-vsix-"))
   const filePath = join(tempDir, getSafeTempFilename(fileName))
+  const total = Number(response.headers.get("Content-Length") ?? 0)
+  const reader = response.body.getReader()
+  const writer = createWriteStream(filePath)
+  let transferred = 0
+
+  onProgress({ percent: 0, transferred: 0, total })
+
   try {
-    await pipeline(
-      Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
-      createWriteStream(filePath)
-    )
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+
+      transferred += value.byteLength
+      if (!writer.write(Buffer.from(value))) {
+        await new Promise<void>((resolve) => {
+          writer.once("drain", () => resolve())
+        })
+      }
+
+      const percent = total > 0
+        ? Math.min(100, Math.round((transferred / total) * 100))
+        : 0
+
+      onProgress({ percent, transferred, total })
+    }
+
+    writer.end()
+    await new Promise<void>((resolve) => {
+      writer.once("finish", () => resolve())
+    })
   } catch (error) {
+    writer.destroy()
     rmSync(tempDir, { recursive: true, force: true })
     throw error
+  } finally {
+    reader.releaseLock()
   }
+
+  onProgress({
+    percent: 100,
+    transferred,
+    total: total > 0 ? total : transferred
+  })
 
   return { tempDir, filePath, fileName }
 }
@@ -95,6 +149,17 @@ function notifyChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send("lsp:changed")
   }
+}
+
+function notifyDownloadState(state: LspDownloadState): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("lsp:download-state", state)
+  }
+}
+
+function setDownloadState(state: LspDownloadState): void {
+  currentDownloadState = state
+  notifyDownloadState(state)
 }
 
 export function registerLspHandlers(ipcMain: IpcMain): void {
@@ -164,24 +229,42 @@ export function registerLspHandlers(ipcMain: IpcMain): void {
     return getVsixDownloadTarget()
   })
 
+  ipcMain.handle("lsp:getDownloadState", async (): Promise<LspDownloadState> => {
+    return currentDownloadState
+  })
+
   ipcMain.handle("lsp:downloadVsix", async (): Promise<{ success: boolean; path?: string; error?: string }> => {
-    let tempDir: string | null = null
-    try {
-      const target = getVsixDownloadTarget()
-      const downloaded = await downloadLspVsixToTempFile(target.name)
-      tempDir = downloaded.tempDir
-      const imported = importUserVsix(downloaded.filePath, downloaded.fileName)
-      saveLspConfig({ lastError: null })
-      notifyChanged()
-      return { success: true, path: imported.path }
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    } finally {
-      if (tempDir) rmSync(tempDir, { recursive: true, force: true })
+    if (activeVsixDownload) {
+      return activeVsixDownload
     }
+
+    setDownloadState({ isDownloading: true, progress: { percent: 0, transferred: 0, total: 0 } })
+
+    activeVsixDownload = (async (): Promise<{ success: boolean; path?: string; error?: string }> => {
+      let tempDir: string | null = null
+      try {
+        const target = getVsixDownloadTarget()
+        const downloaded = await downloadLspVsixToTempFileWithProgress(target.name, (progress) => {
+          setDownloadState({ isDownloading: true, progress })
+        })
+        tempDir = downloaded.tempDir
+        const imported = importUserVsix(downloaded.filePath, downloaded.fileName)
+        saveLspConfig({ lastError: null })
+        notifyChanged()
+        return { success: true, path: imported.path }
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      } finally {
+        if (tempDir) rmSync(tempDir, { recursive: true, force: true })
+        activeVsixDownload = null
+        setDownloadState({ isDownloading: false, progress: null })
+      }
+    })()
+
+    return activeVsixDownload
   })
 
   ipcMain.handle("lsp:importVsix", async (): Promise<{ success: boolean; path?: string; error?: string }> => {

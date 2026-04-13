@@ -346,9 +346,11 @@ interface CustomAPI {
     isRunning: (projectRoot: string) => Promise<boolean>
     getStatus: (projectRoot: string | null) => Promise<LspStatus>
     getDownloadTarget: () => Promise<{ name: string; filenames: string[] }>
+    getDownloadState: () => Promise<{ isDownloading: boolean; progress: { percent: number; transferred: number; total: number } | null }>
     downloadVsix: () => Promise<{ success: boolean; path?: string; error?: string }>
     importVsix: () => Promise<{ success: boolean; path?: string; error?: string }>
     saveDownloadedVsix: (buffer: ArrayBuffer, fileName?: string) => Promise<{ success: boolean; path?: string; error?: string }>
+    onDownloadState: (callback: (state: { isDownloading: boolean; progress: { percent: number; transferred: number; total: number } | null }) => void) => () => void
     definition: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspLocation[]>
     references: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspLocation[]>
     hover: (params: { projectRoot: string; filePath: string; line: number; column: number }) => Promise<LspHoverResult | null>
