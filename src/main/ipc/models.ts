@@ -412,6 +412,30 @@ function parseRemoteHead(lsRemoteOutput: string, branch: string): string | null 
   return null
 }
 
+async function resolvePushBaseRef(
+  worktreePath: string,
+  branch: string,
+  options?: { silent?: boolean }
+): Promise<string | null> {
+  const silent = Boolean(options?.silent)
+
+  const candidates = [
+    "@{upstream}",
+    `refs/remotes/origin/${branch}`
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      await runGit(worktreePath, ["rev-parse", "--verify", candidate], { silent })
+      return candidate
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return null
+}
+
 async function hasPushableCommits(
   worktreePath: string,
   branch: string,
@@ -419,22 +443,46 @@ async function hasPushableCommits(
   options?: { silent?: boolean }
 ): Promise<boolean> {
   const silent = Boolean(options?.silent)
-  const remoteRef = `refs/remotes/origin/${branch}`
-  try {
-    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef], { silent })
-    const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${remoteRef}..HEAD`], { silent })).trim()
-    const ahead = Number.parseInt(aheadRaw, 10)
-    return Number.isFinite(ahead) && ahead > 0
-  } catch {
-    if (!baseCommit) return false
+  const pushBaseRef = await resolvePushBaseRef(worktreePath, branch, { silent })
+
+  if (pushBaseRef) {
+    try {
+      const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${pushBaseRef}..HEAD`], { silent })).trim()
+      const ahead = Number.parseInt(aheadRaw, 10)
+      return Number.isFinite(ahead) && ahead > 0
+    } catch {
+      // fall through to baseCommit fallback
+    }
+  }
+
+  if (baseCommit) {
     try {
       const sinceBaseRaw = (await runGit(worktreePath, ["rev-list", "--count", `${baseCommit}..HEAD`], { silent })).trim()
       const sinceBase = Number.parseInt(sinceBaseRaw, 10)
       return Number.isFinite(sinceBase) && sinceBase > 0
     } catch {
-      return false
+      // fall through
     }
   }
+
+  // No upstream and no known base: best effort so UI can still offer push flow.
+  try {
+    const headExists = (await runGit(worktreePath, ["rev-parse", "--verify", "HEAD"], { silent })).trim()
+    return Boolean(headExists)
+  } catch {
+    return false
+  }
+}
+
+function parseCommitLog(raw: string): Array<{ hash: string; message: string; date: string }> {
+  if (!raw) return []
+  return raw
+    .split("\n")
+    .map((line) => {
+      const [hash, message, date] = line.split("\x1f")
+      return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
+    })
+    .filter((c) => c.hash)
 }
 
 async function getPendingCommits(
@@ -444,28 +492,38 @@ async function getPendingCommits(
   options?: { silent?: boolean }
 ): Promise<Array<{ hash: string; message: string; date: string }>> {
   const silent = Boolean(options?.silent)
-  const remoteRef = `refs/remotes/origin/${branch}`
   const logFormat = "%H\x1f%s\x1f%ci"
-  try {
-    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef], { silent })
-    const raw = (await runGit(worktreePath, ["log", `${remoteRef}..HEAD`, `--format=${logFormat}`], { silent })).trim()
-    if (!raw) return []
-    return raw.split("\n").map((line) => {
-      const [hash, message, date] = line.split("\x1f")
-      return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
-    }).filter((c) => c.hash)
-  } catch {
-    if (!baseCommit) return []
+  const pushBaseRef = await resolvePushBaseRef(worktreePath, branch, { silent })
+
+  if (pushBaseRef) {
+    try {
+      const raw = (await runGit(worktreePath, ["log", `${pushBaseRef}..HEAD`, `--format=${logFormat}`], { silent })).trim()
+      // Upstream exists: this range is authoritative (may legitimately be empty).
+      return parseCommitLog(raw)
+    } catch {
+      // fall through
+    }
+  }
+
+  if (baseCommit) {
     try {
       const raw = (await runGit(worktreePath, ["log", `${baseCommit}..HEAD`, `--format=${logFormat}`], { silent })).trim()
-      if (!raw) return []
-      return raw.split("\n").map((line) => {
-        const [hash, message, date] = line.split("\x1f")
-        return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
-      }).filter((c) => c.hash)
+      const commits = parseCommitLog(raw)
+      if (commits.length > 0) {
+        return commits
+      }
     } catch {
-      return []
+      // fall through
     }
+  }
+
+  // No upstream/base information: show latest local commit as best-effort hint,
+  // so "Git 提交"弹窗在 commit 后也能展示 message。
+  try {
+    const raw = (await runGit(worktreePath, ["log", "-1", `--format=${logFormat}`], { silent })).trim()
+    return parseCommitLog(raw)
+  } catch {
+    return []
   }
 }
 
