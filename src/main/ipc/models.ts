@@ -96,10 +96,11 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
   const trimmed = normalizeTrackedPath(rawPath)
   if (!trimmed) return []
   const worktreeAbs = path.resolve(worktreePath)
+  let relDirect = ""
 
   // Direct relative candidate (only for non-absolute paths)
   if (!isAbsoluteLikePath(trimmed)) {
-    const relDirect = toPosixRelative(trimmed)
+    relDirect = toPosixRelative(trimmed)
     if (relDirect) result.add(relDirect)
 
     // Recovery for previously stored broken absolute paths (e.g. "Users/xxx" without leading "/").
@@ -135,6 +136,12 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
       ) {
         const mapped = rawAsGitRelative.slice(workspaceFromGitRoot.length).replace(/^\/+/, "")
         if (mapped) result.add(mapped)
+        // When workspace is a subdirectory of git root, git status paths are often
+        // repo-root-relative (e.g. "A/file.ts"). In that case prefer mapped
+        // workspace-relative path ("file.ts") and drop misleading direct candidate.
+        if (relDirect && relDirect === rawAsGitRelative) {
+          result.delete(relDirect)
+        }
       }
     }
   }
