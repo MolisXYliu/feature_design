@@ -15,7 +15,7 @@ interface EvolutionRunProgress {
 
 interface AppState {
   // Main content view routing
-  mainView: "thread" | "customize" | "evolution" | "kanban" | "claudecode"
+  mainView: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard"
 
   // Threads
   threads: Thread[]
@@ -43,6 +43,10 @@ interface AppState {
   showClaudeCodeView: boolean
   previousThreadId: string | null  // 切换到 Claude Code 前保存的线程 ID
   setShowClaudeCodeView: (show: boolean) => void
+
+  // Dashboard view state
+  showDashboardView: boolean
+  setShowDashboardView: (show: boolean) => void
 
   // Customize view state
   showCustomizeView: boolean
@@ -78,7 +82,7 @@ interface AppState {
 
   // Customize actions
   setShowCustomizeView: (show: boolean, tab?: string) => void
-  setMainView: (view: "thread" | "customize" | "evolution" | "kanban" | "claudecode") => void
+  setMainView: (view: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard") => void
 
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
@@ -142,6 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showKanbanView: false,
   showSubagentsInKanban: true,
   showClaudeCodeView: false,
+  showDashboardView: false,
   previousThreadId: null,
   showCustomizeView: false,
   customizeInitialTab: null,
@@ -299,6 +304,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  // Dashboard actions
+  setShowDashboardView: (show: boolean) => {
+    if (show) {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        showDashboardView: true,
+        showClaudeCodeView: false,
+        showKanbanView: false,
+        showCustomizeView: false,
+        mainView: "dashboard",
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+    } else {
+      const restored = get().previousThreadId
+      set({
+        showDashboardView: false,
+        mainView: "thread",
+        ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
+      })
+    }
+  },
+
   // Kanban actions
   setShowKanbanView: (show: boolean) => {
     if (show) {
@@ -371,6 +399,20 @@ export const useAppStore = create<AppState>((set, get) => ({
         showKanbanView: false,
         showClaudeCodeView: false,
         customizeInitialTab: "evolution"
+      })
+      return
+    }
+
+    if (view === "dashboard") {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        mainView: "dashboard",
+        showDashboardView: true,
+        showCustomizeView: false,
+        showKanbanView: false,
+        showClaudeCodeView: false,
+        previousThreadId: prev,
+        currentThreadId: null
       })
       return
     }

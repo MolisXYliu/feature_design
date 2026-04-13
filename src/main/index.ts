@@ -84,6 +84,7 @@ import { registerHooksHandlers } from "./ipc/hooks"
 import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
 import { registerCodeExecToolsHandlers } from "./ipc/code-exec-tools"
 import { registerRoutingHandlers } from "./ipc/routing"
+import { registerDashboardHandlers } from "./ipc/dashboard"
 import { setTraceReporter } from "./agent/trace/collector"
 import { CloudTraceReporter } from "./agent/trace/cloud-reporter"
 import { setEventReporter, HttpEventReporter } from "./services/event-reporter"
@@ -320,6 +321,7 @@ if (!gotTheLock) {
     registerTerminalHandlers(ipcMain)
     registerCodeExecToolsHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
+    registerDashboardHandlers(ipcMain)
     registerUpdaterHandlers()
 
     // Register file system handlers
