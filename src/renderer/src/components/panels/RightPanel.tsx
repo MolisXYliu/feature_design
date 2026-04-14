@@ -334,7 +334,7 @@ export function RightPanel({
         try {
           if (!currentThreadId) return
           const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
-          if (summary.isGitRepo ?? summary.isWorktree) {
+          if (summary.isGitRepo || summary.isWorktree) {
             if (moduleMode !== "git") {
               onRequestGitMode?.()
             }
@@ -363,7 +363,7 @@ export function RightPanel({
       try {
         if (!currentThreadId) return
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
-        if (summary.isGitRepo ?? summary.isWorktree) {
+        if (summary.isGitRepo || summary.isWorktree) {
           // Git repo: don't auto-switch to preview mode, just update preview content silently
           lastAppliedPreviewKeyRef.current = latestResourceEvent.key
           setPreviewPath(latestResourceEvent.path)
@@ -405,7 +405,7 @@ export function RightPanel({
       }
       if (data.threadId === currentThreadId) {
         window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
-          if (summary.isGitRepo ?? summary.isWorktree) {
+          if (summary.isGitRepo || summary.isWorktree) {
             if (moduleMode !== "git") {
               onRequestGitMode?.()
             }
