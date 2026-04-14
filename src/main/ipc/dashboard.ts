@@ -198,7 +198,7 @@ async function fetchUserStats(range: TimeRange, _granularity: Granularity): Prom
 
 async function fetchProductivity(range: TimeRange, granularity: Granularity): Promise<unknown> {
   const interval = getCalendarInterval(granularity, range.from, range.to)
-  const commitBody = {
+  const body = {
     size: 0,
     query: {
       bool: {
@@ -219,25 +219,7 @@ async function fetchProductivity(range: TimeRange, granularity: Granularity): Pr
       total_commits: { value_count: { field: "eventId" } }
     }
   }
-  const gitPanelBody = {
-    size: 0,
-    query: {
-      bool: {
-        filter: [
-          timeRangeFilter("startedAt", range),
-          { term: { toolNames: "git_workflow" } }
-        ]
-      }
-    },
-    aggs: {
-      git_panel_users: { cardinality: { field: "sapId" } }
-    }
-  }
-  const [commitRes, gitPanelRes] = await Promise.all([
-    esQuery(getEsIndex("event"), commitBody),
-    esQuery(getEsIndex("trace"), gitPanelBody)
-  ])
-  return { commit: commitRes, gitPanel: gitPanelRes }
+  return esQuery(getEsIndex("event"), body)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -431,20 +413,13 @@ function makeMockProductivity(range: TimeRange): unknown {
   }))
 
   return {
-    commit: {
-      aggregations: {
-        commit_trend: { buckets: trend },
-        total_insertions:    { value: 14820 },
-        total_deletions:     { value: 6430 },
-        total_files_changed: { value: 892 },
-        total_commits:       { value: 187 },
-        active_users:        { value: 24 }
-      }
-    },
-    gitPanel: {
-      aggregations: {
-        git_panel_users: { value: 18 }
-      }
+    aggregations: {
+      commit_trend: { buckets: trend },
+      total_insertions:   { value: 14820 },
+      total_deletions:    { value: 6430 },
+      total_files_changed:{ value: 892 },
+      total_commits:      { value: 187 },
+      active_users:       { value: 24 }
     }
   }
 }
