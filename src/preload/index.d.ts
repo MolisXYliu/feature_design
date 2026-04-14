@@ -202,6 +202,7 @@ interface CustomAPI {
       totals: { additions: number; deletions: number; fileCount: number }
       hasPendingDiff: boolean
       hasPushableCommit: boolean
+      pendingCommits?: Array<{ hash: string; message: string; date: string }>
       trackedFiles?: string[]
       worktreeBranch?: string | null
       suggestedCommitMessage?: string
@@ -248,6 +249,11 @@ interface CustomAPI {
         status: "ok" | "failed" | "skipped"
         detail: string
       }>
+    }>
+    pullWorktree: (threadId: string) => Promise<{
+      success: boolean
+      detail?: string
+      error?: string
     }>
     rejectWorktreeChanges: (threadId: string) => Promise<{
       success: boolean
@@ -703,6 +709,12 @@ interface CustomAPI {
     }) => void) => () => void
     onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => () => void
     onError: (callback: (err: { message: string; silent?: boolean }) => void) => () => void
+  }
+  git: {
+    currentBranch: (cwd?: string) => Promise<{ isGitRepo: boolean; branch: string | null; isWorktree: boolean }>
+    listBranches: (cwd?: string) => Promise<{ success: boolean; branches: string[]; error?: string }>
+    switchBranch: (branch: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
+    createBranch: (branch: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
   }
 }
 

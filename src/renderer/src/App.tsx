@@ -248,6 +248,7 @@ function App(): React.JSX.Element {
 
     const syncRightModuleByWorkspace = async (): Promise<void> => {
       if (!currentThreadId || mainView !== "thread") {
+        setHasPendingGitDiff(false)
         setRightModule("work")
         handlePreviewCollapse()
         return
@@ -256,19 +257,25 @@ function App(): React.JSX.Element {
       try {
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
         if (cancelled) return
+        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
+        const hasPendingDiff = Boolean(summary.hasPendingDiff)
+        setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
 
-        const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
-        if (isGitWorkspace) {
+        if (isGitWorkspace && hasPendingDiff) {
           autoOpenedGitForThreadRef.current = currentThreadId
           setRightModule("git")
           handlePreviewExpand()
           return
         }
 
+        if (isGitWorkspace) {
+          autoOpenedGitForThreadRef.current = null
+        }
         setRightModule("work")
         handlePreviewCollapse()
       } catch {
         if (cancelled) return
+        setHasPendingGitDiff(false)
         setRightModule("work")
         handlePreviewCollapse()
       }
@@ -291,13 +298,18 @@ function App(): React.JSX.Element {
     const refreshSummary = async (): Promise<void> => {
       try {
         const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
+        const hasPendingDiff = Boolean(summary.hasPendingDiff)
         if (!cancelled) {
-          const isGitWorkspace = Boolean(summary.isGitRepo ?? summary.isWorktree)
-          setHasPendingGitDiff(Boolean(isGitWorkspace && summary.hasPendingDiff))
-          if (isGitWorkspace && autoOpenedGitForThreadRef.current !== currentThreadId) {
+          setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
+          if (isGitWorkspace && hasPendingDiff && autoOpenedGitForThreadRef.current !== currentThreadId) {
             autoOpenedGitForThreadRef.current = currentThreadId
             setRightModule("git")
             handlePreviewExpand()
+            return
+          }
+          if (!hasPendingDiff && autoOpenedGitForThreadRef.current === currentThreadId) {
+            autoOpenedGitForThreadRef.current = null
           }
         }
       } catch {

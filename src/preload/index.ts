@@ -377,6 +377,7 @@ const api = {
       totals: { additions: number; deletions: number; fileCount: number }
       hasPendingDiff: boolean
       hasPushableCommit: boolean
+      pendingCommits?: Array<{ hash: string; message: string; date: string }>
       trackedFiles?: string[]
       worktreeBranch?: string | null
       suggestedCommitMessage?: string
@@ -391,6 +392,7 @@ const api = {
         totals: { additions: number; deletions: number; fileCount: number }
         hasPendingDiff: boolean
         hasPushableCommit: boolean
+        pendingCommits?: Array<{ hash: string; message: string; date: string }>
         trackedFiles?: string[]
         worktreeBranch?: string | null
         suggestedCommitMessage?: string
@@ -473,6 +475,13 @@ const api = {
         autoCommitted?: boolean
         error?: string
         steps?: Array<{ step: "pull" | "commit" | "push" | "verify" | "final"; status: "ok" | "failed" | "skipped"; detail: string }>
+      }>
+    },
+    pullWorktree: (threadId: string): Promise<{ success: boolean; detail?: string; error?: string }> => {
+      return ipcRenderer.invoke("workspace:pullWorktree", { threadId }) as Promise<{
+        success: boolean
+        detail?: string
+        error?: string
       }>
     },
     rejectWorktreeChanges: (threadId: string): Promise<{ success: boolean; error?: string }> => {
@@ -1393,6 +1402,36 @@ const api = {
       ipcRenderer.on("update:error", wrapper)
       return () => ipcRenderer.removeListener("update:error", wrapper)
     }
+  },
+  git: {
+    currentBranch: (cwd?: string): Promise<{ isGitRepo: boolean; branch: string | null; isWorktree: boolean }> =>
+      ipcRenderer.invoke("git:currentBranch", cwd) as Promise<{
+        isGitRepo: boolean
+        branch: string | null
+        isWorktree: boolean
+      }>,
+    listBranches: (cwd?: string): Promise<{ success: boolean; branches: string[]; error?: string }> =>
+      ipcRenderer.invoke("git:listBranches", cwd) as Promise<{
+        success: boolean
+        branches: string[]
+        error?: string
+      }>,
+    switchBranch: (
+      branch: string,
+      cwd?: string
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("git:switchBranch", { branch, cwd }) as Promise<{
+        success: boolean
+        error?: string
+      }>,
+    createBranch: (
+      branch: string,
+      cwd?: string
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("git:createBranch", { branch, cwd }) as Promise<{
+        success: boolean
+        error?: string
+      }>
   }
 }
 

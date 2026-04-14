@@ -40,6 +40,7 @@ import { ModelSwitcher } from "./ModelSwitcher"
 import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
+import { GitBranchSwitcher } from "./GitBranchSwitcher"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
 import {
@@ -1543,6 +1544,39 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     )
   }
 
+  const extractMessageText = useCallback((content: Message["content"]): string => {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+
+    return content
+      .map((block) => {
+        if (block.type === "text") return block.text ?? ""
+        if (typeof block.content === "string") return block.content
+        return ""
+      })
+      .filter(Boolean)
+      .join("\n")
+  }, [])
+
+  const handleEditUserMessage = useCallback(
+    (message: Message): void => {
+      const original = extractMessageText(message.content)
+      const withoutAttachmentPreview = original.replace(/^(?:📎[^\n]*\n)+(?:\n)?/u, "").trim()
+      const nextInput = withoutAttachmentPreview || original
+      setInput(nextInput)
+
+      requestAnimationFrame(() => {
+        const textarea = inputRef.current
+        if (!textarea) return
+        textarea.focus()
+        const cursor = nextInput.length
+        textarea.setSelectionRange(cursor, cursor)
+      })
+      toast.success("已填充到输入框，编辑后可重新发送")
+    },
+    [extractMessageText, setInput]
+  )
+
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
       {/* Skill creation confirmation dialog */}
@@ -1939,6 +1973,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
               const isLastMessage = index === displayMessages.length - 1;
+              const nextNonToolMessage =
+                displayMessages.slice(index + 1).find((m) => m.role !== "tool") ?? null;
+              const showAssistantMeta =
+                message.role !== "assistant" ||
+                !nextNonToolMessage ||
+                nextNonToolMessage.role !== "assistant";
 
               return (
                 <MessageBubble
@@ -1946,9 +1986,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   message={message}
                   previousMessage={previousMessage}
                   isStreaming={isLastMessage && isLoading}
+                  showAssistantMeta={showAssistantMeta}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  onEditUserMessage={handleEditUserMessage}
                   threadId={threadId}
                 />
               );
@@ -2241,7 +2283,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
               <div
                 ref={dropZoneRef}
                 className={cn(
-                  "relative flex-1 min-w-0 flex flex-col rounded-xl border border-border shadow-sm transition-colors duration-300",
+                  "relative flex-1 min-w-0 flex flex-col rounded-3xl border border-border  transition-colors duration-300",
                   glowVisible ? "bg-white/80" : "bg-white",
                   dragOver && "border-primary"
                 )}
@@ -2304,68 +2346,75 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   disabled={isLoading}
                   className={cn(
                     "relative z-[1] w-full resize-none bg-transparent overflow-y-auto",
-                    "px-4 py-3 text-sm placeholder:text-muted-foreground",
+                    "p-4 text-sm placeholder:text-muted-foreground",
                     "focus:outline-none disabled:opacity-70",
                     attachments.length > 0 && "pt-1.5"
                   )}
-                  rows={1}
+                  rows={3}
                   style={{ minHeight: "44px", maxHeight: "200px" }}
                 />
                 {/* Bottom bar: + button left, send button right */}
-                <div className="flex items-center justify-between px-2 pb-2">
-                  <button
-                    type="button"
-                    disabled={isLoading || attachmentLoading || attachments.length >= MAX_ATTACHMENTS || totalAttachmentChars >= MAX_TOTAL_CHARS}
-                    onClick={handleAttachClick}
-                    title="添加文件 (txt, md, csv, docx, xlsx)"
-                    className="flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <Plus className="size-4" />
-                  </button>
-                  {isLoading ? (
+                <div className="flex items-center justify-between px-3 pb-2">
+                  <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={handleCancel}
-                      aria-label="停止生成"
-                      className="flex items-center justify-center size-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      disabled={isLoading || attachmentLoading || attachments.length >= MAX_ATTACHMENTS || totalAttachmentChars >= MAX_TOTAL_CHARS}
+                      onClick={handleAttachClick}
+                      title="添加文件 (txt, md, csv, docx, xlsx)"
+                      className="flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      <Square className="size-3 fill-current" />
+                      <Plus className="size-4" />
                     </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      disabled={!input.trim() && attachments.length === 0}
-                      className="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <Send className="size-3.5" />
-                    </button>
-                  )}
+                    <div className="w-px h-4 bg-border mx-1" />
+                    <ModelSwitcher threadId={threadId} />
+                    <div className="w-px h-4 bg-border mx-1" />
+                    <WorkspacePicker threadId={threadId} />
+
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isLoading ? (
+                      <button
+                        type="button"
+                        onClick={handleCancel}
+                        aria-label="停止生成"
+                        className="flex items-center justify-center size-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      >
+                        <Square className="size-3 fill-current" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!input.trim() && attachments.length === 0}
+                        className="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Send className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ModelSwitcher threadId={threadId} />
-                <div className="w-px h-4 bg-border" />
-                <WorkspacePicker threadId={threadId} />
-                {yoloMode && (
-                  <>
-                    <div className="w-px h-4 bg-border" />
-                    <button
-                      type="button"
-                      title="点击打开设置"
-                      onClick={() => setShowCustomizeView(true, "sandbox")}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
-                    >
-                      <Zap className="size-3" />
-                      YOLO
-                    </button>
-                  </>
-                )}
-              </div>
-              {tokenUsage && (
-                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} contextLimit={modelContextLimit} />
-              )}
+            {/*chat container bottom panel — moved inside input box above */}
+            <div className={'flex items-center justify-between'}>
+             <div className={'flex items-center space-x-4'}>
+               {yoloMode && (
+                 <button
+                   type="button"
+                   title="点击打开设置"
+                   onClick={() => setShowCustomizeView(true, "sandbox")}
+                   className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                 >
+                   <Zap className="size-3" />
+                   YOLO
+                 </button>
+               )}
+               {tokenUsage && (
+                 <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel}
+                                        contextLimit={modelContextLimit} />
+               )}
+             </div>
+            {/*  GitBranch */}
+            <GitBranchSwitcher workspacePath={workspacePath} />
             </div>
           </div>
         </form>

@@ -9,7 +9,8 @@ import {
   TriangleAlert,
   FolderOpen,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  ArrowDown
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
@@ -36,6 +37,7 @@ export function GitPanelView({
   const [commitMessage, setCommitMessage] = useState("")
   const [expandedFilePaths, setExpandedFilePaths] = useState<Set<string>>(new Set())
   const [revertingFilePath, setRevertingFilePath] = useState<string | null>(null)
+  const [pulling, setPulling] = useState(false)
   const [state, setState] = useState<{
     success: boolean
     isWorktree: boolean
@@ -45,6 +47,7 @@ export function GitPanelView({
     totals: { additions: number; deletions: number; fileCount: number }
     hasPendingDiff: boolean
     hasPushableCommit: boolean
+    pendingCommits?: Array<{ hash: string; message: string; date: string }>
     worktreeBranch?: string | null
     suggestedCommitMessage?: string
     error?: string
@@ -64,6 +67,7 @@ export function GitPanelView({
     try {
       const next = await window.api.workspace.getGitPanelState(threadId)
       setState(next)
+      // showToast("刷新完成", "success")
     } catch (e) {
       const err = e instanceof Error ? e.message : "加载失败"
       setError(err)
@@ -209,11 +213,30 @@ export function GitPanelView({
     [threadId, refresh, showToast]
   )
 
+  const runPull = useCallback(async () => {
+    if (!threadId) return
+    setPulling(true)
+    setError(null)
+    try {
+      const result = await window.api.workspace.pullWorktree(threadId)
+      if (!result.success) throw new Error(result.error || "拉取失败")
+      showToast(result.detail || "拉取成功", "success")
+      await refresh()
+    } catch (e) {
+      const err = e instanceof Error ? e.message : "拉取失败"
+      setError(err)
+      showToast(err, "error")
+    } finally {
+      setPulling(false)
+    }
+  }, [threadId, refresh, showToast])
+
   const hasPending = Boolean(state?.hasPendingDiff)
-  const hasPushableCommit = Boolean(state?.hasPushableCommit)
   const hasGitRepo = Boolean(state?.isGitRepo ?? state?.isWorktree)
   const isWorktreePath = Boolean(state?.isWorktree)
-  const canShowSubmit = hasGitRepo && (hasPending || hasPushableCommit)
+  // Keep the submit entry visible for git repos so users can push right after commit,
+  // even if pushability detection lags or temporarily reports false.
+  const canShowSubmit = hasGitRepo
   const workspaceName = workspacePath
     ? workspacePath.split(/[\\/]/).filter(Boolean).pop() || workspacePath
     : "未关联路径"
@@ -297,36 +320,61 @@ export function GitPanelView({
                 )}
               </div>
 
-              <button
-                id="git-refresh-button"
-                onClick={() => {
-                  void refresh()
-                }}
-                disabled={loading}
-                title="刷新"
-                aria-label="刷新"
-                className={cn(
-                  "group inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium",
-                  "border border-border/80 bg-background/60 text-muted-foreground",
-                  "active:scale-[0.97] transition-all duration-200",
-                  loading && "border-blue-400/60 text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-950/30",
-                  "disabled:cursor-not-allowed"
-                )}
-              >
-                <RefreshCw
+              <div className="flex items-center gap-2">
+                <button
+                  id="git-refresh-button"
+                  onClick={() => {
+                    void refresh()
+                  }}
+                  disabled={loading}
+                  title="刷新"
+                  aria-label="刷新"
                   className={cn(
-                    "size-3.5 transition-transform duration-300",
-                    loading ? "animate-spin" : "group-hover:rotate-90"
+                    "group inline-flex items-center gap-1.5 rounded-xl px-3 py-1 text-[11px] font-medium",
+                    "border border-border/80 bg-background/60 text-muted-foreground",
+                    "active:scale-[0.97] transition-all duration-200",
+                    loading && "border-blue-400/60 text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-950/30",
+                    "disabled:cursor-not-allowed"
                   )}
-                />
-                {loading ? "刷新中..." : "刷新"}
-              </button>
+                >
+                  <RefreshCw
+                    className={cn(
+                      "size-3.5 transition-transform duration-300",
+                      loading ? "animate-spin" : "group-hover:rotate-90"
+                    )}
+                  />
+                  {loading ? "刷新中..." : "刷新"}
+                </button>
+                <button
+                  id="git-pull-button"
+                  onClick={() => {
+                    void runPull()
+                  }}
+                  disabled={pulling || loading}
+                  title="Pull 远端代码"
+                  aria-label="Pull 远端代码"
+                  className={cn(
+                    "group inline-flex items-center gap-1.5 rounded-xl px-3 py-1 text-[11px] font-medium",
+                    "border border-border/80 bg-background/60 text-muted-foreground",
+                    "active:scale-[0.97] transition-all duration-200",
+                    pulling && "border-blue-400/60 text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-950/30",
+                    "disabled:cursor-not-allowed"
+                  )}
+                >
+                  <ArrowDown
+                    className={cn(
+                      "size-3.5 transition-transform duration-300",
+                      pulling ? "animate-bounce" : "group-hover:translate-y-0.5"
+                    )}
+                  />
+                  {pulling ? "拉取中..." : "Pull"}
+                </button>
+              </div>
             </div>
           )}
         </div>
       </div>
       <div className="overflow-y-auto overflow-x-hidden right-panel-scroll bg-background flex-1 min-h-0 p-3 space-y-3">
-        {loading && <div className="text-xs text-muted-foreground">正在加载 Git diff...</div>}
         {(error || state?.error) && (
           <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
             <AlertCircle className="size-3.5 mt-0.5 shrink-0" />
@@ -354,7 +402,7 @@ export function GitPanelView({
               </div>
             ) : (
               <>
-                {state.files.map((file) => (
+                {state.files.filter((file) => file.diff && file.diff.trim() !== "").map((file) => (
                   <div key={file.path} className="rounded-md border border-border/70 p-2 bg-white">
                     <button
                       type="button"
@@ -460,6 +508,7 @@ export function GitPanelView({
         cardNumber={cardNumber}
         commitType={commitType}
         commitMessage={commitMessage}
+        pendingCommits={state?.pendingCommits}
         onOpenChange={(open) => {
           if (!open) setSubmitAction(null)
         }}
