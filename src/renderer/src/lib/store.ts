@@ -47,6 +47,8 @@ interface AppState {
   // Dashboard view state
   showDashboardView: boolean
   setShowDashboardView: (show: boolean) => void
+  dashboardAllowed: boolean | null  // null = loading
+  loadDashboardAllowed: () => Promise<void>
 
   // Customize view state
   showCustomizeView: boolean
@@ -147,6 +149,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showSubagentsInKanban: true,
   showClaudeCodeView: false,
   showDashboardView: false,
+  dashboardAllowed: null,
   previousThreadId: null,
   showCustomizeView: false,
   customizeInitialTab: null,
@@ -180,6 +183,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       showKanbanView: false,
       showCustomizeView: false,
       showClaudeCodeView: false,
+      showDashboardView: false,
       previousThreadId: null,
       mainView: "thread"
       // skillGenerationByThread is NOT reset here: new threads start with no entry
@@ -194,6 +198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       showKanbanView: false,
       showCustomizeView: false,
       showClaudeCodeView: false,
+      showDashboardView: false,
       previousThreadId: null,
       mainView: "thread"
       // skillGenerationByThread is NOT cleared here: each thread retains its own card
@@ -306,6 +311,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Dashboard actions
+  loadDashboardAllowed: async () => {
+    const allowed = await window.api.dashboard.isAllowed().catch(() => false)
+    set({ dashboardAllowed: allowed })
+  },
+
   setShowDashboardView: (show: boolean) => {
     if (show) {
       const prev = get().previousThreadId || get().currentThreadId

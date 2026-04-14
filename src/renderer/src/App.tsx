@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
+import { useEffect, useState, useCallback, useRef, useLayoutEffect, lazy, Suspense } from "react"
 import {
   Briefcase,
   Eye,
   GitBranch,
+  Loader2,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -14,7 +15,9 @@ import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
 import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
-import { DashboardView } from "@/components/dashboard/DashboardView"
+const DashboardView = lazy(() =>
+  import("@/components/dashboard/DashboardView").then((m) => ({ default: m.DashboardView }))
+)
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -58,6 +61,7 @@ function App(): React.JSX.Element {
   const {
     currentThreadId,
     loadThreads,
+    loadDashboardAllowed,
     createThread,
     mainView,
     sidebarCollapsed,
@@ -329,7 +333,7 @@ function App(): React.JSX.Element {
     async function init(): Promise<void> {
       try {
         await migrateDisabledSkillsFromLocalStorage()
-        await loadThreads()
+        await Promise.all([loadThreads(), loadDashboardAllowed()])
         const threads = useAppStore.getState().threads
         if (threads.length === 0) {
           await createThread()
@@ -625,7 +629,9 @@ function App(): React.JSX.Element {
               </>
             )}
             <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
-              <DashboardView />
+              <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>}>
+                <DashboardView />
+              </Suspense>
             </main>
           </div>
         )}

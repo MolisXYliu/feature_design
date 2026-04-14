@@ -195,16 +195,11 @@ export function ThreadSidebar(): React.JSX.Element {
     showClaudeCodeView,
     setShowClaudeCodeView,
     showDashboardView,
-    setShowDashboardView
+    setShowDashboardView,
+    dashboardAllowed
   } = useAppStore()
 
   const { cleanupThread } = useThreadContext()
-
-  const [dashboardAllowed, setDashboardAllowed] = useState(false)
-
-  useEffect(() => {
-    window.api.dashboard.isAllowed().then(setDashboardAllowed).catch(() => setDashboardAllowed(false))
-  }, [])
 
   const [robots, setRobots] = useState<ChatXRobotConfig[]>([])
   const [showRobotPicker, setShowRobotPicker] = useState(false)
