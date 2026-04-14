@@ -289,6 +289,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         showClaudeCodeView: true,
         showKanbanView: false,
         showCustomizeView: false,
+        showDashboardView: false,
         mainView: "claudecode",
         previousThreadId: prev,
         currentThreadId: null
@@ -336,6 +337,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         showKanbanView: true,
         showCustomizeView: false,
         showClaudeCodeView: false,
+        showDashboardView: false,
         mainView: "kanban",
         currentThreadId: null,
         previousThreadId: prev
@@ -356,6 +358,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         showCustomizeView: true,
         showKanbanView: false,
         showClaudeCodeView: false,
+        showDashboardView: false,
         customizeInitialTab: tab ?? null,
         mainView: "customize"
       })
