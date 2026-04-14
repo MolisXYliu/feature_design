@@ -22,6 +22,7 @@ import {
 } from "../storage"
 import { resolveModel, rememberRoutingDecision, rememberRoutingFeedback } from "../routing"
 import { notifyIfBackground, stripThink } from "../services/notify"
+import { trackEvent } from "../services/event-reporter"
 import { trySendChatXReply } from "../services/chatx"
 import { TraceCollector } from "../agent/trace/collector"
 import {
@@ -404,6 +405,15 @@ async function confirmAndWriteSkillProposal(
     return
   }
 
+  try {
+    trackEvent("skill.proposal.accepted", "skill", {
+      threadId,
+      skillId,
+      skillName: proposal.name
+    })
+  } catch (e) {
+    console.warn("[event] failed to emit skill.proposal.accepted:", e)
+  }
   await writeSkillToDisk(skillId, proposal.content, proposal.name)
 }
 
@@ -493,6 +503,16 @@ async function autoProposeSKill(
     const worthiness = await judgeSkillWorthiness(threadId, context)
     llmWorthy = worthiness?.worthy ?? false
     worthinessReason = worthiness?.reason
+    try {
+      trackEvent("skill.proposal.judged", "skill", {
+        threadId,
+        toolCallCount: context.toolCallCount,
+        worthy: llmWorthy,
+        reason: worthinessReason
+      })
+    } catch (e) {
+      console.warn("[event] failed to emit skill.proposal.judged:", e)
+    }
   } else {
     console.log(`[SkillEvolution][${threadId}] Mode A selected, skipping worthiness LLM`)
   }
@@ -514,6 +534,17 @@ async function autoProposeSKill(
     toolCallCount: context.toolCallCount,
     turnCount: context.turnCount
   })}`)
+  try {
+    trackEvent("skill.proposal.triggered", "skill", {
+      threadId,
+      toolCallCount: context.toolCallCount,
+      turnCount: context.turnCount,
+      mode,
+      llmWorthy
+    })
+  } catch (e) {
+    console.warn("[event] failed to emit skill.proposal.triggered:", e)
+  }
   await runSkillProposalFlow(threadId, context, mode, worthinessReason)
 }
 
