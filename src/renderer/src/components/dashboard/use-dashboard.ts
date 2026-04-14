@@ -56,6 +56,7 @@ export interface ProductivityData {
   totalCommits: number
   activeUsers: number
   avgCommitsPerUser: number
+  gitPanelUsers: number
 }
 
 // ─────────────────────────────────────────────────────────
@@ -254,7 +255,8 @@ function parseUserStats(raw: any): UserStatsData {
 }
 
 function parseProductivity(raw: any, granularity: Granularity): ProductivityData {
-  const aggs = raw?.aggregations ?? {}
+  const aggs = raw?.commit?.aggregations ?? raw?.aggregations ?? {}
+  const gitPanelAggs = raw?.gitPanel?.aggregations ?? {}
   const totalCommits = aggs.total_commits?.value ?? 0
   const activeUsers = aggs.active_users?.value ?? 0
 
@@ -268,7 +270,8 @@ function parseProductivity(raw: any, granularity: Granularity): ProductivityData
     totalFilesChanged: aggs.total_files_changed?.value ?? 0,
     totalCommits,
     activeUsers,
-    avgCommitsPerUser: activeUsers > 0 ? totalCommits / activeUsers : 0
+    avgCommitsPerUser: activeUsers > 0 ? totalCommits / activeUsers : 0,
+    gitPanelUsers: gitPanelAggs.git_panel_users?.value ?? 0
   }
 }
 

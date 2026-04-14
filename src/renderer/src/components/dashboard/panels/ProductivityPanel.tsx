@@ -1,4 +1,4 @@
-import { GitCommit, FilePlus, FileMinus, FileText, UserCheck } from "lucide-react"
+import { GitCommit, FilePlus, FileMinus, FileText, Users, UserCheck } from "lucide-react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer
@@ -52,7 +52,7 @@ export function ProductivityPanel({
   return (
     <div className="space-y-4">
       {/* Stat cards */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-6 gap-3">
         <StatCard
           icon={GitCommit}
           label="Commit 总数"
@@ -76,6 +76,12 @@ export function ProductivityPanel({
           label="文件变更数"
           value={formatNumber(data.totalFilesChanged)}
           color="bg-amber-500"
+        />
+        <StatCard
+          icon={Users}
+          label="GitPanel 用户数"
+          value={formatNumber(data.gitPanelUsers)}
+          color="bg-teal-500"
         />
         <StatCard
           icon={UserCheck}
