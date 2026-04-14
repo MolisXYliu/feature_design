@@ -104,7 +104,11 @@ function App(): React.JSX.Element {
                 if(pathName.includes('零售客户经营开发团队')){
                   setBus(true)
                 }else{
-                  setBus(false)
+                  if(['00010719','01008194','01080687','00011026'].includes(resBody.sapId)){
+                    setBus(true)
+                  }else{
+                    setBus(false)
+                  }
                 }
                 window.api.models.upsertUserInfo({
                     sapId: resBody.sapId,//8
