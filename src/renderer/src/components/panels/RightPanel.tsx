@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo, memo, lazy, Suspense } from "react"
 import {
   ListTodo,
   FolderTree,
@@ -40,13 +40,18 @@ import { useThreadState, useThreadStream } from "@/lib/thread-context"
 import { getFileType } from "@/lib/file-types"
 import { Badge } from "@/components/ui/badge"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
-import { FileViewer } from "@/components/tabs/FileViewer"
 import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
-import { GitPanelView } from "@/components/panels/GitPanelView"
 
 type HookConfig = Awaited<ReturnType<typeof window.api.hooks.list>>[number]
+
+const FileViewer = lazy(() =>
+  import("@/components/tabs/FileViewer").then((m) => ({ default: m.FileViewer }))
+)
+const GitPanelView = lazy(() =>
+  import("@/components/panels/GitPanelView").then((m) => ({ default: m.GitPanelView }))
+)
 
 const HEADER_HEIGHT = 52 // px
 const HANDLE_HEIGHT = 6 // px
@@ -143,6 +148,15 @@ interface RightPanelProps {
   onRequestGitMode?: () => void
   onRequestWorkMode?: () => void
   onPreviewFullscreenChange?: (isFullscreen: boolean) => void
+}
+
+function LazySectionFallback({ label }: { label: string }): React.JSX.Element {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center text-muted-foreground">
+      <Loader2 className="mr-2 size-4 animate-spin" />
+      <span className="text-sm">{label}</span>
+    </div>
+  )
 }
 
 export function RightPanel({
@@ -865,21 +879,23 @@ export function RightPanel({
       {moduleMode === "git" && (
         <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
           <div className="bg-white p-2 h-full min-h-0">
-            <GitPanelView
-              threadId={currentThreadId ?? ""}
-              workspacePath={threadState?.workspacePath ?? null}
-              onOpenFileFolder={async (filePath) => {
-                try {
-                  const resolved = resolvePreviewPaths(filePath, threadState?.workspacePath ?? null)
-                  const platform = await window.electron.ipcRenderer.invoke("get-platform")
-                  const normalizedPath =
-                    platform === "win32" ? resolved.fullPath.replace(/\//g, "\\") : resolved.fullPath
-                  await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
-                } catch (error) {
-                  console.error("[GitPanel] Failed to show item in folder:", error)
-                }
-              }}
-            />
+            <Suspense fallback={<LazySectionFallback label="加载 Git 面板..." />}>
+              <GitPanelView
+                threadId={currentThreadId ?? ""}
+                workspacePath={threadState?.workspacePath ?? null}
+                onOpenFileFolder={async (filePath) => {
+                  try {
+                    const resolved = resolvePreviewPaths(filePath, threadState?.workspacePath ?? null)
+                    const platform = await window.electron.ipcRenderer.invoke("get-platform")
+                    const normalizedPath =
+                      platform === "win32" ? resolved.fullPath.replace(/\//g, "\\") : resolved.fullPath
+                    await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+                  } catch (error) {
+                    console.error("[GitPanel] Failed to show item in folder:", error)
+                  }
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       )}
@@ -1547,14 +1563,16 @@ function ResourcePreview({
         )}
 
         {!codeDiff && (
-          <FileViewer
-            threadId={threadId}
-            filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
-            externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
-            htmlFillHeight
-            reloadToken={reloadToken}
-            previewMode={supportsSourceView ? previewMode : undefined}
-          />
+          <Suspense fallback={<LazySectionFallback label="加载文件预览..." />}>
+            <FileViewer
+              threadId={threadId}
+              filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
+              externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
+              htmlFillHeight
+              reloadToken={reloadToken}
+              previewMode={supportsSourceView ? previewMode : undefined}
+            />
+          </Suspense>
         )}
       </div>
     </div>
