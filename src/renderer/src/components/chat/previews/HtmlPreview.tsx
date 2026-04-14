@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
+import { inlineHtmlSiblingAssets } from "@/lib/html-srcdoc"
 
 import "highlight.js/styles/github.css"
 
@@ -11,6 +12,7 @@ interface HtmlPreviewProps {
   showHeader?: boolean
   showModeToggle?: boolean
   viewMode?: "preview" | "source"
+  readDependencyFile?: (resolvedPath: string) => Promise<string | null>
 }
 
 function getFileName(path: string): string {
@@ -32,13 +34,48 @@ export function HtmlPreview({
   fillHeight = false,
   showHeader = true,
   showModeToggle = true,
-  viewMode
+  viewMode,
+  readDependencyFile
 }: HtmlPreviewProps): React.JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [iframeHeight, setIframeHeight] = useState<number>(480)
   const [internalViewMode, setInternalViewMode] = useState<"preview" | "source">("preview")
+  const [srcDocContent, setSrcDocContent] = useState(content)
   const currentViewMode = viewMode ?? internalViewMode
   const highlightedSourceMarkdown = useMemo(() => getFencedCodeBlock(content, "html"), [content])
+
+  useEffect(() => {
+    let isCancelled = false
+
+    async function buildSrcDoc(): Promise<void> {
+      if (!path || !readDependencyFile) {
+        setSrcDocContent(content)
+        return
+      }
+
+      // 先渲染原始内容，再异步替换为“内联同级依赖”后的 srcDoc，避免空白闪烁。
+      setSrcDocContent(content)
+      const htmlWithInlinedAssets = await inlineHtmlSiblingAssets({
+        html: content,
+        htmlPath: path,
+        readTextFile: readDependencyFile
+      })
+
+      if (!isCancelled) {
+        setSrcDocContent(htmlWithInlinedAssets)
+      }
+    }
+
+    buildSrcDoc().catch(() => {
+      if (!isCancelled) {
+        setSrcDocContent(content)
+      }
+    })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [content, path, readDependencyFile])
 
   const syncHeight = useCallback(() => {
     const iframe = iframeRef.current
@@ -110,7 +147,7 @@ export function HtmlPreview({
           <iframe
             ref={iframeRef}
             title={path || "html-preview"}
-            srcDoc={content}
+            srcDoc={srcDocContent}
             className={`border-0 ${fillHeight ? "h-full" : ""}`}
             style={
               fillHeight
@@ -121,8 +158,8 @@ export function HtmlPreview({
                     width: "max(100%, 1000px)"
                   }
             }
-            // Allow CDN scripts in preview HTML while keeping iframe origin isolated from the host app.
-            sandbox="allow-scripts"
+            // 预览场景需要脚本和同源能力（例如 localStorage）；同时保留 sandbox 隔离主页面上下文。
+            sandbox="allow-scripts allow-same-origin"
             scrolling={fillHeight ? "auto" : "no"}
             onLoad={syncHeight}
           />
