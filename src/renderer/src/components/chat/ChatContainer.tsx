@@ -68,6 +68,9 @@ interface StreamMessage {
 
 interface ChatContainerProps {
   threadId: string
+  showGitChangeNotice?: boolean
+  onOpenGitPanel?: () => void
+  onThreadGitStatusChange?: (threadId: string, isGit: boolean) => void
 }
 
 interface SkillIntentBannerRequest {
@@ -164,7 +167,12 @@ function RotatingHeadline() {
   )
 }
 
-export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Element {
+export function ChatContainer({
+  threadId,
+  showGitChangeNotice = false,
+  onOpenGitPanel,
+  onThreadGitStatusChange
+}: ChatContainerProps): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const isAtBottomRef = useRef(true)
@@ -2248,6 +2256,22 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       )}
       {/* Input */}
       <div className="p-4">
+        {showGitChangeNotice && (
+          <div className="max-w-3xl mx-auto mb-2 flex items-center justify-between gap-3 rounded-xl border border-status-warning/40 bg-status-warning/10 px-3 py-2">
+            <div className="min-w-0 flex items-center gap-2 text-[12px] text-foreground">
+              <AlertCircle className="size-3.5 shrink-0 text-status-warning" />
+              <span className="truncate">检测到文件变更，可打开 Git 面板查看。</span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenGitPanel}
+              disabled={!onOpenGitPanel}
+              className="shrink-0 rounded-md bg-status-warning px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-status-warning/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              打开
+            </button>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="flex flex-col gap-2">
             <div className="flex items-end gap-2">
@@ -2339,7 +2363,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                     <div className="w-px h-4 bg-border mx-1" />
                     <ModelSwitcher threadId={threadId} />
                     <div className="w-px h-4 bg-border mx-1" />
-                    <WorkspacePicker threadId={threadId} />
+                    <WorkspacePicker threadId={threadId} onGitStatusChange={onThreadGitStatusChange} />
 
                   </div>
                   <div className="flex items-center gap-2">

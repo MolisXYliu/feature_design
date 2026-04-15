@@ -9,9 +9,18 @@ const FileViewer = lazy(() => import("./FileViewer").then((m) => ({ default: m.F
 interface TabbedPanelProps {
   threadId: string
   showTabBar?: boolean
+  hasPendingGitDiffNotice?: boolean
+  onRequestOpenGitPanel?: () => void
+  onThreadGitStatusChange?: (threadId: string, isGit: boolean) => void
 }
 
-export function TabbedPanel({ threadId, showTabBar = true }: TabbedPanelProps): React.JSX.Element {
+export function TabbedPanel({
+  threadId,
+  showTabBar = true,
+  hasPendingGitDiffNotice = false,
+  onRequestOpenGitPanel,
+  onThreadGitStatusChange
+}: TabbedPanelProps): React.JSX.Element {
   const { activeTab, openFiles, setActiveTab } = useCurrentThread(threadId)
 
   // Determine what to render based on active tab
@@ -29,7 +38,12 @@ export function TabbedPanel({ threadId, showTabBar = true }: TabbedPanelProps): 
       {/* Content Area */}
       <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
         {isAgentTab ? (
-          <ChatContainer threadId={threadId} />
+          <ChatContainer
+            threadId={threadId}
+            showGitChangeNotice={hasPendingGitDiffNotice}
+            onOpenGitPanel={onRequestOpenGitPanel}
+            onThreadGitStatusChange={onThreadGitStatusChange}
+          />
         ) : activeFile ? (
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
             <div className="flex h-10 shrink-0 items-center border-b border-border/60 px-3">
