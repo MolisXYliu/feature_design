@@ -418,8 +418,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const cmd = command.trim().toLowerCase()
     return (
       // Python package managers
-      /\bpip\s+install\b/.test(cmd)
-      || /\bpip3\s+install\b/.test(cmd)
+      /\bpip(?:3(?:\.\d+)?)?(?:\.exe|\.cmd|\.bat)?\s+install\b/.test(cmd)
+      || /\b(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?\s+-m\s+pip\s+install\b/.test(cmd)
+      || /\buv(?:\.exe|\.cmd|\.bat)?\s+pip\s+install\b/.test(cmd)
+      || /\bpipx(?:\.exe|\.cmd|\.bat)?\s+install\b/.test(cmd)
       || /\bpoetry\s+(install|add|update)\b/.test(cmd)
       || /\bconda\s+install\b/.test(cmd)
       // Node.js
@@ -2211,9 +2213,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           aclDirs.push(tmpDir)
           LocalSandbox._permanentAclDirs.add(tmpKey)
         }
-        // Pre-create JVM sandbox subdirectories from the main process (full permissions)
-        // so Maven can write its TEMP-backed local repository.
+        // Pre-create Python/JVM sandbox subdirectories from the main process (full permissions)
+        // so package managers can write their TEMP-backed caches/user installs.
         const sandboxSubDirs = [
+          path.join(tmpDir, "sandbox-python-user"),
+          path.join(tmpDir, "sandbox-pip-cache"),
+          path.join(tmpDir, "sandbox-poetry-cache"),
+          path.join(tmpDir, "sandbox-conda-pkgs"),
           path.join(tmpDir, "m2-sandbox-repo")
         ]
         for (const subDir of sandboxSubDirs) {
