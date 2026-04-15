@@ -83,6 +83,17 @@ function cmdSetLiteral(value: string): string {
   return value.replace(/"/g, '""')
 }
 
+function tomlBasicString(value: string): string {
+  return `"${value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, "\\\"")
+    .replace(/\u0008/g, "\\b")
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n")
+    .replace(/\f/g, "\\f")
+    .replace(/\r/g, "\\r")}"`
+}
+
 /**
  * Options for LocalSandbox configuration.
  */
@@ -174,22 +185,48 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return path.win32.join(systemDrive, "Users", username)
   }
 
-  private static buildElevatedSandboxEnvPreamble(shellBase: string, realTempDir: string, realUserHome: string): string {
+  private static prepareElevatedHostMavenRepo(realUserHome: string): string | undefined {
+    const repo = path.win32.join(realUserHome, ".m2", "repository")
+    try {
+      mkdirSync(repo, { recursive: true })
+      return repo
+    } catch (err) {
+      console.warn(`[LocalSandbox] elevated: failed to prepare host Maven repo ${repo}, falling back to TEMP: ${err}`)
+      return undefined
+    }
+  }
+
+  private static buildWritableRootsOverride(roots: string[]): string | undefined {
+    if (roots.length === 0) return undefined
+    return `sandbox_workspace_write.writable_roots=[${roots.map(tomlBasicString).join(",")}]`
+  }
+
+  private static buildElevatedSandboxEnvPreamble(
+    shellBase: string,
+    realTempDir: string,
+    realUserHome: string,
+    hostMavenRepoLocal?: string
+  ): string {
     const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
     const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
     const homePath = profileRoot.slice(homeDrive.length) || "\\"
     const localAppData = path.win32.join(profileRoot, "AppData", "Local")
     const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
-    // Use the host user's real TEMP for maven.repo.local — it is ACL-granted writable by
-    // the sandbox user (included in write_roots during elevated setup). The sandbox user's
-    // own profile TEMP (C:\Users\CodexSandboxOnline\...\Temp) is NOT granted write access
-    // by the ACL setup, so we must NOT redirect TEMP/TMP to it.
-    const mavenRepoLocal = path.win32.join(realTempDir, "m2-sandbox-repo")
-    // JVM user.home override: the sandbox redirects USERPROFILE, which causes JVM
-    // tools (Maven, Gradle, sbt, etc.) to look for configs under the sandbox user's
-    // empty home. Setting -Duser.home to the real user home lets all JVM tools find
-    // their default configs (~/.m2/settings.xml, ~/.gradle/, etc.) without us having
-    // to know the exact location of each config file.
+    // Point Maven at the HOST user's real dependency cache only when that path has been
+    // handed to Codex as a writable root. Codex then grants both the sandbox group and the
+    // workspace capability SID, matching its native elevated-sandbox setup path.
+    // .m2/repository only contains jar/pom build artifacts — no sensitive credentials.
+    // .m2/settings.xml (may contain repo passwords) is NOT exposed by this — Maven reads
+    // settings.xml via MAVEN_OPTS -Duser.home=realUserHome, but maven.repo.local is a
+    // separate path that only stores downloaded dependency files.
+    //
+    // If the host repo cannot be prepared, fall back to TEMP, which Codex already includes
+    // in write_roots for workspace-write sandboxes.
+    const mavenRepoLocal = hostMavenRepoLocal ?? path.win32.join(realTempDir, "m2-sandbox-repo")
+    // Redirect standard Windows profile env vars to the sandbox user's persistent profile.
+    // The sandbox user (CodexSandboxOnline) has full control over its own profile, so all
+    // tools (npm, pip, cargo, go, etc.) can read/write their default cache locations
+    // under USERPROFILE/APPDATA/LOCALAPPDATA without any per-tool overrides.
     const envOverrides: Array<[string, string]> = [
       ["USERPROFILE", profileRoot],
       ["HOME", profileRoot],
@@ -199,43 +236,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["LOCALAPPDATA", localAppData],
       ["USERNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
       ["LOGNAME", WINDOWS_SANDBOX_ONLINE_USERNAME],
-      // ── Tool cache/home redirects ──
-      // Sandbox user has no access to the host user's HOME directories.
-      // Redirect all tool caches to TEMP-based writable directories.
-      // Node.js
-      ["NPM_CONFIG_CACHE", path.win32.join(realTempDir, "sandbox-npm-cache")],
-      ["YARN_CACHE_FOLDER", path.win32.join(realTempDir, "sandbox-yarn-cache")],
-      ["PNPM_HOME", path.win32.join(realTempDir, "sandbox-pnpm-home")],
-      ["PNPM_STORE_DIR", path.win32.join(realTempDir, "sandbox-pnpm-store")],
-      // Go
-      ["GOPATH", path.win32.join(realTempDir, "sandbox-gopath")],
-      ["GOMODCACHE", path.win32.join(realTempDir, "sandbox-gopath", "pkg", "mod")],
-      ["GOBIN", path.win32.join(realTempDir, "sandbox-gopath", "bin")],
-      // Rust
-      ["CARGO_HOME", path.win32.join(realTempDir, "sandbox-cargo-home")],
-      ["RUSTUP_HOME", path.win32.join(realTempDir, "sandbox-rustup-home")],
-      // cargo uses libgit2→libcurl→SChannel for git dependencies; force system git (which
-      // we've already patched with GIT_CONFIG_COUNT to use OpenSSL) instead of libgit2.
+      // Tool-specific env overrides.
+      // No tool cache redirects needed: USERPROFILE/APPDATA/LOCALAPPDATA already point to
+      // the sandbox user's persistent profile. Avoid pointing Gradle/SBT/Ivy at the host
+      // user's full tool homes because those directories can contain credentials or global
+      // init scripts, not just dependency artifacts.
+      // cargo: force system git (with OpenSSL) instead of libgit2's SChannel backend.
+      // The sandbox user cannot access the Windows LSA for SChannel credential initialization.
       ["CARGO_GIT_FETCH_WITH_CLI", "true"],
       // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
       // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
-      ["CURL_SSL_BACKEND", "openssl"],
-      // .NET
-      ["NUGET_PACKAGES", path.win32.join(realTempDir, "sandbox-nuget-packages")],
-      // Ruby
-      ["GEM_HOME", path.win32.join(realTempDir, "sandbox-gem-home")],
-      ["BUNDLE_PATH", path.win32.join(realTempDir, "sandbox-gem-home")],
-      // Python — PYTHONUSERBASE redirects pip's --user install target (fallback when
-      // site-packages is not writable). Without this, pip writes to %APPDATA%\Python
-      // which the sandbox user cannot access.
-      ["PYTHONUSERBASE", path.win32.join(realTempDir, "sandbox-python-user")],
-      ["PIP_CACHE_DIR", path.win32.join(realTempDir, "sandbox-pip-cache")],
-      ["POETRY_CACHE_DIR", path.win32.join(realTempDir, "sandbox-poetry-cache")],
-      ["CONDA_PKGS_DIRS", path.win32.join(realTempDir, "sandbox-conda-pkgs")],
-      // Gradle (JVM but uses its own env var, not JAVA_TOOL_OPTIONS)
-      ["GRADLE_USER_HOME", path.win32.join(realTempDir, "sandbox-gradle-home")],
-      // C/C++
-      ["VCPKG_DEFAULT_BINARY_CACHE", path.win32.join(realTempDir, "sandbox-vcpkg-cache")]
+      ["CURL_SSL_BACKEND", "openssl"]
     ]
 
     // Preserve host user's JAVA_HOME so the sandbox user can locate the JDK.
@@ -247,18 +258,20 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     // Two-layer JVM user.home strategy:
-    //   JAVA_TOOL_OPTIONS → user.home = TEMP-based writable dir (for app logs, caches, etc.)
-    //   MAVEN_OPTS        → user.home = real user home (for reading ~/.m2/settings.xml etc.)
-    // Maven reads MAVEN_OPTS which overrides JAVA_TOOL_OPTIONS, so Maven gets the real home
-    // for config reading. All other JVMs (Spring Boot, Nacos, etc.) get the writable TEMP dir
-    // so they can create log files without permission errors.
-    const javaHome = path.win32.join(realTempDir, "sandbox-java-home")
+    //   JAVA_TOOL_OPTIONS → user.home = sandbox user's profile (writable + persistent)
+    //   MAVEN_OPTS        → user.home = real user home (for reading ~/.m2/settings.xml)
+    // Maven reads MAVEN_OPTS which overrides JAVA_TOOL_OPTIONS, so Maven gets the real
+    // home for config reading (settings.xml, toolchains.xml). All other JVMs (Spring Boot,
+    // Nacos, etc.) use the sandbox user's profile for logs, caches, etc.
+    //
+    // maven.repo.local points to the HOST user's real ~/.m2/repository when it was added
+    // to Codex writable_roots; otherwise it falls back to TEMP.
     // Force UTF-8 encoding for all JVM output to match our chcp 65001 / [Console]::OutputEncoding=UTF8 preamble.
     // Without this, Java defaults to system encoding (GBK on Chinese Windows) → garbled output in PowerShell.
     const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
-    const javaToolFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${javaHome}`
+    const javaToolFlags = `${javaUtf8Flags} -Duser.home=${profileRoot}`
     const mavenFlags = `${javaUtf8Flags} -Dmaven.repo.local=${mavenRepoLocal} -Duser.home=${realUserHome}`
-    // sbt/ivy: redirect global base and ivy cache to TEMP so sbt doesn't write to ~/.sbt / ~/.ivy2
+    // sbt/ivy: keep writable state out of the host user's real ~/.sbt / ~/.ivy2.
     const sbtBase = path.win32.join(realTempDir, "sandbox-sbt")
     const ivyHome = path.win32.join(realTempDir, "sandbox-ivy2")
     const sbtFlags = `-Dsbt.global.base=${sbtBase} -Divy.home=${ivyHome}`
@@ -293,8 +306,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   /**
    * Build JVM + Python environment preamble for unelevated sandbox mode.
    * Unelevated mode runs as the same user but with a restricted token that only allows
-   * writing to the workspace dir and TEMP. ~/.m2/repository and site-packages are NOT
-   * writable, so we redirect maven.repo.local and pip target to TEMP-based directories.
+   * writing to the workspace dir and TEMP. ~/.m2/repository is readable (same user) but
+   * NOT writable, so maven.repo.local must still be redirected to TEMP for new dependency
+   * downloads. (Elevated mode avoids this by granting ACL write to the real ~/.m2/repository.)
    * No user.home redirect needed — same user, can read ~/.m2/settings.xml etc.
    */
   private static buildUnelevatedEnvPreamble(shellBase: string, tempDir: string): string {
@@ -2122,6 +2136,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       }
     }
 
+    // Elevated mode: expose the host Maven artifact repo through Codex's own
+    // workspace-write roots so the setup refresh grants both sandbox group and
+    // capability SID. Do not hand-edit ACLs here; Codex owns that mechanism.
+    const elevatedHostMavenRepoLocal = isElevatedSandbox
+      ? LocalSandbox.prepareElevatedHostMavenRepo(this._realUserHome)
+      : undefined
+    const elevatedWritableRootsOverride = isElevatedSandbox && elevatedHostMavenRepoLocal
+      ? LocalSandbox.buildWritableRootsOverride([elevatedHostMavenRepoLocal])
+      : undefined
+
     // Git Bash (MSYS2) crashes under restricted tokens — always use PowerShell/cmd
     console.log(`[LocalSandbox] elevated: pre-setup done at +${Date.now() - methodStartMs}ms, resolving shell...`)
     const { shell, flags: shellFlags } = LocalSandbox.resolveWindowsSandboxShell()
@@ -2164,7 +2188,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       : ""
     const unelevatedPreamble = [clearProxyPreamble, unelevatedJvmPreamble].filter(Boolean).join(shellBase === "cmd" ? " & " : "; ")
     const sandboxUserEnvPreamble = isElevatedSandbox
-      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir, this._realUserHome)
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._elevatedMavenTempDir, this._realUserHome, elevatedHostMavenRepoLocal)
       : unelevatedPreamble
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"
@@ -2185,6 +2209,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       sandboxArgs = [
         "-c", 'windows.sandbox="elevated"',
         "-c", "sandbox_workspace_write.network_access=true",
+        ...(elevatedWritableRootsOverride ? ["-c", elevatedWritableRootsOverride] : []),
         "sandbox", "windows",
         "--full-auto",
         "--",
