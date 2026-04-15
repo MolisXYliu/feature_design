@@ -98,6 +98,7 @@ import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "
 import { runStartupSelfCheck } from "./updater/rollback"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
 import { getLocalIP } from "./net-utils"
+import { trackEvent } from "./services/event-reporter"
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
@@ -323,6 +324,18 @@ if (!gotTheLock) {
     registerRoutingHandlers(ipcMain)
     registerDashboardHandlers(ipcMain)
     registerUpdaterHandlers()
+
+    // Track event handler for client-side telemetry
+    ipcMain.handle("track-event", async (_event, payload: any) => {
+      try {
+        const { eventName, eventCategory, properties } = payload
+        trackEvent(eventName, eventCategory, properties)
+        return { success: true }
+      } catch (error) {
+        console.error("[IPC] Failed to track event:", error)
+        return { success: false }
+      }
+    })
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {

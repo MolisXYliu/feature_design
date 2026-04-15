@@ -130,6 +130,7 @@ function normalizeGitRelativePath(input: string): string {
     .replace(/\\/g, "/")
     .replace(/^\.\/+/, "")
     .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
 }
 
 function toPosixRelative(input: string): string {
@@ -155,10 +156,11 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
   const trimmed = normalizeTrackedPath(rawPath)
   if (!trimmed) return []
   const worktreeAbs = path.resolve(worktreePath)
+  let relDirect = ""
 
   // Direct relative candidate (only for non-absolute paths)
   if (!isAbsoluteLikePath(trimmed)) {
-    const relDirect = toPosixRelative(trimmed)
+    relDirect = toPosixRelative(trimmed)
     if (relDirect) result.add(relDirect)
 
     // Recovery for previously stored broken absolute paths (e.g. "Users/xxx" without leading "/").
@@ -194,6 +196,12 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
       ) {
         const mapped = rawAsGitRelative.slice(workspaceFromGitRoot.length).replace(/^\/+/, "")
         if (mapped) result.add(mapped)
+        // When workspace is a subdirectory of git root, git status paths are often
+        // repo-root-relative (e.g. "A/file.ts"). In that case prefer mapped
+        // workspace-relative path ("file.ts") and drop misleading direct candidate.
+        if (relDirect && relDirect === rawAsGitRelative) {
+          result.delete(relDirect)
+        }
       }
     }
   }
@@ -201,20 +209,182 @@ function toWorktreeRelativePath(worktreePath: string, rawPath: string): string[]
   return Array.from(result).filter(Boolean)
 }
 
+function isRenameOrCopyStatus(status: string): boolean {
+  const x = status[0]
+  const y = status[1]
+  return x === "R" || x === "C" || y === "R" || y === "C"
+}
+
+function decodeGitQuotedPath(rawPath: string): string {
+  const quoted = rawPath.startsWith("\"") && rawPath.endsWith("\"")
+  if (!quoted) return rawPath
+  const source = quoted ? rawPath.slice(1, -1) : rawPath
+  const bytes: number[] = []
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    if (ch !== "\\") {
+      const chunk = Buffer.from(ch, "utf8")
+      for (const byte of chunk) bytes.push(byte)
+      continue
+    }
+
+    if (i + 1 >= source.length) {
+      bytes.push("\\".charCodeAt(0))
+      break
+    }
+
+    const next = source[++i]
+    if (next === "\\" || next === "\"") {
+      bytes.push(next.charCodeAt(0))
+      continue
+    }
+
+    if (next >= "0" && next <= "7") {
+      let octal = next
+      while (
+        i + 1 < source.length &&
+        octal.length < 3 &&
+        source[i + 1] >= "0" &&
+        source[i + 1] <= "7"
+      ) {
+        octal += source[++i]
+      }
+      bytes.push(Number.parseInt(octal, 8))
+      continue
+    }
+
+    let escaped = ""
+    switch (next) {
+      case "n":
+        escaped = "\n"
+        break
+      case "r":
+        escaped = "\r"
+        break
+      case "t":
+        escaped = "\t"
+        break
+      case "b":
+        escaped = "\b"
+        break
+      case "f":
+        escaped = "\f"
+        break
+      case "v":
+        escaped = "\v"
+        break
+      default:
+        escaped = next
+        break
+    }
+
+    const chunk = Buffer.from(escaped, "utf8")
+    for (const byte of chunk) bytes.push(byte)
+  }
+
+  return Buffer.from(bytes).toString("utf8")
+}
+
 function parsePorcelainPaths(output: string): string[] {
+  // Prefer NUL-delimited porcelain (`git status --porcelain -z`) to avoid
+  // C-style quoted paths (e.g. "\\345\\220...") being misparsed as "345/220/...".
+  if (output.includes("\0")) {
+    const entries = output.split("\0").filter(Boolean)
+    const files: string[] = []
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      if (entry.length < 4) continue
+      const status = entry.slice(0, 2)
+      const rawPath = entry.slice(3)
+      if (!rawPath) continue
+      files.push(normalizeGitRelativePath(rawPath))
+
+      // In -z mode, rename/copy records are followed by an extra path token
+      // (the source/original path). We only track the destination/current path.
+      if (isRenameOrCopyStatus(status) && i + 1 < entries.length) {
+        i += 1
+      }
+    }
+    return files
+  }
+
+  // Fallback for newline-delimited porcelain output.
   const lines = output.split("\n").map((line) => line.trimEnd()).filter(Boolean)
   const files: string[] = []
   for (const line of lines) {
     if (line.length < 4) continue
+    const status = line.slice(0, 2)
     let rawPath = line.slice(3).trim()
     if (!rawPath) continue
-    if (rawPath.includes(" -> ")) {
+    if (isRenameOrCopyStatus(status) && rawPath.includes(" -> ")) {
       rawPath = rawPath.split(" -> ").pop() || rawPath
     }
-    rawPath = rawPath.replace(/^"(.*)"$/, "$1").replace(/\\"/g, "\"")
+    rawPath = decodeGitQuotedPath(rawPath)
     files.push(normalizeGitRelativePath(rawPath))
   }
   return files
+}
+
+async function runStatusPorcelain(
+  worktreePath: string,
+  pathspecs: string[],
+  options?: { silent?: boolean }
+): Promise<string> {
+  const silent = Boolean(options?.silent)
+
+  try {
+    return await runGit(
+      worktreePath,
+      [
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "-z",
+        "--",
+        ...pathspecs
+      ],
+      { silent }
+    )
+  } catch {
+    // Older Git may not support `-z` with this porcelain invocation.
+    // Fallback keeps compatibility, and parsePorcelainPaths handles quoted paths.
+    return runGit(
+      worktreePath,
+      [
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--",
+        ...pathspecs
+      ],
+      { silent }
+    )
+  }
+}
+
+function parseNumstatTotals(output: string): { additions: number; deletions: number } {
+  let additions = 0
+  let deletions = 0
+  const lines = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const parts = line.split("\t")
+    if (parts.length < 2) continue
+    const added = Number.parseInt(parts[0], 10)
+    const deleted = Number.parseInt(parts[1], 10)
+    if (Number.isFinite(added)) additions += added
+    if (Number.isFinite(deleted)) deletions += deleted
+  }
+
+  return { additions, deletions }
 }
 
 function getExecErrorText(error: unknown): string {
@@ -309,6 +479,30 @@ function parseRemoteHead(lsRemoteOutput: string, branch: string): string | null 
   return null
 }
 
+async function resolvePushBaseRef(
+  worktreePath: string,
+  branch: string,
+  options?: { silent?: boolean }
+): Promise<string | null> {
+  const silent = Boolean(options?.silent)
+
+  const candidates = [
+    "@{upstream}",
+    `refs/remotes/origin/${branch}`
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      await runGit(worktreePath, ["rev-parse", "--verify", candidate], { silent })
+      return candidate
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return null
+}
+
 async function hasPushableCommits(
   worktreePath: string,
   branch: string,
@@ -316,21 +510,87 @@ async function hasPushableCommits(
   options?: { silent?: boolean }
 ): Promise<boolean> {
   const silent = Boolean(options?.silent)
-  const remoteRef = `refs/remotes/origin/${branch}`
-  try {
-    await runGit(worktreePath, ["rev-parse", "--verify", remoteRef], { silent })
-    const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${remoteRef}..HEAD`], { silent })).trim()
-    const ahead = Number.parseInt(aheadRaw, 10)
-    return Number.isFinite(ahead) && ahead > 0
-  } catch {
-    if (!baseCommit) return false
+  const pushBaseRef = await resolvePushBaseRef(worktreePath, branch, { silent })
+
+  if (pushBaseRef) {
+    try {
+      const aheadRaw = (await runGit(worktreePath, ["rev-list", "--count", `${pushBaseRef}..HEAD`], { silent })).trim()
+      const ahead = Number.parseInt(aheadRaw, 10)
+      return Number.isFinite(ahead) && ahead > 0
+    } catch {
+      // fall through to baseCommit fallback
+    }
+  }
+
+  if (baseCommit) {
     try {
       const sinceBaseRaw = (await runGit(worktreePath, ["rev-list", "--count", `${baseCommit}..HEAD`], { silent })).trim()
       const sinceBase = Number.parseInt(sinceBaseRaw, 10)
       return Number.isFinite(sinceBase) && sinceBase > 0
     } catch {
-      return false
+      // fall through
     }
+  }
+
+  // No upstream and no known base: best effort so UI can still offer push flow.
+  try {
+    const headExists = (await runGit(worktreePath, ["rev-parse", "--verify", "HEAD"], { silent })).trim()
+    return Boolean(headExists)
+  } catch {
+    return false
+  }
+}
+
+function parseCommitLog(raw: string): Array<{ hash: string; message: string; date: string }> {
+  if (!raw) return []
+  return raw
+    .split("\n")
+    .map((line) => {
+      const [hash, message, date] = line.split("\x1f")
+      return { hash: hash?.trim() ?? "", message: message?.trim() ?? "", date: date?.trim() ?? "" }
+    })
+    .filter((c) => c.hash)
+}
+
+async function getPendingCommits(
+  worktreePath: string,
+  branch: string,
+  baseCommit: string | null,
+  options?: { silent?: boolean }
+): Promise<Array<{ hash: string; message: string; date: string }>> {
+  const silent = Boolean(options?.silent)
+  const logFormat = "%H\x1f%s\x1f%ci"
+  const pushBaseRef = await resolvePushBaseRef(worktreePath, branch, { silent })
+
+  if (pushBaseRef) {
+    try {
+      const raw = (await runGit(worktreePath, ["log", `${pushBaseRef}..HEAD`, `--format=${logFormat}`], { silent })).trim()
+      // Upstream exists: this range is authoritative (may legitimately be empty).
+      return parseCommitLog(raw)
+    } catch {
+      // fall through
+    }
+  }
+
+  if (baseCommit) {
+    try {
+      const raw = (await runGit(worktreePath, ["log", `${baseCommit}..HEAD`, `--format=${logFormat}`], { silent })).trim()
+      const commits = parseCommitLog(raw)
+      if (commits.length > 0) {
+        return commits
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // No upstream/base information: show latest local commit as best-effort hint,
+  // so "Git 提交"弹窗在 commit 后也能展示 message。
+  try {
+    const raw = (await runGit(worktreePath, ["log", "-1", `--format=${logFormat}`], { silent })).trim()
+    return parseCommitLog(raw)
+  } catch {
+    return []
   }
 }
 
@@ -526,6 +786,7 @@ async function buildGitPanelState(
     }
   }
   const normalizedTrackedFiles = Array.from(trackedSet)
+  const filterByTracked = normalizedTrackedFiles.length > 0 && !includeAllWhenNoTracked
 
   const parseChangedFromStatus = (statusOutput: string): string[] => {
     const parsed = parsePorcelainPaths(statusOutput)
@@ -533,7 +794,7 @@ async function buildGitPanelState(
     for (const raw of parsed) {
       const candidates = toWorktreeRelativePath(worktreePath, raw)
       if (candidates.length === 0) continue
-      if (normalizedTrackedFiles.length > 0) {
+      if (filterByTracked) {
         const matched = candidates.find((c) => trackedSet.has(c))
         if (matched) changedSet.add(matched)
         continue
@@ -548,18 +809,9 @@ async function buildGitPanelState(
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
-  const statusArgs = normalizedTrackedFiles.length > 0
-    ? ["status", "--porcelain", "--", ...normalizedTrackedFiles]
-    : ["status", "--porcelain", "--", "."]
-  const statusOut = await runGit(worktreePath, statusArgs, { silent })
-  let changedFiles = parseChangedFromStatus(statusOut)
-
-  // If tracked files exist but none matches current workspace changes,
-  // fallback to workspace-wide scan to avoid stale-tracked false negatives.
-  if (changedFiles.length === 0 && includeAllWhenNoTracked && normalizedTrackedFiles.length > 0) {
-    const fallbackStatusOut = await runGit(worktreePath, ["status", "--porcelain", "--", "."], { silent })
-    changedFiles = parseChangedFromStatus(fallbackStatusOut)
-  }
+  const statusPathspecs = filterByTracked ? normalizedTrackedFiles : ["."]
+  const statusOut = await runStatusPorcelain(worktreePath, statusPathspecs, { silent })
+  const changedFiles = parseChangedFromStatus(statusOut)
 
   if (changedFiles.length === 0) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
@@ -570,42 +822,78 @@ async function buildGitPanelState(
   let deletionsTotal = 0
 
   for (const relPath of changedFiles) {
+    const targetPath = normalizeGitRelativePath(relPath)
+    if (!targetPath) {
+      continue
+    }
+
+    // Guard against directory-only entries (e.g. untracked directory placeholders).
+    // Git panel should show file-level diffs only.
+    try {
+      const stat = await fs.stat(path.join(worktreePath, targetPath))
+      if (stat.isDirectory()) {
+        continue
+      }
+    } catch {
+      // Ignore stat errors (deleted paths are valid diff targets).
+    }
+
     let diffText = ""
     let additions = 0
     let deletions = 0
+    let hasDiffStats = false
 
+    // Compare against HEAD so staged-only changes also produce patch/stats.
+    let numstatOut = ""
     try {
-      diffText = await runGit(worktreePath, ["diff", "--", relPath], { silent })
+      diffText = await runGit(worktreePath, ["diff", "HEAD", "--", targetPath], { silent })
+      numstatOut = await runGit(worktreePath, ["diff", "--numstat", "HEAD", "--", targetPath], { silent })
     } catch {
-      diffText = ""
+      // Fallback for repos where HEAD is not available (e.g. unborn branch).
+      const cachedDiff = await runGit(worktreePath, ["diff", "--cached", "--", targetPath], { silent }).catch(() => "")
+      const worktreeDiff = await runGit(worktreePath, ["diff", "--", targetPath], { silent }).catch(() => "")
+      diffText = [cachedDiff, worktreeDiff].filter(Boolean).join("\n")
+
+      const cachedNumstat = await runGit(worktreePath, ["diff", "--numstat", "--cached", "--", targetPath], { silent }).catch(() => "")
+      const worktreeNumstat = await runGit(worktreePath, ["diff", "--numstat", "--", targetPath], { silent }).catch(() => "")
+      const cachedTotals = parseNumstatTotals(cachedNumstat)
+      const worktreeTotals = parseNumstatTotals(worktreeNumstat)
+      additions = cachedTotals.additions + worktreeTotals.additions
+      deletions = cachedTotals.deletions + worktreeTotals.deletions
+      hasDiffStats = additions > 0 || deletions > 0
     }
 
-    const numstatOut = await runGit(worktreePath, ["diff", "--numstat", "--", relPath], { silent }).catch(() => "")
     if (numstatOut.trim()) {
-      const first = numstatOut.trim().split("\n")[0].split("\t")
-      const a = Number(first[0])
-      const d = Number(first[1])
-      additions = Number.isFinite(a) ? a : 0
-      deletions = Number.isFinite(d) ? d : 0
-    } else {
+      const totals = parseNumstatTotals(numstatOut)
+      additions = totals.additions
+      deletions = totals.deletions
+      hasDiffStats = additions > 0 || deletions > 0
+    }
+
+    if (!hasDiffStats && !diffText.trim()) {
       // New untracked file: synthesize a minimal unified diff and stats.
-      const absPath = path.join(worktreePath, relPath)
+      const absPath = path.join(worktreePath, targetPath)
       try {
         const content = await fs.readFile(absPath, "utf-8")
         const lines = content.split("\n")
         additions = lines.length
         deletions = 0
         const body = lines.map((line) => `+${line}`).join("\n")
-        diffText = `diff --git a/${relPath} b/${relPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${relPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
+        diffText = `diff --git a/${targetPath} b/${targetPath}\nnew file mode 100644\n--- /dev/null\n+++ b/${targetPath}\n@@ -0,0 +1,${lines.length} @@\n${body}`
       } catch {
         // Keep empty if file disappeared between scans.
       }
     }
 
+    const hasRenderableDiff = diffText.trim().length > 0 || additions > 0 || deletions > 0
+    if (!hasRenderableDiff) {
+      continue
+    }
+
     additionsTotal += additions
     deletionsTotal += deletions
     fileDiffs.push({
-      path: relPath,
+      path: targetPath,
       diff: diffText,
       additions,
       deletions
@@ -1333,6 +1621,9 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       const hasPushableCommit = worktreeBranch
         ? await hasPushableCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit, { silent: true })
         : false
+      const pendingCommits = worktreeBranch
+        ? await getPendingCommits(context.workspacePath, worktreeBranch, context.worktreeBaseCommit, { silent: true })
+        : []
       return {
         success: true,
         isWorktree: context.isWorktree,
@@ -1342,6 +1633,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         totals: state.totals,
         hasPendingDiff: state.files.length > 0,
         hasPushableCommit,
+        pendingCommits,
         trackedFiles: tracked,
         worktreeBranch,
         suggestedCommitMessage:
@@ -1535,7 +1827,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             try {
               await runGit(worktreePath, ["rebase", "--abort"])
             } catch {
-              // ignore abort failure; keep original pull error details
+              // ignore
             }
             const detail = getExecErrorText(pullError)
             if (isRebaseConflictError(pullError)) {
@@ -1673,6 +1965,44 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       }
     }
   )
+
+  ipcMain.handle("workspace:pullWorktree", async (_event, { threadId }: { threadId: string }) => {
+    try {
+      logGitStep(threadId, "pull", "开始拉取远端代码")
+      const context = await resolveThreadWorkspaceContext(threadId)
+      const worktreePath = context.workspacePath
+      if (!worktreePath || !context.isGitRepo) {
+        logGitStep(threadId, "pull", "失败：当前任务不在 Git 仓库中")
+        return { success: false, error: "当前任务不在 Git 仓库中" }
+      }
+      const branch =
+        context.worktreeBranch || (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).trim()
+      logGitStep(threadId, "pull", `执行 pull --rebase origin ${branch}`)
+      try {
+        await runGit(worktreePath, ["pull", "--rebase", "origin", branch])
+      } catch (pullError) {
+        if (isMissingRemoteBranchError(pullError)) {
+          logGitStep(threadId, "pull", `远端不存在分支 ${branch}，跳过`)
+          return { success: true, detail: `远端不存在分支 ${branch}，无需拉取` }
+        }
+        try {
+          await runGit(worktreePath, ["rebase", "--abort"])
+        } catch {
+          // ignore
+        }
+        const detail = getExecErrorText(pullError)
+        logGitStep(threadId, "pull", `失败：${detail}`)
+        return { success: false, error: detail || "拉取失败" }
+      }
+      notifyWorkspaceFilesChanged(threadId, worktreePath)
+      logGitStep(threadId, "pull", "拉取成功")
+      return { success: true }
+    } catch (e) {
+      const detail = getExecErrorText(e)
+      logGitStep(threadId, "pull", `异常：${detail || (e instanceof Error ? e.message : "拉取失败")}`)
+      return { success: false, error: detail || (e instanceof Error ? e.message : "拉取失败") }
+    }
+  })
 
   ipcMain.handle("workspace:rejectWorktreeChanges", async (_event, { threadId }: { threadId: string }) => {
     try {
