@@ -21,7 +21,6 @@ import {
   Layers,
   Clock,
   Notebook,
-  Megaphone,
   Zap,
   Sparkles,
   Wrench,
@@ -43,6 +42,7 @@ import { ContextUsageIndicator } from "./ContextUsageIndicator"
 import { GitBranchSwitcher } from "./GitBranchSwitcher"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
+import { UpdateStatusCard } from "./UpdateStatusCard"
 import {
   SkillCreateConfirmDialog,
   type SkillConfirmRequest
@@ -206,11 +206,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
-  const [latestVersion, setLatestVersion] = useState("")
+  const [needUpdateVersion, setNeedUpdateVersion] = useState(false)
   const [modelContextLimit, setModelContextLimit] = useState<number | undefined>(undefined)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
-
-  const [version, setVersion] = useState("")
 
   useEffect(() => {
     const { ipcRenderer } = window.electron
@@ -218,14 +216,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     // 主动请求版本，不依赖推送时序
     ipcRenderer.invoke("get-version").then((ver: unknown) => {
       console.log("版本 (invoke)：", ver)
-      if (ver) setVersion(ver as string)
+      if (ver) {
+        localStorage.setItem("version", ver as string)
+        updateMMJUserInfo()
+      }
     }).catch((e: unknown) => console.warn("get-version failed:", e))
 
     // 保留推送监听作为备用
     const removeListener = ipcRenderer.on("version", (ver: unknown) => {
       console.log("版本 (push)：", ver)
-      setVersion(ver as string)
-
       localStorage.setItem("version", ver as string)
       updateMMJUserInfo()
     })
@@ -578,32 +577,45 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     return () => { ignore = true }
   }, [currentModel])
 
-  const queryLatestVersion = useCallback(async () => {
+  const syncNeedUpdateVersion = useCallback(async () => {
     try {
-      const response = await fetch(
-        import.meta.env.VITE_API_BASE_URL + "/api/trajectories/cmbdevclaw/versions/list",
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json"
-            // Remove placeholder auth token for now
-          }
-        }
-      )
-      const data = await response.json()
-      setLatestVersion(data?.current?.version)
-    } catch (e) {
-      console.log(e)
+      const status = await window.api.update.getStatus()
+      setNeedUpdateVersion(Boolean(status.update) && status.status !== "idle")
+    } catch (error) {
+      console.warn("[ChatContainer] Failed to sync update status:", error)
+      setNeedUpdateVersion(false)
     }
   }, [])
 
-  const needUpdateVersion = useMemo(() => {
-    return latestVersion !== version
-  }, [latestVersion, version])
+  useEffect(() => {
+    const updateApi = window.api.update
+    void syncNeedUpdateVersion()
+
+    const removeAvailable = updateApi.onAvailable(() => {
+      setNeedUpdateVersion(true)
+    })
+    const removeDownloaded = updateApi.onDownloaded(() => {
+      setNeedUpdateVersion(true)
+    })
+    const removeError = updateApi.onError(() => {
+      void syncNeedUpdateVersion()
+    })
+
+    return () => {
+      removeAvailable()
+      removeDownloaded()
+      removeError()
+    }
+  }, [syncNeedUpdateVersion])
+
+  useEffect(() => {
+    if (!updateDialogOpen) {
+      void syncNeedUpdateVersion()
+    }
+  }, [updateDialogOpen, syncNeedUpdateVersion])
 
   useEffect(() => {
     queryRemoteSkills()
-    queryLatestVersion()
     const fetchYoloMode = (): void => {
       window.api.sandbox
         .getYoloMode()
@@ -1896,53 +1908,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                           </div>
                         </button>
 
-                        {/*版本check*/}
-                        <button
+                        <UpdateStatusCard
+                          hasUpdate={needUpdateVersion}
                           onClick={() => {
                             setUpdateDialogOpen(true)
                           }}
-                          type="button"
-                          className={`group relative w-full rounded-xl ${
-                            needUpdateVersion
-                              ? 'border-red-400/60 bg-gradient-to-br from-red-50/90 to-red-100/70 hover:border-red-500 hover:from-red-100 hover:to-red-150/80 shadow-red-100/50'
-                              : 'group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors '
-                          } px-4 py-3.5 text-left transition-all duration-300 ease-out hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] backdrop-blur-sm`}
-                        >
-                          <div className="flex items-center gap-3.5">
-                            <div
-                              className={`${
-                                needUpdateVersion
-                                  ? 'bg-red-100 text-red-600 border-red-200 group-hover:bg-red-200 group-hover:text-red-700 group-hover:shadow-red-200/50'
-                                  : 'rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors'
-                              } rounded-lg border p-1 transition-all duration-300 shadow-sm group-hover:shadow-md`}>
-                              <Megaphone size={14} className="drop-shadow-sm" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className={`text-sm font-semibold leading-5 ${
-                                needUpdateVersion ? 'text-red-700' : ''
-                              } transition-colors duration-200`}>
-                                {needUpdateVersion? '发现新版本！' : '版本列表'}
-                              </div>
-                            </div>
-                            {needUpdateVersion && (
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-sm"></div>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 悬浮时的渐变覆盖层 */}
-                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none ${
-                            needUpdateVersion
-                              ? 'bg-gradient-to-br from-red-400/8 via-transparent to-red-500/6'
-                              : 'bg-gradient-to-br from-blue-400/8 via-transparent to-indigo-500/6'
-                          }`}></div>
-
-                          {/* 边框光效 */}
-                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-30 transition-opacity duration-300 pointer-events-none border ${
-                            needUpdateVersion ? 'border-red-300' : 'border-blue-300'
-                          } blur-sm`}></div>
-                        </button>
+                        />
 
 
                       </div>
