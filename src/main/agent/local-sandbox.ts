@@ -251,28 +251,44 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       yarnGlobal: path.win32.join(cacheRoot, "yarn-global"),
       pnpmHome: path.win32.join(cacheRoot, "pnpm-home"),
       pnpmStore: path.win32.join(cacheRoot, "pnpm-store"),
+      corepackHome: path.win32.join(cacheRoot, "corepack-home"),
+      nodeGypCache: path.win32.join(cacheRoot, "node-gyp-cache"),
+      playwrightBrowsers: path.win32.join(cacheRoot, "playwright-browsers"),
+      puppeteerCache: path.win32.join(cacheRoot, "puppeteer-cache"),
+      cypressCache: path.win32.join(cacheRoot, "cypress-cache"),
+      electronCache: path.win32.join(cacheRoot, "electron-cache"),
+      electronBuilderCache: path.win32.join(cacheRoot, "electron-builder-cache"),
       goPath: path.win32.join(cacheRoot, "go"),
       goModCache: path.win32.join(cacheRoot, "go", "pkg", "mod"),
       goBin: path.win32.join(cacheRoot, "go", "bin"),
+      goBuildCache: path.win32.join(cacheRoot, "go-build-cache"),
       cargoHome: path.win32.join(cacheRoot, "cargo-home"),
       rustupHome: path.win32.join(cacheRoot, "rustup-home"),
       nugetPackages: path.win32.join(cacheRoot, "nuget-packages"),
+      nugetHttpCache: path.win32.join(cacheRoot, "nuget-http-cache"),
+      nugetScratch: path.win32.join(cacheRoot, "nuget-scratch"),
       dotnetHome: path.win32.join(cacheRoot, "dotnet-home"),
       gemHome: path.win32.join(cacheRoot, "gem-home"),
+      bundleHome: path.win32.join(cacheRoot, "bundle-home"),
       pythonUserBase,
       pythonSiteCustomize,
       pythonScriptDirs,
       pipCache: path.win32.join(cacheRoot, "pip-cache"),
+      uvCache: path.win32.join(cacheRoot, "uv-cache"),
       pipxHome: path.win32.join(cacheRoot, "pipx-home"),
       pipxBin: path.win32.join(cacheRoot, "pipx-bin"),
       poetryCache: path.win32.join(cacheRoot, "poetry-cache"),
+      poetryConfig: path.win32.join(cacheRoot, "poetry-config"),
+      poetryData: path.win32.join(cacheRoot, "poetry-data"),
       condaPkgs: path.win32.join(cacheRoot, "conda-pkgs"),
       gradleHome: path.win32.join(cacheRoot, "gradle-home"),
       mavenRepo: path.win32.join(cacheRoot, "m2-repository"),
       sbtBase: path.win32.join(cacheRoot, "sbt"),
       ivyHome: path.win32.join(cacheRoot, "ivy2"),
+      coursierCache: path.win32.join(cacheRoot, "coursier-cache"),
       vcpkgCache: path.win32.join(cacheRoot, "vcpkg-cache"),
-      tempDir: path.win32.join(cacheRoot, "tmp")
+      tempDir: path.win32.join(cacheRoot, "tmp"),
+      xdgCache: path.win32.join(cacheRoot, "xdg-cache")
     }
   }
 
@@ -286,28 +302,45 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ["YARN_GLOBAL_FOLDER", dirs.yarnGlobal],
         ["PNPM_HOME", dirs.pnpmHome],
         ["PNPM_STORE_DIR", dirs.pnpmStore],
+        ["COREPACK_HOME", dirs.corepackHome],
+        ["NPM_CONFIG_DEVDIR", dirs.nodeGypCache],
+        ["PLAYWRIGHT_BROWSERS_PATH", dirs.playwrightBrowsers],
+        ["PUPPETEER_CACHE_DIR", dirs.puppeteerCache],
+        ["CYPRESS_CACHE_FOLDER", dirs.cypressCache],
+        ["ELECTRON_CACHE", dirs.electronCache],
+        ["ELECTRON_BUILDER_CACHE", dirs.electronBuilderCache],
         ["GOPATH", dirs.goPath],
         ["GOMODCACHE", dirs.goModCache],
         ["GOBIN", dirs.goBin],
+        ["GOCACHE", dirs.goBuildCache],
         ["CARGO_HOME", dirs.cargoHome],
         ["RUSTUP_HOME", dirs.rustupHome],
         ["CARGO_GIT_FETCH_WITH_CLI", "true"],
         ["CURL_SSL_BACKEND", "openssl"],
         ["NUGET_PACKAGES", dirs.nugetPackages],
+        ["NUGET_HTTP_CACHE_PATH", dirs.nugetHttpCache],
+        ["NUGET_SCRATCH", dirs.nugetScratch],
         ["DOTNET_CLI_HOME", dirs.dotnetHome],
         ["GEM_HOME", dirs.gemHome],
         ["BUNDLE_PATH", dirs.gemHome],
+        ["BUNDLE_USER_HOME", dirs.bundleHome],
         ["PYTHONUSERBASE", dirs.pythonUserBase],
         ["CMB_SANDBOX_FIX_PYTHON_TEMP_ACL", "1"],
         ["PIP_CACHE_DIR", dirs.pipCache],
+        ["UV_CACHE_DIR", dirs.uvCache],
         ["PIPX_HOME", dirs.pipxHome],
         ["PIPX_BIN_DIR", dirs.pipxBin],
         ["POETRY_CACHE_DIR", dirs.poetryCache],
+        ["POETRY_CONFIG_DIR", dirs.poetryConfig],
+        ["POETRY_DATA_DIR", dirs.poetryData],
         ["CONDA_PKGS_DIRS", dirs.condaPkgs],
         ["GRADLE_USER_HOME", dirs.gradleHome],
+        ["COURSIER_CACHE", dirs.coursierCache],
         ["VCPKG_DEFAULT_BINARY_CACHE", dirs.vcpkgCache],
         ["TEMP", dirs.tempDir],
-        ["TMP", dirs.tempDir]
+        ["TMP", dirs.tempDir],
+        ["TMPDIR", dirs.tempDir],
+        ["XDG_CACHE_HOME", dirs.xdgCache]
       ],
       pathEntries: [
         dirs.npmPrefix,
@@ -333,28 +366,44 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       dirs.yarnGlobal,
       dirs.pnpmHome,
       dirs.pnpmStore,
+      dirs.corepackHome,
+      dirs.nodeGypCache,
+      dirs.playwrightBrowsers,
+      dirs.puppeteerCache,
+      dirs.cypressCache,
+      dirs.electronCache,
+      dirs.electronBuilderCache,
       dirs.goPath,
       dirs.goModCache,
       dirs.goBin,
+      dirs.goBuildCache,
       dirs.cargoHome,
       dirs.rustupHome,
       dirs.nugetPackages,
+      dirs.nugetHttpCache,
+      dirs.nugetScratch,
       dirs.dotnetHome,
       dirs.gemHome,
+      dirs.bundleHome,
       dirs.pythonUserBase,
       dirs.pythonSiteCustomize,
       ...dirs.pythonScriptDirs,
       dirs.pipCache,
+      dirs.uvCache,
       dirs.pipxHome,
       dirs.pipxBin,
       dirs.poetryCache,
+      dirs.poetryConfig,
+      dirs.poetryData,
       dirs.condaPkgs,
       dirs.gradleHome,
       dirs.mavenRepo,
       dirs.sbtBase,
       dirs.ivyHome,
+      dirs.coursierCache,
       dirs.vcpkgCache,
       dirs.tempDir,
+      dirs.xdgCache,
       ...pathEntries
     ]
     const uniqueDirs = Array.from(new Set(allDirs.map((dir) => path.win32.normalize(dir))))
@@ -580,18 +629,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const cmd = command.trim().toLowerCase()
     return (
       // Python package managers
-      /\bpip(?:3(?:\.\d+)?)?(?:\.exe|\.cmd|\.bat)?\s+install\b/.test(cmd)
-      || /\b(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?\s+-m\s+pip\s+install\b/.test(cmd)
-      || /\buv(?:\.exe|\.cmd|\.bat)?\s+pip\s+install\b/.test(cmd)
-      || /\bpipx(?:\.exe|\.cmd|\.bat)?\s+install\b/.test(cmd)
+      /\bpip(?:3(?:\.\d+)?)?(?:\.exe|\.cmd|\.bat)?\s+(install|download|wheel)\b/.test(cmd)
+      || /\b(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?\s+-m\s+pip\s+(install|download|wheel)\b/.test(cmd)
+      || /\buv(?:\.exe|\.cmd|\.bat)?\s+(pip\s+(install|sync)|sync|add|remove|lock|run|tool\s+install)\b/.test(cmd)
+      || /\bpipx(?:\.exe|\.cmd|\.bat)?\s+(install|run|runpip|upgrade|upgrade-all)\b/.test(cmd)
       || /\bpoetry\s+(install|add|update)\b/.test(cmd)
-      || /\bconda\s+install\b/.test(cmd)
+      || /\bconda\s+(install|create|update)\b/.test(cmd)
       // Node.js
       || /\bnpm\s+install\b/.test(cmd)
       || /\bnpm\s+i\b/.test(cmd)
       || /\bnpm\s+ci\b/.test(cmd)
-      || /\byarn\s+(add|install)\b/.test(cmd)
-      || /\bpnpm\s+(add|install|i)\b/.test(cmd)
+      || /\bnpm\s+update\b/.test(cmd)
+      || /\byarn\s+(add|install|upgrade)\b/.test(cmd)
+      || /\bpnpm\s+(add|install|i|update)\b/.test(cmd)
       || /\bnpx\s/.test(cmd)
       // Rust
       || /\bcargo\s+(install|build|test|run|fetch)\b/.test(cmd)
@@ -599,6 +649,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       // Go — build/test/run auto-download modules when not cached
       || /\bgo\s+(build|test|run|get|install|mod\s+download)\b/.test(cmd)
       // JVM
+      || /\bmvnw?(?:\.cmd|\.bat)?\b/.test(cmd)
       || /\bgradle\b/.test(cmd)
       || /\bgradlew\b/.test(cmd)
       || /\bsbt\b/.test(cmd)
