@@ -4,8 +4,9 @@ import { StreamingMarkdown } from "./StreamingMarkdown"
 import { getToolLabel } from "@/lib/tool-labels"
 import { emitOpenResourcePreview } from "@/lib/resource-preview-events"
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine } from "lucide-react"
+import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine, ThumbsUp, ThumbsDown, Smile, Frown } from "lucide-react"
 import { toast } from "sonner"
+import { MessageFeedbackDialog } from "./MessageFeedbackDialog"
 
 function extractMessagePlainText(content: Message["content"]): string {
   if (typeof content === "string") return content
@@ -103,6 +104,10 @@ export function MessageBubble({
   const [collapsedTools, setCollapsedTools] = useState<Set<string>>(new Set())
   const [collapsedHtmlTools, setCollapsedHtmlTools] = useState<Set<string>>(new Set())
   const [copySuccess, setCopySuccess] = useState(false)
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false)
+  const [likedMessageId, setLikedMessageId] = useState<string | null>(null)
+  const [dislikedMessageId, setDislikedMessageId] = useState<string | null>(null)
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const isUser = message.role === "user"
   const isTool = message.role === "tool"
   const createdAtLabel = formatMessageTime(message.created_at)
@@ -201,10 +206,53 @@ export function MessageBubble({
       await navigator.clipboard.writeText(plainTextForCopy)
       setCopySuccess(true)
       setTimeout(() => setCopySuccess(false), 1800)
-      toast.success("已复制消息内容")
     } catch (error) {
       console.error("[MessageBubble] Failed to copy message:", error)
       toast.error("复制失败，请重试")
+    }
+  }
+
+  const handleOpenFeedbackDialog = (type: "like" | "dislike") => {
+    setFeedbackDialogOpen(true)
+    if (type === "like") {
+      setLikedMessageId(message.id)
+      setDislikedMessageId(null)
+    } else {
+      setLikedMessageId(null)
+      setDislikedMessageId(message.id)
+    }
+  }
+
+  const handleFeedbackSubmit = async (type: "like" | "dislike", feedbackId: string) => {
+    setFeedbackSubmitting(true)
+    try {
+      // Track feedback event
+      if (type === "like") {
+        window.electron?.ipcRenderer?.invoke("track-event", {
+          eventName: "message.feedback.like",
+          eventCategory: "chat",
+          properties: {
+            messageId: message.id,
+            threadId: threadId
+          }
+        }).catch((err) => console.error("Failed to track like event:", err))
+      } else {
+        window.electron?.ipcRenderer?.invoke("track-event", {
+          eventName: "message.feedback.dislike.submit",
+          eventCategory: "chat",
+          properties: {
+            feedbackId: feedbackId,
+            messageId: message.id,
+            threadId: threadId
+          }
+        }).catch((err) => console.error("Failed to track dislike feedback:", err))
+      }
+    } catch (error) {
+      console.error("反馈提交失败", error)
+      toast.error("反馈提交失败，请重试")
+    } finally {
+      setFeedbackSubmitting(false)
+      setFeedbackDialogOpen(false)
     }
   }
 
@@ -221,7 +269,7 @@ export function MessageBubble({
             {content}
           </div>
           <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-            <span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>
+            {/*<span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>*/}
             <button
               type="button"
               onClick={handleCopyMessage}
@@ -229,7 +277,7 @@ export function MessageBubble({
               title="复制消息"
               aria-label="复制消息"
             >
-              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+              {copySuccess ? <Check className="size-3 text-status-nominal" /> : <Copy className="size-3" />}
             </button>
             <button
               type="button"
@@ -238,7 +286,7 @@ export function MessageBubble({
               title="编辑后重新发送"
               aria-label="编辑后重新发送"
             >
-              <PencilLine className="size-3.5" />
+              <PencilLine className="size-3" />
             </button>
           </div>
         </div>
@@ -283,7 +331,7 @@ export function MessageBubble({
         {content && <div className="rounded-lg px-3 overflow-hidden">{content}</div>}
         {content && showAssistantMeta && (
           <div className="flex items-center gap-1 px-3 opacity-0 transition-opacity group-hover:opacity-100">
-            <span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>
+            {/*<span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>*/}
             <button
               type="button"
               onClick={handleCopyMessage}
@@ -291,7 +339,49 @@ export function MessageBubble({
               title="复制消息"
               aria-label="复制消息"
             >
-              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+              {copySuccess ? <Check className="size-3 text-status-nominal" /> : <Copy className="size-3" />}
+            </button>
+            {/* 点赞按钮 */}
+            <button
+              type="button"
+              onClick={() => {
+                setLikedMessageId(message.id)
+                setDislikedMessageId(null)
+                handleFeedbackSubmit("like", "")
+              }}
+              className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
+                likedMessageId === message.id
+                  ? "text-green-500"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+              }`}
+              title="点赞"
+              aria-label="点赞"
+            >
+              {likedMessageId === message.id ? (
+                <Smile className="size-3" />
+              ) : (
+                <ThumbsUp className="size-3" />
+              )}
+            </button>
+            {/* 点踩按钮 */}
+            <button
+              type="button"
+              onClick={() => {
+                handleOpenFeedbackDialog("dislike")
+              }}
+              className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
+                dislikedMessageId === message.id
+                  ? "text-red-500"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+              }`}
+              title="点踩"
+              aria-label="点踩"
+            >
+              {dislikedMessageId === message.id ? (
+                <Frown className="size-3" />
+              ) : (
+                <ThumbsDown className="size-3" />
+              )}
             </button>
           </div>
         )}
@@ -366,7 +456,7 @@ export function MessageBubble({
                           title="在右侧资源预览中打开"
                           aria-label="在右侧资源预览中打开"
                         >
-                          <Eye className="size-3.5" />
+                          <Eye className="size-3" />
                         </button>
                       )}
 
@@ -442,6 +532,15 @@ export function MessageBubble({
           </div>
         )}
       </div>
+      {/* 点赞点踩反馈对话框 */}
+      <MessageFeedbackDialog
+        open={feedbackDialogOpen}
+        onClose={() => setFeedbackDialogOpen(false)}
+        onSubmit={handleFeedbackSubmit}
+        submitting={feedbackSubmitting}
+        messageId={message.id}
+        threadId={threadId}
+      />
     </div>
   )
 }

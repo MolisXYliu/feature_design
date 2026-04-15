@@ -14,6 +14,8 @@ import type {
 } from "../types"
 import { startWatching, stopWatching } from "../services/workspace-watcher"
 import { trackEvent } from "../services/event-reporter"
+import { getTracesDir } from "../agent/trace/collector"
+import type { AgentTrace } from "../agent/trace/types"
 
 const execFileAsync = promisify(execFile)
 
@@ -49,6 +51,64 @@ interface PushStepResult {
   step: "pull" | "commit" | "push" | "verify" | "final"
   status: PushStepStatus
   detail: string
+}
+
+/**
+ * Async collect skill usage statistics for a thread by scanning its trace files.
+ * Uses async fs APIs so it never blocks the Electron main process.
+ */
+async function collectThreadSkillStatsAsync(threadId: string): Promise<string[]> {
+  try {
+    const dir = path.join(getTracesDir(), threadId)
+    let files: string[]
+    try {
+      files = (await fs.readdir(dir)).filter((f) => f.endsWith(".jsonl"))
+    } catch {
+      return [] // dir doesn't exist yet — no traces
+    }
+    // Take the last 10 entries — trace files are appended chronologically,
+    // so the tail of the directory listing represents the most recent traces.
+    if (files.length > 10) files = files.slice(-10)
+    const skillSet = new Set<string>()
+    for (const file of files) {
+      const raw = await fs.readFile(path.join(dir, file), "utf-8")
+      for (const line of raw.trim().split("\n")) {
+        if (!line.trim()) continue
+        try {
+          const trace = JSON.parse(line) as AgentTrace
+          if (Array.isArray(trace.usedSkills)) {
+            for (const skill of trace.usedSkills) skillSet.add(skill)
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    return Array.from(skillSet)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Fire-and-forget: emit a git event enriched with thread skill stats.
+ * Runs fully async — never blocks the caller.
+ */
+function trackGitEventWithSkills(
+  eventName: string,
+  threadId: string,
+  baseProps: Record<string, unknown>
+): void {
+  void collectThreadSkillStatsAsync(threadId)
+    .then((usedSkills) => {
+      trackEvent(eventName, "git", {
+        ...baseProps,
+        threadId,
+        usedSkills,
+        skillCount: usedSkills.length
+      })
+    })
+    .catch((e) => {
+      console.warn(`[event] failed to emit ${eventName}:`, e)
+    })
 }
 
 function notifyWorkspaceFilesChanged(threadId: string, workspacePath: string): void {
@@ -1658,17 +1718,16 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         notifyWorkspaceFilesChanged(threadId, worktreePath)
         logGitStep(threadId, "commit", "提交成功")
 
-        // Operational telemetry: git.commit.created
-        try {
+        // Operational telemetry (fire-and-forget, never blocks return)
+        {
           const insertions = state.files.reduce((acc, f) => acc + (f.additions || 0), 0)
           const deletions  = state.files.reduce((acc, f) => acc + (f.deletions  || 0), 0)
+          // branch fetch is cheap and already cached by git, keep it sync here
           let branch = ""
           try {
             branch = (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"], { silent: true })).trim()
-          } catch {
-            // ignore — branch is best-effort metadata
-          }
-          trackEvent("git.commit.created", "git", {
+          } catch { /* best-effort */ }
+          trackGitEventWithSkills("git.commit.created", threadId, {
             repoPath:     worktreePath,
             branch,
             filesChanged: state.changedFiles.length,
@@ -1676,8 +1735,6 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             deletions,
             triggeredBy:  "manual"
           })
-        } catch (e) {
-          console.warn("[event] failed to emit git.commit.created:", e)
         }
 
         return { success: true }
@@ -1735,20 +1792,18 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             autoCommitHead = (await runGit(worktreePath, ["rev-parse", "HEAD"])).trim()
             steps.push({ step: "commit", status: "ok", detail: `自动提交成功：${commitMessage}` })
 
-            // Operational telemetry: git.commit.created (auto-commit before push)
-            try {
+            // Operational telemetry (fire-and-forget, never blocks push flow)
+            {
               const insertions = pending.files.reduce((acc, f) => acc + (f.additions || 0), 0)
               const deletions  = pending.files.reduce((acc, f) => acc + (f.deletions  || 0), 0)
-              trackEvent("git.commit.created", "git", {
+              trackGitEventWithSkills("git.commit.created", threadId, {
                 repoPath:     worktreePath,
                 branch,
                 filesChanged: pending.changedFiles.length,
                 insertions,
                 deletions,
-                triggeredBy:  "manual"
+                triggeredBy:  "auto-push"
               })
-            } catch (e) {
-              console.warn("[event] failed to emit git.commit.created (auto):", e)
             }
           } catch (commitError) {
             const detail = getExecErrorText(commitError)
@@ -1884,21 +1939,17 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         notifyWorkspaceFilesChanged(threadId, worktreePath)
         logGitStep(threadId, "push", "推送流程成功")
 
-        // Operational telemetry: git.push.executed
-        try {
+        // Operational telemetry (fire-and-forget, never blocks return)
+        {
           let remoteUrl = ""
           try {
             remoteUrl = (await runGit(worktreePath, ["remote", "get-url", "origin"], { silent: true })).trim()
-          } catch {
-            // ignore — remote URL is best-effort metadata
-          }
-          trackEvent("git.push.executed", "git", {
+          } catch { /* best-effort */ }
+          trackGitEventWithSkills("git.push.executed", threadId, {
             repoPath: worktreePath,
             branch,
             remoteUrl
           })
-        } catch (e) {
-          console.warn("[event] failed to emit git.push.executed:", e)
         }
 
         return { success: true, autoCommitted, steps }
