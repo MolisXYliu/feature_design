@@ -235,7 +235,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       mavenRepo: path.win32.join(cacheRoot, "m2-repository"),
       sbtBase: path.win32.join(cacheRoot, "sbt"),
       ivyHome: path.win32.join(cacheRoot, "ivy2"),
-      vcpkgCache: path.win32.join(cacheRoot, "vcpkg-cache")
+      vcpkgCache: path.win32.join(cacheRoot, "vcpkg-cache"),
+      tempDir: path.win32.join(cacheRoot, "tmp")
     }
   }
 
@@ -267,7 +268,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ["POETRY_CACHE_DIR", dirs.poetryCache],
         ["CONDA_PKGS_DIRS", dirs.condaPkgs],
         ["GRADLE_USER_HOME", dirs.gradleHome],
-        ["VCPKG_DEFAULT_BINARY_CACHE", dirs.vcpkgCache]
+        ["VCPKG_DEFAULT_BINARY_CACHE", dirs.vcpkgCache],
+        ["TEMP", dirs.tempDir],
+        ["TMP", dirs.tempDir]
       ],
       pathEntries: [
         dirs.npmPrefix,
@@ -313,6 +316,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       dirs.sbtBase,
       dirs.ivyHome,
       dirs.vcpkgCache,
+      dirs.tempDir,
       ...pathEntries
     ]
     const uniqueDirs = Array.from(new Set(allDirs.map((dir) => path.win32.normalize(dir))))
