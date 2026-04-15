@@ -4,7 +4,7 @@ import { StreamingMarkdown } from "./StreamingMarkdown"
 import { getToolLabel } from "@/lib/tool-labels"
 import { emitOpenResourcePreview } from "@/lib/resource-preview-events"
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine, ThumbsUp, ThumbsDown } from "lucide-react"
+import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine, ThumbsUp, ThumbsDown, Smile, Frown } from "lucide-react"
 import { toast } from "sonner"
 import { MessageFeedbackDialog } from "./MessageFeedbackDialog"
 
@@ -280,7 +280,7 @@ export function MessageBubble({
               title="复制消息"
               aria-label="复制消息"
             >
-              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+              {copySuccess ? <Check className="size-3 text-status-nominal" /> : <Copy className="size-3" />}
             </button>
             <button
               type="button"
@@ -289,7 +289,7 @@ export function MessageBubble({
               title="编辑后重新发送"
               aria-label="编辑后重新发送"
             >
-              <PencilLine className="size-3.5" />
+              <PencilLine className="size-3" />
             </button>
           </div>
         </div>
@@ -342,7 +342,7 @@ export function MessageBubble({
               title="复制消息"
               aria-label="复制消息"
             >
-              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+              {copySuccess ? <Check className="size-3 text-status-nominal" /> : <Copy className="size-3" />}
             </button>
             {/* 点赞按钮 */}
             <button
@@ -355,13 +355,17 @@ export function MessageBubble({
               }}
               className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
                 likedMessageId === message.id
-                  ? "text-green-500 bg-green-500/20"
+                  ? "text-green-500"
                   : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
               }`}
               title="点赞"
               aria-label="点赞"
             >
-              <ThumbsUp className="size-3.5" />
+              {likedMessageId === message.id ? (
+                <Smile className="size-3" />
+              ) : (
+                <ThumbsUp className="size-3" />
+              )}
             </button>
             {/* 点踩按钮 */}
             <button
@@ -371,13 +375,17 @@ export function MessageBubble({
               }}
               className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
                 dislikedMessageId === message.id
-                  ? "text-red-500 bg-red-500/20"
+                  ? "text-red-500"
                   : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
               }`}
               title="点踩"
               aria-label="点踩"
             >
-              <ThumbsDown className="size-3.5" />
+              {dislikedMessageId === message.id ? (
+                <Frown className="size-3" />
+              ) : (
+                <ThumbsDown className="size-3" />
+              )}
             </button>
           </div>
         )}
@@ -452,7 +460,7 @@ export function MessageBubble({
                           title="在右侧资源预览中打开"
                           aria-label="在右侧资源预览中打开"
                         >
-                          <Eye className="size-3.5" />
+                          <Eye className="size-3" />
                         </button>
                       )}
 
