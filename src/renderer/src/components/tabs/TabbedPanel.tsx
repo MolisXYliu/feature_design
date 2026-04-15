@@ -1,8 +1,10 @@
+import { lazy, Suspense } from "react"
 import { useCurrentThread } from "@/lib/thread-context"
 import { TabBar } from "./TabBar"
-import { FileViewer } from "./FileViewer"
 import { ChatContainer } from "@/components/chat/ChatContainer"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, Loader2 } from "lucide-react"
+
+const FileViewer = lazy(() => import("./FileViewer").then((m) => ({ default: m.FileViewer })))
 
 interface TabbedPanelProps {
   threadId: string
@@ -41,7 +43,16 @@ export function TabbedPanel({ threadId, showTabBar = true }: TabbedPanelProps): 
               </button>
             </div>
             {/* Use key to force remount when file changes, ensuring fresh state */}
-            <FileViewer key={activeFile.path} filePath={activeFile.path} threadId={threadId} />
+            <Suspense
+              fallback={
+                <div className="flex flex-1 items-center justify-center text-muted-foreground">
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                  <span className="text-sm">加载文件中...</span>
+                </div>
+              }
+            >
+              <FileViewer key={activeFile.path} filePath={activeFile.path} threadId={threadId} />
+            </Suspense>
           </div>
         ) : (
           // Fallback - shouldn't happen but just in case

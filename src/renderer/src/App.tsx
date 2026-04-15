@@ -1,14 +1,38 @@
-import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react"
-import { Briefcase, Eye, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react"
+import { useEffect, useState, useCallback, useRef, useLayoutEffect, lazy, Suspense } from "react"
+import {
+  Briefcase,
+  Eye,
+  GitBranch,
+  Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen
+} from "lucide-react"
 import { ThreadSidebar } from "@/components/sidebar/ThreadSidebar"
 import { TabbedPanel } from "@/components/tabs"
 import { RightPanel } from "@/components/panels/RightPanel"
 import { KanbanView } from "@/components/kanban"
+import { ClaudeCodePanel } from "@/components/customize/ClaudeCodePanel"
 import { CustomizeView } from "@/components/customize/CustomizeView"
+const DashboardView = lazy(() =>
+  import("@/components/dashboard/DashboardView").then((m) => ({ default: m.DashboardView }))
+)
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
 import { initMMJ } from "../js/mmjUtils"
+import { Toaster } from "sonner"
+interface UserInfoConfig {
+  sapId: '',//8
+  ystId: '',//6
+  userName: '',
+  originOrgId: '',
+  orgName: '',
+  ystRefreshToken: '',
+  ystCode: '',
+  ystAccessToken: '',
+}
 
 async function migrateDisabledSkillsFromLocalStorage(): Promise<void> {
   try {
@@ -31,12 +55,13 @@ const LEFT_DEFAULT = 280
 const RIGHT_MIN = 250
 const RIGHT_MAX = 1600
 const RIGHT_DEFAULT = 300
-const RIGHT_PREVIEW_EXPAND_VW = 0.4
+const RIGHT_PREVIEW_EXPAND_VW = 0.35
 
 function App(): React.JSX.Element {
   const {
     currentThreadId,
     loadThreads,
+    loadDashboardAllowed,
     createThread,
     mainView,
     sidebarCollapsed,
@@ -48,13 +73,63 @@ function App(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true)
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT)
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
-  const [rightModule, setRightModule] = useState<"work" | "preview">("work")
+  const [rightModule, setRightModule] = useState<"work" | "preview" | "git">("work")
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
+  const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
+  const [bus, setBus] = useState(true)
+  const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
+  const moduleActiveClass = "text-status-warning bg-status-warning/15 border-status-warning/45 hover:bg-status-warning/20"
+  const moduleInactiveClass = "text-foreground hover:bg-muted/45"
   const sidebarToggleText = sidebarCollapsed ? "显示侧边栏" : "隐藏侧边栏"
   const rightPanelToggleText = rightPanelCollapsed ? "显示右侧面板" : "隐藏右侧面板"
+
+  const initUser = () => {
+    window.api.models.getUserInfo().then(user => {
+        const userInfo = user || {} as UserInfoConfig
+        if (userInfo.sapId) {
+          fetch(`https://archguardservice.paas.${import.meta.env.VITE_LOGIN_PT}.cn/cowork/login-info`, {
+              method: 'GET',
+              headers: {
+                  ystCode: userInfo.ystCode,
+                  ystRefreshToken: userInfo.ystRefreshToken || '',
+              }
+          }).then(async res => {
+              const result = await res.json()
+              if (result.returnCode === 'SUC0000') {
+                const resBody = result.body
+                const pathName = resBody.pathName||''
+                if(pathName.includes('零售客户经营开发团队')){
+                  setBus(true)
+                }else{
+                  if(['00010719','01008194','01080687','00011026'].includes(resBody.sapId)){
+                    setBus(true)
+                  }else{
+                    setBus(false)
+                  }
+                }
+                window.api.models.upsertUserInfo({
+                    sapId: resBody.sapId,//8
+                    ystId: resBody.ystId,//6
+                    userName: resBody.userName,
+                    originOrgId: resBody.originOrgId,
+                    orgName: resBody.orgName,
+                    ystRefreshToken: resBody.ystRefreshToken,
+                    ystCode: userInfo.ystCode,
+                    ystIdToken:resBody.ystIdToken,
+                    ystAccessToken: resBody.ystAccessToken
+                })
+              } else{
+                window.electron.openLoginPage()
+              }
+          })
+        } else {
+          window.electron.openLoginPage()
+        }
+    });
+  };
 
   useEffect(() => {
     document.addEventListener('click', (e) => {
@@ -66,6 +141,7 @@ function App(): React.JSX.Element {
       }
     });
     initMMJ()
+    initUser()
   }, []);
 
   // Track drag start widths
@@ -166,10 +242,99 @@ function App(): React.JSX.Element {
     handlePreviewCollapse()
   }, [handlePreviewCollapse])
 
+  const selectGitModule = useCallback(() => {
+    setRightModule("git")
+    handlePreviewExpand()
+  }, [handlePreviewExpand])
+
   useEffect(() => {
-    setRightModule("work")
-    handlePreviewCollapse()
-  }, [currentThreadId, handlePreviewCollapse])
+    let cancelled = false
+
+    const syncRightModuleByWorkspace = async (): Promise<void> => {
+      if (!currentThreadId || mainView !== "thread") {
+        setHasPendingGitDiff(false)
+        setRightModule("work")
+        handlePreviewCollapse()
+        return
+      }
+
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (cancelled) return
+        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
+        const hasPendingDiff = Boolean(summary.hasPendingDiff)
+        setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
+
+        if (isGitWorkspace && hasPendingDiff) {
+          autoOpenedGitForThreadRef.current = currentThreadId
+          setRightModule("git")
+          handlePreviewExpand()
+          return
+        }
+
+        if (isGitWorkspace) {
+          autoOpenedGitForThreadRef.current = null
+        }
+        setRightModule("work")
+        handlePreviewCollapse()
+      } catch {
+        if (cancelled) return
+        setHasPendingGitDiff(false)
+        setRightModule("work")
+        handlePreviewCollapse()
+      }
+    }
+
+    void syncRightModuleByWorkspace()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentThreadId, mainView, handlePreviewCollapse, handlePreviewExpand])
+
+  useEffect(() => {
+    if (!currentThreadId || mainView !== "thread") {
+      setHasPendingGitDiff(false)
+      return
+    }
+    let cancelled = false
+
+    const refreshSummary = async (): Promise<void> => {
+      try {
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
+        const hasPendingDiff = Boolean(summary.hasPendingDiff)
+        if (!cancelled) {
+          setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
+          if (isGitWorkspace && hasPendingDiff && autoOpenedGitForThreadRef.current !== currentThreadId) {
+            autoOpenedGitForThreadRef.current = currentThreadId
+            setRightModule("git")
+            handlePreviewExpand()
+            return
+          }
+          if (!hasPendingDiff && autoOpenedGitForThreadRef.current === currentThreadId) {
+            autoOpenedGitForThreadRef.current = null
+          }
+        }
+      } catch {
+        if (!cancelled) setHasPendingGitDiff(false)
+      }
+    }
+
+    refreshSummary()
+    const timer = window.setInterval(refreshSummary, 3000)
+    const cleanupFs = window.api.workspace.onFilesChanged((data) => {
+      if (data.threadId === currentThreadId) {
+        refreshSummary()
+      }
+    })
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      cleanupFs()
+    }
+  }, [currentThreadId, mainView, handlePreviewExpand])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -184,7 +349,7 @@ function App(): React.JSX.Element {
     async function init(): Promise<void> {
       try {
         await migrateDisabledSkillsFromLocalStorage()
-        await loadThreads()
+        await Promise.all([loadThreads(), loadDashboardAllowed()])
         const threads = useAppStore.getState().threads
         if (threads.length === 0) {
           await createThread()
@@ -241,6 +406,14 @@ function App(): React.JSX.Element {
     )
   }
 
+  if(!bus){
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="text-muted-foreground">目前仅供零售客户经营开发团队使用，暂不对外提供服务...,有任何疑问请联系 范雄</div>
+      </div>
+    )
+  }
+
   return (
     <ThreadProvider>
       <div className="flex flex-col h-screen overflow-hidden bg-background">
@@ -267,17 +440,16 @@ function App(): React.JSX.Element {
                 {sidebarCollapsed ? (
                   <PanelLeftOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelLeftClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{sidebarToggleText}</span>
               </button>
             )}
           </div>
@@ -324,8 +496,8 @@ function App(): React.JSX.Element {
                   type="button"
                   className={`${panelToggleBaseClass} ${
                     rightModule === "preview"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
@@ -338,9 +510,26 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
+                    rightModule === "git"
+                      ? moduleActiveClass
+                      : hasPendingGitDiff
+                        ? "text-foreground border-status-warning/40 hover:bg-muted/45"
+                        : moduleInactiveClass
+                  }`}
+                  onClick={selectGitModule}
+                  title="Git 操作"
+                  aria-label="Git 操作"
+                  aria-pressed={rightModule === "git"}
+                >
+                  <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
+                  <span>Git 操作</span>
+                </button>
+                <button
+                  type="button"
+                  className={`${panelToggleBaseClass} ${
                     rightModule === "work"
-                      ? "text-foreground bg-muted/35 hover:bg-muted/50"
-                      : "text-muted-foreground/90 hover:text-foreground hover:bg-muted/45"
+                      ? moduleActiveClass
+                      : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
@@ -368,17 +557,16 @@ function App(): React.JSX.Element {
                 {rightPanelCollapsed ? (
                   <PanelRightOpen
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 ) : (
                   <PanelRightClose
                     size={18}
-                    className="shrink-0 transition-transform group-hover:scale-[1.04]"
+                    className="shrink-0 text-muted-foreground/75 transition-transform group-hover:scale-[1.04]"
                     strokeWidth={1.6}
                   />
                 )}
-                <span>{rightPanelToggleText}</span>
               </button>
             )}
           </div>
@@ -391,7 +579,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : (
+        ) : mainView !== "claudecode" && mainView !== "dashboard" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -435,6 +623,7 @@ function App(): React.JSX.Element {
                   <RightPanel
                     moduleMode={rightModule}
                     onRequestPreviewMode={selectPreviewModule}
+                    onRequestGitMode={selectGitModule}
                     onRequestWorkMode={selectWorkModule}
                     onPreviewFullscreenChange={setPreviewFullscreen}
                   />
@@ -442,8 +631,44 @@ function App(): React.JSX.Element {
               </>
             )}
           </div>
+        ) : null}
+
+        {/* Dashboard 面板 */}
+        {mainView === "dashboard" && (
+          <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
+            {!sidebarCollapsed && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0">
+                  <ThreadSidebar />
+                </div>
+                <ResizeHandle onDrag={handleLeftResize} />
+              </>
+            )}
+            <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+              <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>}>
+                <DashboardView />
+              </Suspense>
+            </main>
+          </div>
         )}
+
+        {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
+        <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>
+          {/* claudecode 模式下也显示侧边栏 */}
+          {mainView === "claudecode" && !sidebarCollapsed && (
+            <>
+              <div style={{ width: leftWidth }} className="shrink-0">
+                <ThreadSidebar />
+              </div>
+              <ResizeHandle onDrag={handleLeftResize} />
+            </>
+          )}
+          <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+            <ClaudeCodePanel visible={mainView === "claudecode"} />
+          </main>
+        </div>
       </div>
+      <Toaster position="top-center" richColors duration={2200} />
     </ThreadProvider>
   )
 }

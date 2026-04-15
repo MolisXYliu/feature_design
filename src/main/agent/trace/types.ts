@@ -130,12 +130,14 @@ export interface RoutingTrace {
   routingMode: "auto" | "pinned"
   /** Final resolved tier */
   resolvedTier: "premium" | "economy"
-  /** Final resolved model ID */
+  /** Final resolved model ID (internal, e.g. "custom:minmax2.7") */
   resolvedModelId: string
+  /** User-configured model name (e.g. "MiniMax-M2.7"), resolved from custom model config */
+  resolvedModelName: string
   /** Which layer produced the final decision */
   decidedByLayer: "pinned" | "thread" | "layer1" | "layer2" | "layer3"
   /** Total routing time in ms (sum of all layers evaluated) */
-  totalDurationMs: number
+  routingTotalDurationMs: number
   /** Per-layer records in evaluation order */
   layers: RoutingLayerRecord[]
 }
@@ -174,6 +176,18 @@ export interface AgentTrace {
   modelId: string
   /** Human-readable model name (e.g. "minmax"), populated at recording time */
   modelName?: string
+  /** Local IP address of the machine at trace time */
+  userIp?: string
+  /** Logged-in user's name from UserInfoConfig */
+  userName?: string
+  /** SAP employee ID (8-digit) */
+  sapId?: string
+  /** YST user ID (6-digit) */
+  ystId?: string
+  /** Original organization ID */
+  originOrgId?: string
+  /** Organization / department name */
+  orgName?: string
   /** Ordered list of reasoning steps */
   steps: TraceStep[]
   /** Ordered model-call runs (request + response) */
@@ -186,7 +200,9 @@ export interface AgentTrace {
   outcome: TraceOutcome
   /** Any error message if outcome === 'error' */
   errorMessage?: string
-  /** Which skills were actually used during this run */
+  /** Application version from package.json */
+  appVersion?: string
+  /** Which skills were actually used during this run, format: "name-version" e.g. "scheduler-assistant-v1.0.0" */
   usedSkills: string[]
   /**
    * Optional free-form metadata.

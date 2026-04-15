@@ -14,14 +14,22 @@ import type {
   PluginMetadata,
   PluginManifest
 } from "../main/types"
-import {UserInfoConfig} from '../main/storage'
+import { UserInfoConfig } from "../main/storage"
 import type { HookConfig, HookUpsert } from "../main/hooks/types"
+import type {
+  ManagedSavedCodeExecTool,
+  SavedCodeExecPreviewPayload,
+  SavedCodeExecPreviewResult,
+  SavedCodeExecToolUpdatePayload
+} from "../main/ipc/code-exec-tools"
 
 interface ElectronAPI {
   openExternal: Promise
-  openLoginWindow:()=>void
-  closeLoginWindow:()=>void
-  onNotifyMsg: (callback: (msg:string)=>void)=>void
+  openLoginWindow: () => void
+  closeLoginWindow: () => void
+  openLoginPage: () => void
+  closeLoginPage: () => void
+  onNotifyMsg: (callback: (msg: string) => void) => void
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
     on: (channel: string, listener: (...args: unknown[]) => void) => () => void
@@ -84,6 +92,7 @@ interface CustomAPI {
         model: string
         hasApiKey: boolean
         maxTokens: number
+        interleavedThinking?: boolean
         tier?: "premium" | "economy"
       }>
     >
@@ -94,6 +103,7 @@ interface CustomAPI {
       model: string
       hasApiKey: boolean
       maxTokens: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     } | null>
     setCustomConfig: (config: {
@@ -103,6 +113,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<void>
     // Backward-compatible alias, prefer upsertCustomConfig in new code.
@@ -113,6 +124,7 @@ interface CustomAPI {
       model: string
       apiKey?: string
       maxTokens?: number
+      interleavedThinking?: boolean
       tier?: "premium" | "economy"
     }) => Promise<{ id: string }>
     upsertUserInfo: (config: UserInfoConfig) => Promise<{ id: string }>
@@ -175,7 +187,34 @@ interface CustomAPI {
       error?: string
     }>
     clearWorktreeContext: (threadId: string) => Promise<void>
-    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string) => Promise<void>
+    saveWorktreeContext: (threadId: string, gitRoot: string, branch: string, baseBranch?: string, baseCommit?: string) => Promise<void>
+    recordLlmModifiedFiles: (threadId: string, files: string[]) => Promise<{
+      success: boolean
+      files?: string[]
+      error?: string
+    }>
+    getGitPanelState: (threadId: string) => Promise<{
+      success: boolean
+      isWorktree: boolean
+      isGitRepo?: boolean
+      taskId: string
+      files: Array<{ path: string; diff: string; additions: number; deletions: number }>
+      totals: { additions: number; deletions: number; fileCount: number }
+      hasPendingDiff: boolean
+      hasPushableCommit: boolean
+      pendingCommits?: Array<{ hash: string; message: string; date: string }>
+      trackedFiles?: string[]
+      worktreeBranch?: string | null
+      suggestedCommitMessage?: string
+      error?: string
+    }>
+    getGitPanelSummary: (threadId: string) => Promise<{
+      success: boolean
+      isWorktree: boolean
+      isGitRepo?: boolean
+      hasPendingDiff: boolean
+      changedFiles: number
+    }>
     isGit: (folderPath: string) => Promise<{
       isGit: boolean
       gitRoot: string | null
@@ -185,14 +224,42 @@ interface CustomAPI {
     listWorktrees: (gitRoot: string) => Promise<
       Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
     >
+    removeWorktree: (gitRoot: string, worktreePath: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
     createWorktree: (gitRoot: string, branch: string) => Promise<{
       success: boolean
       path?: string
       branch?: string
       baseBranch?: string
+      baseCommit?: string
       error?: string
     }>
-    commitWorktree: (worktreePath: string, message: string) => Promise<{
+    commitWorktree: (threadId: string, message: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    pushWorktree: (threadId: string, message?: string) => Promise<{
+      success: boolean
+      autoCommitted?: boolean
+      error?: string
+      steps?: Array<{
+        step: "pull" | "commit" | "push" | "verify" | "final"
+        status: "ok" | "failed" | "skipped"
+        detail: string
+      }>
+    }>
+    pullWorktree: (threadId: string) => Promise<{
+      success: boolean
+      detail?: string
+      error?: string
+    }>
+    rejectWorktreeChanges: (threadId: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    rejectWorktreeFile: (threadId: string, filePath: string) => Promise<{
       success: boolean
       error?: string
     }>
@@ -201,7 +268,10 @@ interface CustomAPI {
     ) => () => void
   }
   file: {
-    parse: (filePath: string, maxLength?: number) => Promise<{
+    parse: (
+      filePath: string,
+      maxLength?: number
+    ) => Promise<{
       success: boolean
       attachment?: {
         filename: string
@@ -223,10 +293,19 @@ interface CustomAPI {
     readBinary: (
       skillPath: string
     ) => Promise<{ success: boolean; content?: string; mimeType?: string; error?: string }>
-    listFiles: (skillPath: string) => Promise<{ success: boolean; files?: string[]; error?: string }>
+    listFiles: (
+      skillPath: string
+    ) => Promise<{ success: boolean; files?: string[]; error?: string }>
     getDisabled: () => Promise<string[]>
     setDisabled: (skillNames: string[]) => Promise<void>
-    upload: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
+    upload: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ) => Promise<{ success: boolean; skillName?: string; error?: string }>
+    extractMarkdownFromZip: (
+      buffer: ArrayBuffer,
+      fileName?: string
+    ) => Promise<{ success: boolean; filePath?: string; content?: string; error?: string }>
     delete: (skillPath: string) => Promise<{ success: boolean; error?: string }>
   }
   mcp: {
@@ -247,8 +326,23 @@ interface CustomAPI {
     deleteFile: (name: string) => Promise<void>
     getEnabled: () => Promise<boolean>
     setEnabled: (enabled: boolean) => Promise<void>
-    getStats: () => Promise<{ fileCount: number; totalSize: number; indexSize: number; enabled: boolean }>
+    getStats: () => Promise<{
+      fileCount: number
+      totalSize: number
+      indexSize: number
+      enabled: boolean
+    }>
     onChanged: (callback: () => void) => () => void
+  }
+  terminal: {
+    create: (opts: { workDir?: string; args?: string[]; cols?: number; rows?: number; claudeModelId?: string; syncSkills?: boolean; syncMemory?: boolean }) => Promise<string>
+    write: (id: string, data: string) => void
+    resize: (id: string, cols: number, rows: number) => void
+    dispose: (id: string) => Promise<void>
+    selectDir: () => Promise<string | null>
+    ack: (id: string, bytes: number) => void
+    onData: (id: string, callback: (data: string, bytes: number) => void) => () => void
+    onExit: (id: string, callback: (code: number | null) => void) => () => void
   }
   keepAwake: {
     get: () => Promise<boolean>
@@ -286,11 +380,16 @@ interface CustomAPI {
   }
   plugins: {
     list: () => Promise<PluginMetadata[]>
-    install: (buffer: ArrayBuffer, fileName: string) => Promise<{ success: boolean; pluginName?: string; error?: string }>
+    install: (
+      buffer: ArrayBuffer,
+      fileName: string
+    ) => Promise<{ success: boolean; pluginName?: string; error?: string }>
     installFromDir: () => Promise<{ success: boolean; pluginName?: string; error?: string }>
     delete: (id: string) => Promise<{ success: boolean; error?: string }>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
-    getDetail: (id: string) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
+    getDetail: (
+      id: string
+    ) => Promise<{ skills: string[]; mcpServers: string[]; manifest: PluginManifest | null }>
   }
   chatx: {
     getConfig: () => Promise<ChatXConfig>
@@ -309,9 +408,18 @@ interface CustomAPI {
     completeNux: (mode: "elevated" | "unelevated" | "none") => Promise<void>
     getApprovalRules: () => Promise<Array<{ pattern: string; decision: string }>>
     deleteApprovalRule: (pattern: string) => Promise<void>
-    sendApprovalDecision: (decision: { requestId: string; type: string; tool_call_id: string }) => void
+    sendApprovalDecision: (decision: {
+      requestId: string
+      type: string
+      tool_call_id: string
+      savedToolName?: string
+      savedToolDescription?: string
+    }) => void
     onApprovalRequest: (threadId: string, callback: (request: unknown) => void) => () => void
-    onApprovalTimeout: (threadId: string, callback: (data: { requestId: string }) => void) => () => void
+    onApprovalTimeout: (
+      threadId: string,
+      callback: (data: { requestId: string }) => void
+    ) => () => void
     onChanged: (callback: () => void) => () => void
   }
   skillEvolution: {
@@ -396,35 +504,43 @@ interface CustomAPI {
     onStreamStart: (cb: () => void) => () => void
     onStreamChunk: (cb: (payload: { chunk: string }) => void) => () => void
     onStreamEnd: (cb: (payload: { success: boolean; error?: string }) => void) => () => void
-    getCandidates: () => Promise<Array<{
+    getCandidates: () => Promise<
+      Array<{
+        candidateId: string
+        action: "create" | "patch"
+        skillId: string
+        name: string
+        description: string
+        proposedContent: string
+        rationale: string
+        sourceTraceIds: string[]
+        generatedAt: string
+        status: "pending" | "approved" | "rejected"
+      }>
+    >
+    approve: (
       candidateId: string
-      action: "create" | "patch"
-      skillId: string
-      name: string
-      description: string
-      proposedContent: string
-      rationale: string
-      sourceTraceIds: string[]
-      generatedAt: string
-      status: "pending" | "approved" | "rejected"
-    }>>
-    approve: (candidateId: string) => Promise<{ success: boolean; skillId?: string; error?: string }>
+    ) => Promise<{ success: boolean; skillId?: string; error?: string }>
     reject: (candidateId: string) => Promise<{ success: boolean }>
     clear: () => Promise<void>
-    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<Array<{
-      traceId: string
-      threadId: string
-      startedAt: string
-      durationMs: number
-      userMessage: string
-      totalToolCalls: number
-      totalInputTokens: number
-      totalOutputTokens: number
-      totalTokens: number
-      outcome: string
-      usedSkills: string[]
-    }>>
-    onAutoTriggered: (cb: (payload: { threadId: string; toolCallCount: number }) => void) => () => void
+    getTraces: (opts?: { threadId?: string; limit?: number }) => Promise<
+      Array<{
+        traceId: string
+        threadId: string
+        startedAt: string
+        durationMs: number
+        userMessage: string
+        totalToolCalls: number
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalTokens: number
+        outcome: string
+        usedSkills: string[]
+      }>
+    >
+    onAutoTriggered: (
+      cb: (payload: { threadId: string; toolCallCount: number }) => void
+    ) => () => void
     getTraceDetail: (traceId: string) => Promise<{
       traceId: string
       threadId: string
@@ -508,9 +624,97 @@ interface CustomAPI {
     delete: (id: string) => Promise<void>
     setEnabled: (id: string, enabled: boolean) => Promise<void>
   }
+  codeExecTools: {
+    list: () => Promise<ManagedSavedCodeExecTool[]>
+    getSettings: () => Promise<{ codeExecEnabled: boolean }>
+    setCodeExecEnabled: (enabled: boolean) => Promise<void>
+    setEnabled: (id: string, enabled: boolean) => Promise<ManagedSavedCodeExecTool>
+    setLastPreviewParams: (id: string, params: Record<string, unknown>) => Promise<ManagedSavedCodeExecTool>
+    update: (payload: SavedCodeExecToolUpdatePayload) => Promise<ManagedSavedCodeExecTool>
+    delete: (id: string) => Promise<void>
+    runPreview: (payload: SavedCodeExecPreviewPayload) => Promise<SavedCodeExecPreviewResult>
+  }
   routing: {
     getMode: () => Promise<"auto" | "pinned">
     setMode: (mode: "auto" | "pinned") => Promise<void>
+  }
+  dashboard: {
+    isAllowed: () => Promise<boolean>
+    overview: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    modelStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    userStats: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+    productivity: (
+      range: { from: string; to: string },
+      granularity: "day" | "week" | "month" | "custom"
+    ) => Promise<{ success: boolean; data?: unknown; error?: string }>
+  }
+  update: {
+    check: () => Promise<
+      | { hasUpdate: false }
+      | {
+        hasUpdate: true
+        version: string
+        updateType: string
+        releaseNotes: string
+        size: number
+        mandatory: boolean
+        currentStatus?: string
+        currentProgress?: {
+          percent: number
+          transferred: number
+          total: number
+          speed: string
+          phase: "downloading" | "verifying" | "extracting"
+          message: string
+        } | null
+        currentError?: string | null
+      }
+    >
+    download: () => Promise<{ success: boolean }>
+    install: () => Promise<void>
+    dismiss: () => Promise<{ success: boolean }>
+    rollback: () => Promise<void>
+    getStatus: () => Promise<{
+      status: string
+      update: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean } | null
+      progress: {
+        percent: number
+        transferred: number
+        total: number
+        speed: string
+        phase: "downloading" | "verifying" | "extracting"
+        message: string
+      } | null
+      errorMessage: string | null
+      canRollback: boolean
+    }>
+    getStartupResult: () => Promise<{ updatedFrom?: string; updatedTo?: string }>
+    onAvailable: (callback: (info: { version: string; updateType: string; releaseNotes: string; size: number; mandatory: boolean; autoDownloading?: boolean }) => void) => () => void
+    onProgress: (callback: (progress: {
+      percent: number
+      transferred: number
+      total: number
+      speed: string
+      phase: "downloading" | "verifying" | "extracting"
+      message: string
+    }) => void) => () => void
+    onDownloaded: (callback: (info: { version: string; updateType: string; releaseNotes?: string; size?: number; mandatory?: boolean }) => void) => () => void
+    onError: (callback: (err: { message: string; silent?: boolean }) => void) => () => void
+  }
+  git: {
+    currentBranch: (cwd?: string) => Promise<{ isGitRepo: boolean; branch: string | null; isWorktree: boolean }>
+    listBranches: (cwd?: string) => Promise<{ success: boolean; branches: string[]; error?: string }>
+    switchBranch: (branch: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
+    createBranch: (branch: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
   }
 }
 

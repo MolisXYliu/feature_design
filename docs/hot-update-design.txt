@@ -1,0 +1,791 @@
+# CMBDevClaw 热更新方案设计
+
+## 一、背景与目标
+
+CMBDevClaw 是基于 Electron 39 的桌面应用，打包后产物为一个文件夹，包含 `CMBDevClaw.exe`、DLL/DAT 等运行时文件和 `resources/app.asar` 业务代码。用户点击 exe 即可运行（便携式，无需安装）。
+
+**目标：** 实现客户端自动检测新版本 → 用户确认 → 下载 → 替换 → 重启，支持回退。
+
+**约束条件：**
+- 内网 ECS 文件服务器，一次只能上传一个文件，无目录结构
+- ECS 下载接口：POST `{baseUrl}/download?file={文件名}`，返回文件流
+- Windows 平台优先（当前主力用户环境）
+- 便携式运行（无 NSIS 安装，直接运行 exe）
+- 公司安全策略可能拦截 setup.exe 执行，需支持 zip 替换模式
+- 需要弹窗让用户确认后才更新
+- 支持发现问题后回退到上一版本
+
+---
+
+## 二、打包产物结构分析
+
+```
+CMBDevClaw/                              (运行目录，便携式)
+├── CMBDevClaw.exe                       ← Electron 二进制（极少变动）
+├── *.dll, *.dat, *.pak                  ← Chromium 运行时（极少变动）
+└── resources/
+    ├── app.asar                         ← 业务代码（每次发版都变）
+    └── bin/                             ← extraResources（codex 等工具）
+```
+
+**核心结论：**
+- **90% 以上的更新只需要替换 `app.asar`**，不需要替换 exe 或 dll
+- DLL/exe 只有在升级 Electron 版本或更换原生 npm 模块时才需要变
+- 用户必须先获取完整运行目录（首次分发），之后才能使用热更新
+
+---
+
+## 三、版本号规则与更新类型判定
+
+### 3.1 版本格式
+
+采用语义化版本 `major.minor.patch`（如 `0.1.10`）。
+
+### 3.2 更新类型判定规则
+
+```
+当前版本           新版本            判定
+0.1.10      →     0.1.11           仅 patch 变化   → ASAR 轻量更新
+0.1.10      →     0.2.0            minor 变化      → 全量更新
+0.1.10      →     1.0.0            major 变化      → 全量更新
+0.1.5       →     0.1.11           低于 minVersion → 强制全量更新
+```
+
+**简记：只有 patch 变化走 ASAR 替换，其余走全量更新。**
+
+### 3.3 强制全量兜底
+
+`latest.json` 中设 `minVersion` 字段。客户端版本低于该值时，无论 patch/minor 一律走全量更新，防止跨太多版本导致 ASAR 与 Electron 本体不兼容。
+
+---
+
+## 四、ECS 服务端设计
+
+### 4.1 ECS 下载接口
+
+所有文件通过统一接口下载：
+
+```
+POST {VITE_UPDATE_SERVER_URL}/download?file={文件名}
+返回：文件流（InputStream）
+```
+
+示例：
+- 获取版本清单：`POST {url}/download?file=cmbdevclaw-latest.json`
+- 下载 ASAR：`POST {url}/download?file=cmbdevclaw-0.1.11-asar.gz`
+- 下载全量包：`POST {url}/download?file=cmbdevclaw-0.2.0-full.zip`
+
+### 4.2 ECS 文件清单
+
+ECS 服务器上所有文件平铺在同一目录下，通过文件名区分用途和版本：
+
+```
+ECS/
+├── cmbdevclaw-latest.json                   ← 版本清单（每次发版覆盖上传）
+├── cmbdevclaw-0.1.11-asar.gz               ← v0.1.11 的 ASAR 压缩包
+├── cmbdevclaw-0.1.10-asar.gz               ← v0.1.10 的 ASAR（回退用，保留上一版本）
+├── cmbdevclaw-0.2.0-full.zip               ← v0.2.0 全量包（zip 模式，公司无白名单时使用）
+├── cmbdevclaw-0.2.0-setup.exe              ← v0.2.0 全量安装包（exe 模式，公司开白名单后使用）
+└── ...（历史版本自然积累，空间不够时手动删旧版本）
+```
+
+### 4.3 文件命名规则
+
+| 文件类型 | 命名模式 | 示例 |
+|---------|---------|------|
+| 版本清单 | `cmbdevclaw-latest.json` | 固定名称，每次覆盖 |
+| ASAR 包 | `cmbdevclaw-{version}-asar.gz` | `cmbdevclaw-0.1.11-asar.gz` |
+| 全量 zip 包 | `cmbdevclaw-{version}-full.zip` | `cmbdevclaw-0.2.0-full.zip` |
+| 全量安装包 | `cmbdevclaw-{version}-setup.exe` | `cmbdevclaw-0.2.0-setup.exe` |
+
+### 4.4 cmbdevclaw-latest.json 格式
+
+```json
+{
+  "version": "0.1.11",
+  "minVersion": "0.1.8",
+  "releaseNotes": "1. 修复了对话中断问题\n2. 优化了 Agent 执行性能",
+  "mandatory": false,
+  "asar": {
+    "file": "cmbdevclaw-0.1.11-asar.gz",
+    "sha256": "a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+    "size": 42000000
+  },
+  "full": {
+    "file": "cmbdevclaw-0.2.0-full.zip",
+    "sha256": "e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6",
+    "size": 222000000
+  },
+  "rollback": {
+    "version": "0.1.10",
+    "file": "cmbdevclaw-0.1.10-asar.gz",
+    "sha256": "f1e2d3c4b5a69078563412faebdc0987654321abcdef1234567890abcdef1234"
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `version` | 是 | 最新版本号 |
+| `minVersion` | 是 | 低于此版本的客户端强制走全量更新 |
+| `releaseNotes` | 是 | 更新说明，显示在弹窗中 |
+| `mandatory` | 是 | `true` 时用户不能跳过，必须更新 |
+| `asar` | 是 | ASAR 包信息。SHA256 和 size 直接写在 JSON 里 |
+| `full` | 否 | 全量更新包信息。仅 minor/major 更新时需要。`file` 字段后缀决定更新模式：`.zip` → zip替换模式，`.exe` → NSIS安装模式 |
+| `rollback` | 否 | 上一个稳定版本的 ASAR 信息，供一键回退 |
+
+**全量更新模式切换（只改 ECS 上的 latest.json，客户端无需重新发版）：**
+
+```json
+// 公司无白名单 → zip 模式（BAT 脚本解压覆盖，无需执行 exe）
+"full": { "file": "cmbdevclaw-0.2.0-full.zip", ... }
+
+// 公司开白名单后 → exe 模式（NSIS 安装界面）
+"full": { "file": "cmbdevclaw-0.2.0-setup.exe", ... }
+```
+
+---
+
+## 五、环境配置
+
+### 5.1 新增环境变量
+
+在 `.env` 中新增一个变量：
+
+```env
+VITE_UPDATE_SERVER_URL=http://<ecs-host>
+```
+
+客户端通过 POST 请求下载文件：
+- 获取版本清单：`POST {VITE_UPDATE_SERVER_URL}/download?file=cmbdevclaw-latest.json`
+- 下载 ASAR：`POST {VITE_UPDATE_SERVER_URL}/download?file=cmbdevclaw-0.1.11-asar.gz`
+
+### 5.2 本地目录规划
+
+```
+~/.cmbcoworkagent/                       (已有的用户数据目录)
+└── updates/                             (新增)
+    ├── app.asar.gz                      ← 下载的 ASAR 压缩包（临时）
+    ├── app.asar                         ← 解压后待安装的文件（临时）
+    ├── cmbdevclaw-x.x.x-full.zip        ← 下载的全量 zip 包（临时）
+    ├── update.bat                       ← ASAR 替换脚本（临时）
+    └── full-update.bat                  ← 全量替换脚本（临时）
+
+<运行目录>/resources/                    (app 所在目录下)
+├── app.asar                             ← 当前运行版本
+├── app.asar.bak                         ← 上一个版本的备份（回退用）
+└── update-marker.json                   ← 更新标记（启动自检用）
+
+<运行目录>.bak/                          ← 全量更新时整个目录的备份
+```
+
+---
+
+## 六、新增代码文件结构
+
+```
+src/main/
+├── updater/                              ← 新增模块
+│   ├── index.ts                          ← 主入口：注册 IPC、启动定时检查
+│   ├── checker.ts                        ← 版本检查 + 更新类型判定
+│   ├── downloader.ts                     ← 文件下载 + 进度推送 + SHA256 校验
+│   ├── installer.ts                      ← ASAR 替换 / 全量更新逻辑（zip+BAT 或 NSIS exe）
+│   └── rollback.ts                       ← 启动自检 + 一键回退
+
+src/renderer/src/components/
+├── update/                               ← 新增组件
+│   └── UpdateDialog.tsx                  ← 更新弹窗（确认 + 进度条 + 回退）
+```
+
+---
+
+## 七、IPC 通道设计
+
+### 7.1 Main → Renderer（事件推送）
+
+| 通道名 | 数据结构 | 触发时机 |
+|--------|---------|---------|
+| `update:available` | `{ version, updateType, releaseNotes, size, mandatory }` | 检测到新版本 |
+| `update:progress` | `{ percent, transferred, total, speed }` | 下载过程中，每秒推送 |
+| `update:downloaded` | `{ version, updateType }` | 下载并校验完成 |
+| `update:error` | `{ message }` | 任何环节失败 |
+
+### 7.2 Renderer → Main（用户操作）
+
+| 通道名 | 参数 | 说明 |
+|--------|------|------|
+| `update:check` | 无 | 用户手动点击检查更新 |
+| `update:download` | 无 | 用户确认后开始下载 |
+| `update:install` | 无 | 下载完成后，用户确认重启安装 |
+| `update:dismiss` | 无 | 用户点击"稍后提醒" |
+| `update:rollback` | 无 | 用户请求回退到上一版本 |
+| `update:get-status` | 无 | 获取当前更新状态 |
+
+### 7.3 Preload 暴露接口
+
+在 `src/preload/index.ts` 的 `api` 对象中新增 `update` 命名空间：
+
+```typescript
+update: {
+  check: () => ipcRenderer.invoke("update:check"),
+  download: () => ipcRenderer.invoke("update:download"),
+  install: () => ipcRenderer.invoke("update:install"),
+  dismiss: () => ipcRenderer.invoke("update:dismiss"),
+  rollback: () => ipcRenderer.invoke("update:rollback"),
+  getStatus: () => ipcRenderer.invoke("update:get-status"),
+  onAvailable: (cb: (info: UpdateInfo) => void) => {
+    ipcRenderer.on("update:available", (_e, info) => cb(info))
+    return () => ipcRenderer.removeAllListeners("update:available")
+  },
+  onProgress: (cb: (progress: DownloadProgress) => void) => {
+    ipcRenderer.on("update:progress", (_e, progress) => cb(progress))
+    return () => ipcRenderer.removeAllListeners("update:progress")
+  },
+  onDownloaded: (cb: (info: { version: string; updateType: string }) => void) => {
+    ipcRenderer.on("update:downloaded", (_e, info) => cb(info))
+    return () => ipcRenderer.removeAllListeners("update:downloaded")
+  },
+  onError: (cb: (err: { message: string }) => void) => {
+    ipcRenderer.on("update:error", (_e, err) => cb(err))
+    return () => ipcRenderer.removeAllListeners("update:error")
+  },
+}
+```
+
+---
+
+## 八、核心流程
+
+### 8.1 检查更新（checker.ts）
+
+```
+触发时机:
+  ① 应用启动 30 秒后（首次延迟，避免和数据库初始化、IPC 注册抢资源）
+  ② 每 30 分钟自动轮询一次
+  ③ 用户在界面手动点击"检查更新"（通过 update:check IPC）
+
+流程:
+  1. POST {VITE_UPDATE_SERVER_URL}/download?file=cmbdevclaw-latest.json
+     ├─ 超时 10 秒
+     ├─ 失败 → 静默忽略（定时轮询场景）或报错（手动检查场景）
+     └─ 成功 → 解析 JSON
+
+  2. 比较版本号
+     ├─ latest.version === app.getVersion() → 无更新，结束
+     └─ latest.version > app.getVersion() → 有更新，进入步骤 3
+
+  3. 判定更新类型
+     ├─ app.getVersion() < latest.minVersion → 强制全量（full）
+     ├─ 仅 patch 位变化（major 和 minor 相同） → ASAR 替换
+     └─ major 或 minor 变化 → 全量更新（full）
+
+  4. 通过 IPC 发送 update:available 事件给 Renderer
+     包含: { version, updateType, releaseNotes, size, mandatory }
+```
+
+### 8.2 用户确认弹窗（UpdateDialog.tsx）
+
+**弹窗状态机：**
+
+```
+[无更新] ─检测到新版本──→ [确认更新]
+                           │
+              用户点击"稍后" ← → 用户点击"立即更新"
+                 ↓                    ↓
+              [关闭]              [下载中] ──下载完成──→ [等待重启]
+                                    │                     │
+                                 下载失败              用户确认重启
+                                    ↓                     ↓
+                                 [错误]               [执行安装]
+```
+
+**四个弹窗状态的 UI：**
+
+#### 状态一：确认更新
+
+```
+┌────────────────────────────────────────────────────┐
+│  发现新版本 v0.1.11                                  │
+│                                                    │
+│  更新内容：                                         │
+│  1. 修复了对话中断问题                                │
+│  2. 优化了 Agent 执行性能                             │
+│                                                    │
+│  更新方式：轻量更新（仅替换业务代码，无需重新安装）       │
+│  下载大小：约 40 MB                                   │
+│                                                    │
+│                    [稍后提醒]     [立即更新]           │
+└────────────────────────────────────────────────────┘
+
+mandatory === true 时：隐藏"稍后提醒"按钮
+updateType === "full" 时：更新方式显示为"完整更新（需要重新安装）"
+```
+
+#### 状态二：下载中
+
+```
+┌────────────────────────────────────────────────────┐
+│  正在下载 v0.1.11 ...                               │
+│                                                    │
+│  ████████████████░░░░░░░░░░░░░░  45%               │
+│  已下载 18 MB / 40 MB    速度 2.1 MB/s              │
+│                                                    │
+└────────────────────────────────────────────────────┘
+```
+
+#### 状态三：等待重启
+
+```
+┌────────────────────────────────────────────────────┐
+│  v0.1.11 下载完成                                    │
+│                                                    │
+│  更新已就绪，需要重启应用以完成安装。                    │
+│  重启前请保存当前工作。                                │
+│                                                    │
+│                    [稍后重启]     [立即重启]           │
+└────────────────────────────────────────────────────┘
+```
+
+#### 状态四：错误
+
+```
+┌────────────────────────────────────────────────────┐
+│  更新失败                                            │
+│                                                    │
+│  下载文件校验失败，请重试。                             │
+│                                                    │
+│                    [关闭]        [重试]              │
+└────────────────────────────────────────────────────┘
+```
+
+### 8.3 文件下载（downloader.ts）
+
+```
+输入: baseUrl, fileName, expectedSha256, expectedSize
+输出: 本地文件路径 或 抛出异常
+
+流程:
+  1. 确保 ~/.cmbcoworkagent/updates/ 目录存在
+
+  2. 发送 POST 请求下载文件:
+     POST {baseUrl}/download?file={fileName}
+     ├─ 超时 300 秒
+     ├─ 检查 response.statusCode === 200
+     └─ 写入本地文件
+
+  3. 下载过程中每秒计算一次进度，通过 IPC 推送:
+     {
+       percent: 45,              // 百分比
+       transferred: 18874368,    // 已下载字节数
+       total: 42000000,          // 总字节数
+       speed: "2.1 MB/s"         // 下载速度
+     }
+
+  4. 下载完成后计算 SHA256:
+     ├─ 使用 crypto.createHash("sha256") 流式计算
+     ├─ 与 expectedSha256 比对
+     ├─ 不匹配 → 删除文件，抛出 "文件校验失败" 错误
+     └─ 匹配 → 继续
+
+  5. 按文件类型处理:
+     ├─ .gz  → zlib.createGunzip() 流式解压，输出到 updates/app.asar，删除 .gz
+     ├─ .zip → 原样保留，路径传给 installer 由 BAT 脚本处理
+     └─ .exe → 原样保留，路径传给 installer 直接执行
+
+  6. 通过 IPC 发送 update:downloaded 事件
+```
+
+### 8.4 ASAR 替换安装（installer.ts — ASAR 模式）
+
+**核心难点：** Windows 上 `app.asar` 正在被 Electron 使用，文件被锁定，无法直接覆盖。
+
+**解决方案：** 生成外部 BAT 脚本（update.bat），在 Electron 退出后由操作系统执行替换。
+
+```
+流程:
+
+  1. 确定关键路径:
+     ├─ appAsarPath   = process.resourcesPath/app.asar
+     ├─ backupPath    = process.resourcesPath/app.asar.bak
+     ├─ newAsarPath   = ~/.cmbcoworkagent/updates/app.asar
+     ├─ markerPath    = process.resourcesPath/update-marker.json
+     ├─ exePath       = app.getPath("exe")
+     └─ batPath       = ~/.cmbcoworkagent/updates/update.bat
+
+  2. 生成 update.bat:
+     ① tasklist 轮询等待 CMBDevClaw.exe 进程消失（最多 30 秒）
+     ② copy /Y 备份 app.asar → app.asar.bak
+     ③ copy /Y 替换 new app.asar → app.asar（失败则自动回滚 bak）
+     ④ 写 update-marker.json {"fromVersion":"x","toVersion":"y"}
+     ⑤ del 清理临时文件
+     ⑥ start 重启 CMBDevClaw.exe
+
+  3. 用户确认"立即重启"后:
+     ├─ spawn("cmd", ["/c", batPath], { detached: true, stdio: "ignore" }).unref()
+     └─ app.quit()
+```
+
+### 8.5 全量更新安装（installer.ts — Full 模式）
+
+客户端根据 `latest.json` 中 `full.file` 的文件扩展名自动选择模式：
+
+#### 模式一：zip 替换模式（`.zip` 后缀，适用于公司无白名单场景）
+
+```
+全量 zip 包内容（文件平铺在根目录，不含外层文件夹）:
+  CMBDevClaw/
+  ├── CMBDevClaw.exe
+  ├── electron.exe
+  ├── *.dll
+  └── resources/
+      └── app.asar
+
+流程:
+  1. 确定关键路径:
+     ├─ appDir    = dirname(app.getPath("exe"))          ← 当前运行目录
+     ├─ backupDir = appDir + ".bak"                      ← 整目录备份
+     ├─ zipPath   = ~/.cmbcoworkagent/updates/xxx.zip
+     └─ batPath   = ~/.cmbcoworkagent/updates/full-update.bat
+
+  2. 生成 full-update.bat:
+     ① tasklist 等待 CMBDevClaw.exe 退出
+     ② xcopy 备份整个 appDir → appDir.bak（用于回滚）
+     ③ PowerShell Expand-Archive 解压 zip 到 %TEMP%\cmbdevclaw_update_tmp
+     ④ xcopy 覆盖解压目录所有文件到 appDir（失败则从 backupDir 恢复）
+     ⑤ 写 update-marker.json {"updateType":"full","toVersion":"x.x.x"}
+     ⑥ 清理临时目录和 zip 文件
+     ⑦ 重启 CMBDevClaw.exe
+     ⑧ BAT 自我删除
+
+  3. spawn detached + app.quit()
+```
+
+#### 模式二：NSIS 安装模式（`.exe` 后缀，需公司白名单）
+
+```
+流程（比 ASAR 模式简单）:
+  1. 下载完成得到 cmbdevclaw-x.x.x-setup.exe
+  2. 弹窗提示: "大版本更新，需要重新安装"
+  3. 用户确认后:
+     ├─ spawn(installerPath, [], { detached: true, windowsHide: false }).unref()
+     │   注: windowsHide: false 让用户看到 NSIS 安装界面
+     └─ app.quit()
+  4. NSIS 安装包覆盖安装，完成后自动启动新版本
+```
+
+### 8.6 回退机制（rollback.ts）
+
+#### 第一层：启动自检（自动回退）
+
+```
+时机: 每次 app.whenReady() 时、在 createWindow() 之前执行
+
+流程:
+  1. 检查 resources/update-marker.json 是否存在
+     ├─ 不存在 → 非更新后首次启动，跳过
+     └─ 存在 → 读取 fromVersion 和 toVersion
+
+  2. 执行自检:
+     └─ 检查 app.getVersion() === toVersion（版本号是否正确更新）
+
+  3. 自检通过:
+     ├─ 删除 update-marker.json
+     ├─ 保留 app.asar.bak（供手动回退使用）
+     └─ 正常启动
+
+  4. 自检失败:
+     ├─ 日志记录失败原因
+     ├─ 生成 rollback.bat（用 bak 文件反向替换）
+     ├─ spawn detached 启动 rollback.bat
+     └─ app.quit()
+```
+
+#### 第二层：用户手动回退
+
+```
+触发: 用户在设置页面点击"回退到上一版本"（通过 update:rollback IPC）
+
+流程:
+  1. 检查 app.asar.bak 是否存在
+     ├─ 存在 → 直接用本地 bak 文件回退（无需下载）
+     └─ 不存在 → 从服务器下载:
+              ├─ 读取 latest.json 的 rollback 字段
+              ├─ POST 下载 rollback.file 指向的 ASAR
+              └─ SHA256 校验
+
+  2. 弹窗确认: "确定要回退到 v0.1.10 吗？回退后需要重启。"
+
+  3. 用户确认后:
+     ├─ 生成 rollback.bat
+     ├─ spawn detached
+     └─ app.quit()
+```
+
+---
+
+## 九、集成到现有代码
+
+### 9.1 主进程入口（src/main/index.ts）
+
+```typescript
+import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "./updater"
+import { runStartupSelfCheck } from "./updater/rollback"
+
+// app.whenReady() 内:
+await initializeDatabase()
+registerUpdaterHandlers()   // 注册 IPC
+
+createWindow()
+await runStartupSelfCheck() // 启动自检（createWindow 之后）
+
+startUpdateChecker()        // 30s 后首次检查，之后每 30min
+
+// will-quit 内:
+stopUpdateChecker()
+```
+
+### 9.2 Preload（src/preload/index.ts）
+
+在 `api` 对象中新增 `update` 命名空间（见第七节 7.3）。
+
+### 9.3 Renderer 改造
+
+**改动一：ChatContainer.tsx 版本按钮**
+
+现有行为：点击按钮 → 复制下载链接到剪贴板
+改造为：点击按钮 → 打开 UpdateDialog，自动触发检查更新
+
+**改动二：新增 UpdateDialog.tsx**
+
+独立的弹窗组件，状态由 main 进程通过 IPC 事件驱动（见第八节 8.2）。
+
+**改动三：设置页面增加回退入口（待实现）**
+
+在 CustomizeView.tsx 中增加一个"回退到上一版本"按钮，调用 `window.api.update.rollback()`。
+
+---
+
+## 十、发版操作流程
+
+### 10.1 ASAR 更新（patch 版本，如 0.1.10 → 0.1.11）
+
+```
+操作步骤:
+  1. 修改 package.json 中 version 为 "0.1.11"
+  2. 执行构建:
+     npm run build                   # 编译 + 打包
+     npx electron-builder --dir      # 只生成 win-unpacked，不打安装包
+  3. 从 dist/win-unpacked/resources/ 中取出 app.asar
+  4. 压缩（Windows PowerShell）:
+     # 方式一: 用 gzip（需安装 Git Bash 或 WSL）
+     gzip -k app.asar
+     # 方式二: 用 PowerShell
+     # app.asar 是二进制文件，建议用 7-Zip 或 Node 脚本压缩
+  5. 重命名: cmbdevclaw-0.1.11-asar.gz
+  6. 计算 SHA256:
+     certutil -hashfile cmbdevclaw-0.1.11-asar.gz SHA256
+  7. 上传到 ECS: cmbdevclaw-0.1.11-asar.gz
+  8. 更新 cmbdevclaw-latest.json（修改 version、asar 字段、rollback 指向 0.1.10）
+  9. 上传到 ECS: cmbdevclaw-latest.json（覆盖旧文件）
+
+上传 2 个文件完成。
+```
+
+### 10.2 全量更新（minor/major 版本，如 0.1.x → 0.2.0）
+
+**公司无白名单时（zip 模式）：**
+
+```
+操作步骤:
+  1. 修改 package.json 中 version 为 "0.2.0"
+  2. 执行构建生成完整运行目录:
+     npx electron-builder --dir      # 生成 dist/win-unpacked/
+  3. 打 zip 包（文件平铺，不含外层目录名）:
+     cd dist/win-unpacked
+     powershell Compress-Archive -Path .\* -DestinationPath cmbdevclaw-0.2.0-full.zip
+  4. 同时从 dist/win-unpacked/resources/ 取出 app.asar 压缩为:
+     cmbdevclaw-0.2.0-asar.gz        # 供未来回退使用
+  5. 计算两个文件的 SHA256
+  6. 上传到 ECS: cmbdevclaw-0.2.0-full.zip
+  7. 上传到 ECS: cmbdevclaw-0.2.0-asar.gz
+  8. 更新并上传 cmbdevclaw-latest.json
+     └─ full.file = "cmbdevclaw-0.2.0-full.zip"
+
+上传 3 个文件完成。
+```
+
+**公司开白名单后（exe 模式，改 latest.json 即可切换，无需重新上传包）：**
+
+```
+  1. 额外打 NSIS 安装包:
+     npm run dist:win                # 生成 dist/CMBDevClaw Setup 0.2.0.exe
+  2. 重命名: cmbdevclaw-0.2.0-setup.exe
+  3. 计算 SHA256，上传到 ECS
+  4. 更新 cmbdevclaw-latest.json:
+     └─ full.file = "cmbdevclaw-0.2.0-setup.exe"  ← 改这一行即可切换模式
+  5. 上传 latest.json（覆盖）
+
+客户端下次检查到更新时自动使用 exe 模式。
+```
+
+### 10.3 发版脚本（可选自动化）
+
+可在 `scripts/publish-update.sh` 中封装以上步骤，只需传入版本号即可自动完成构建、压缩、计算哈希、生成 latest.json。
+
+---
+
+## 十一、完整时序图
+
+### 11.1 ASAR 轻量更新
+
+```
+用户         Renderer              Main 进程            ECS 服务器
+ │              │                      │                    │
+ │              │          启动 30s 后  │                    │
+ │              │                      ├── POST latest.json →
+ │              │                      ←── 返回 JSON ────────┤
+ │              │                      │                    │
+ │              │                      │ 比较版本: 有更新     │
+ │              │  ←─ update:available ─┤                    │
+ │              │                      │                    │
+ │              │  弹出 UpdateDialog    │                    │
+ │  看到弹窗    ←──────────────────────│                    │
+ │              │                      │                    │
+ │  点击"立即更新"                      │                    │
+ │  ──────────→ │── update:download ──→│                    │
+ │              │                      ├── POST asar.gz ────→
+ │              │                      ←── 文件流 ───────────┤
+ │              │  ←─ update:progress ─┤ (每秒推送)          │
+ │              │                      │                    │
+ │              │                      │ SHA256 校验通过     │
+ │              │  ←─ update:downloaded┤                    │
+ │              │                      │                    │
+ │  看到"下载完成，是否重启"             │                    │
+ │  点击"立即重启"                      │                    │
+ │  ──────────→ │── update:install ───→│                    │
+ │              │                      │ 生成 update.bat    │
+ │              │                      │ spawn(bat, detached)│
+ │              │                      │ app.quit()          │
+ │              │                      │                    │
+ │              (Electron 退出)         │                    │
+ │                                                          │
+ │  ┌─ update.bat 独立执行 ──────────────────────────────┐  │
+ │  │ tasklist 等待进程消失 ✓                             │  │
+ │  │ 备份 app.asar → app.asar.bak                       │  │
+ │  │ copy new app.asar → app.asar                       │  │
+ │  │ 写入 update-marker.json                            │  │
+ │  │ 重启 CMBDevClaw.exe                                │  │
+ │  └───────────────────────────────────────────────────┘  │
+ │                                                          │
+ │  (新版本启动)                                             │
+ │              │                      │ 检测到 marker       │
+ │              │                      │ 自检通过 → 删 marker │
+ │              │  正常使用              │                    │
+```
+
+### 11.2 全量 zip 更新
+
+```
+用户         Renderer              Main 进程            ECS 服务器
+ │              │                      │                    │
+ │              │                      ├── POST latest.json →
+ │              │                      ←── full.file=.zip ──┤
+ │              │  ←─ update:available ─┤                    │
+ │              │     (updateType=full) │                    │
+ │  点击"立即更新"                      │                    │
+ │  ──────────→ │── update:download ──→│                    │
+ │              │                      ├── POST xxx.zip ────→
+ │              │  ←─ update:progress ─┤                    │
+ │              │                      │ SHA256 校验通过     │
+ │              │  ←─ update:downloaded┤ (.zip 原样保存)     │
+ │  点击"立即重启"                      │                    │
+ │  ──────────→ │── update:install ───→│                    │
+ │              │                      │ 生成 full-update.bat│
+ │              │                      │ spawn detached      │
+ │              │                      │ app.quit()          │
+ │              (Electron 退出)         │                    │
+ │                                                          │
+ │  ┌─ full-update.bat 独立执行 ─────────────────────────┐  │
+ │  │ tasklist 等待进程消失 ✓                             │  │
+ │  │ xcopy 备份整个 appDir → appDir.bak                 │  │
+ │  │ PowerShell Expand-Archive 解压 zip 到 %TEMP%       │  │
+ │  │ xcopy 覆盖所有文件到 appDir（失败从 bak 恢复）       │  │
+ │  │ 写 update-marker.json                              │  │
+ │  │ 清理 %TEMP% 和 zip                                 │  │
+ │  │ 重启 CMBDevClaw.exe                                │  │
+ │  └───────────────────────────────────────────────────┘  │
+```
+
+### 11.3 回退流程
+
+```
+用户              Renderer              Main 进程
+ │                   │                      │
+ │  点击"回退到上一版本"                     │
+ │  ──────────────→  │── update:rollback ──→│
+ │                   │                      │
+ │                   │                      │ 检查 app.asar.bak
+ │                   │                      │ ├─ 存在 → 直接用
+ │                   │                      │ └─ 不存在 → 下载旧版 ASAR
+ │                   │                      │
+ │  ←── 弹窗确认 ────│                      │
+ │                   │                      │
+ │  点击"确认回退"    │                      │
+ │  ──────────────→  │── 确认 ─────────────→│
+ │                   │                      │ 生成 rollback.bat
+ │                   │                      │ spawn + quit
+ │                   │                      │
+ │  (应用重启，回到旧版本)                    │
+```
+
+---
+
+## 十二、异常处理
+
+| 异常场景 | 处理方式 |
+|---------|---------|
+| ECS 服务器不可达 | 静默重试（定时轮询场景）；手动检查时弹窗提示"无法连接更新服务器" |
+| 下载中断（网络断开） | 删除不完整文件，弹窗提示"下载失败，请重试" |
+| SHA256 校验失败 | 删除文件，弹窗提示"文件损坏，请重试" |
+| update.bat 替换失败 | BAT 脚本内自动回滚 bak 文件 |
+| full-update.bat xcopy 失败 | 从 appDir.bak 恢复整个目录 |
+| BAT 等待进程超时 (30s) | BAT 脚本退出，用户下次手动重试 |
+| 新版本启动自检失败 | 自动生成 rollback.bat，回滚到 bak 版本并重启 |
+| 磁盘空间不足 | 下载前检查可用空间，不足时弹窗提示 |
+
+---
+
+## 十三、安全性
+
+1. **SHA256 校验**：所有下载文件必须通过哈希校验才能使用，防止传输损坏或篡改
+2. **备份机制**：ASAR 更新备份 app.asar.bak；全量更新备份整个运行目录为 appDir.bak
+3. **启动自检**：更新后首次启动自动验证版本号，失败自动回退，用户无感知
+4. **非破坏性**：任何更新都不影响用户数据（`~/.cmbcoworkagent/` 中的数据库、配置、日志完全不动）
+5. **双模式兼容**：zip 模式无需执行 exe，规避公司安全策略拦截；开白名单后切换 exe 模式只需改 latest.json
+
+---
+
+## 十四、实现优先级
+
+```
+P0 — 已完成（核心链路）:
+  ✅ checker.ts      版本检查 + 类型判定
+  ✅ downloader.ts   POST 下载 + SHA256 校验 + gz/zip/exe 分类处理
+  ✅ installer.ts    ASAR 替换（update.bat）+ 全量更新（zip BAT 或 NSIS exe 双模式）
+  ✅ rollback.ts     启动自检 + 自动回退 + 手动回退
+  ✅ IPC 注册 + Preload 暴露 + 定时检查
+  ✅ UpdateDialog.tsx 弹窗 UI（确认 + 进度条 + 重启 + 错误）
+  ✅ ChatContainer.tsx 版本按钮改为触发更新弹窗
+
+P1 — 待实现:
+  ⬜ CustomizeView.tsx 增加"回退到上一版本"按钮
+  ⬜ ECS 上传 latest.json + 第一个 asar.gz（运维工作）
+  ⬜ VITE_UPDATE_SERVER_URL 配置实际地址
+
+P2 — 可选优化:
+  ⬜ scripts/publish-update.sh 发版自动化脚本
+  ⬜ 断点续传
+  ⬜ macOS 平台支持
+```

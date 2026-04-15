@@ -4,7 +4,35 @@ import { StreamingMarkdown } from "./StreamingMarkdown"
 import { getToolLabel } from "@/lib/tool-labels"
 import { emitOpenResourcePreview } from "@/lib/resource-preview-events"
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Eye, Wrench } from "lucide-react"
+import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine } from "lucide-react"
+import { toast } from "sonner"
+
+function extractMessagePlainText(content: Message["content"]): string {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+
+  return content
+    .map((block) => {
+      if (block.type === "text") return block.text ?? ""
+      if (typeof block.content === "string") return block.content
+      return ""
+    })
+    .filter(Boolean)
+    .join("\n")
+}
+
+function formatMessageTime(createdAt: Date): string {
+  const date = createdAt instanceof Date ? createdAt : new Date(createdAt)
+  if (Number.isNaN(date.getTime())) return "--:--:--"
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  })
+}
 
 // 获取工具调用的简要描述
 function getToolCallSummary(toolCall: { name: string; args?: Record<string, unknown> }): string {
@@ -53,9 +81,11 @@ interface MessageBubbleProps {
   message: Message
   previousMessage?: Message | null
   isStreaming?: boolean
+  showAssistantMeta?: boolean
   toolResults?: Map<string, ToolResultInfo>
   pendingApproval?: HITLRequest | null
   onApprovalDecision?: (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit") => void
+  onEditUserMessage?: (message: Message) => void
   threadId: string
 }
 
@@ -63,15 +93,19 @@ export function MessageBubble({
   message,
   previousMessage,
   isStreaming = true,
+  showAssistantMeta = true,
   toolResults,
   pendingApproval,
   onApprovalDecision,
+  onEditUserMessage,
   threadId
 }: MessageBubbleProps): React.JSX.Element | null {
   const [collapsedTools, setCollapsedTools] = useState<Set<string>>(new Set())
   const [collapsedHtmlTools, setCollapsedHtmlTools] = useState<Set<string>>(new Set())
+  const [copySuccess, setCopySuccess] = useState(false)
   const isUser = message.role === "user"
   const isTool = message.role === "tool"
+  const createdAtLabel = formatMessageTime(message.created_at)
 
   // 判断是否显示 MessageHead：如果当前不是用户消息，且是第一条非用户消息
   const shouldShowMessageHead = !isUser && (!previousMessage || previousMessage.role === "user")
@@ -155,6 +189,24 @@ export function MessageBubble({
 
   const content = renderContent()
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0
+  const plainTextForCopy = extractMessagePlainText(message.content)
+
+  const handleCopyMessage = async (): Promise<void> => {
+    if (!plainTextForCopy.trim()) {
+      toast.error("该消息暂无可复制内容")
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(plainTextForCopy)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 1800)
+      toast.success("已复制消息内容")
+    } catch (error) {
+      console.error("[MessageBubble] Failed to copy message:", error)
+      toast.error("复制失败，请重试")
+    }
+  }
 
   // Don't render if there's no content and no tool calls
   if (!content && !hasToolCalls) {
@@ -163,16 +215,39 @@ export function MessageBubble({
 
   if (isUser) {
     return (
-      <div className="flex justify-end overflow-hidden py-4">
-        <div className="rounded-lg p-3 overflow-hidden bg-primary/10 max-w-[80%]">
-          {content}
+      <div className="group flex justify-end overflow-hidden py-4">
+        <div className="flex max-w-[80%] flex-col items-end gap-1">
+          <div className="rounded-lg p-3 overflow-hidden bg-primary/10">
+            {content}
+          </div>
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            {/*<span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>*/}
+            <button
+              type="button"
+              onClick={handleCopyMessage}
+              className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+              title="复制消息"
+              aria-label="复制消息"
+            >
+              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => onEditUserMessage?.(message)}
+              className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+              title="编辑后重新发送"
+              aria-label="编辑后重新发送"
+            >
+              <PencilLine className="size-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="overflow-hidden space-y-1.5">
+    <div className="group overflow-hidden space-y-1.5">
       {shouldShowMessageHead && (
         <div className="flex items-center gap-2 mb-4">
           <svg className="size-5 shrink-0" viewBox="0 0 120 120" fill="none">
@@ -206,6 +281,20 @@ export function MessageBubble({
       )}
       <div className="flex-1 min-w-0 space-y-2 overflow-hidden pl-7">
         {content && <div className="rounded-lg px-3 overflow-hidden">{content}</div>}
+        {content && showAssistantMeta && (
+          <div className="flex items-center gap-1 px-3 opacity-0 transition-opacity group-hover:opacity-100">
+            {/*<span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>*/}
+            <button
+              type="button"
+              onClick={handleCopyMessage}
+              className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+              title="复制消息"
+              aria-label="复制消息"
+            >
+              {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+            </button>
+          </div>
+        )}
         {hasToolCalls && (
           <div className="space-y-2 overflow-hidden">
             {message.tool_calls!.map((toolCall, index) => {

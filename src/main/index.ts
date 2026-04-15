@@ -1,4 +1,11 @@
 import { app, shell, BrowserWindow, ipcMain, nativeImage, powerSaveBlocker } from "electron"
+
+// Fix Linux sandbox error: "The setuid sandbox is not running as root"
+// On Linux the chrome-sandbox binary often lacks setuid permissions in packaged apps.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox")
+}
+
 import { existsSync } from "fs"
 import { join } from "path"
 import { writeMainLog, writeRendererLog } from "./logging"
@@ -74,17 +81,23 @@ import { registerSandboxHandlers } from "./ipc/sandbox"
 import { registerOptimizerHandlers } from "./ipc/optimizer"
 import { registerChatXHandlers } from "./ipc/chatx"
 import { registerHooksHandlers } from "./ipc/hooks"
+import { registerTerminalHandlers, disposeAllTerminals } from "./ipc/terminal"
+import { registerCodeExecToolsHandlers } from "./ipc/code-exec-tools"
 import { registerRoutingHandlers } from "./ipc/routing"
+import { registerDashboardHandlers } from "./ipc/dashboard"
 import { setTraceReporter } from "./agent/trace/collector"
-import { S3TraceReporter } from "./agent/trace/s3-reporter"
+import { CloudTraceReporter } from "./agent/trace/cloud-reporter"
+import { setEventReporter, HttpEventReporter } from "./services/event-reporter"
 import { initializeDatabase, flush } from "./db"
 import { startScheduler, stopScheduler } from "./services/scheduler"
 import { startHeartbeat, stopHeartbeat } from "./services/heartbeat"
 import { startChatX, stopChatX } from "./services/chatx"
 import { LocalSandbox } from "./agent/local-sandbox"
 import { closeRuntime } from "./agent/runtime"
+import { registerUpdaterHandlers, startUpdateChecker, stopUpdateChecker } from "./updater"
+import { runStartupSelfCheck } from "./updater/rollback"
 import { isKeepAwakeEnabled, setKeepAwakeEnabled } from "./storage"
-import  os from "os";
+import { getLocalIP } from "./net-utils"
 
 let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
@@ -132,31 +145,13 @@ function getDevMacDockIconPath(): string | undefined {
   return getBuildIconPath("icon.png") ?? getBuildIconPath("icon.ico")
 }
 
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  let localIP = '';
-
-  // 遍历所有网卡
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      // 过滤掉 IPv6、回环地址（127.0.0.1）、内部地址
-      if (iface.family === 'IPv4' && !iface.internal) {
-        localIP = iface.address;
-        // 如果你有多个网卡（比如同时连WiFi和网线），可以根据需求选择第一个/指定网卡的IP
-        break;
-      }
-    }
-    if (localIP) break;
-  }
-
-  return localIP || '127.0.0.1';
-}
+// getLocalIP moved to ./net-utils — imported above
 
 function createWindow(): void {
   const devWindowIcon = process.platform === "win32" && isDev ? getDevWindowsIconPath() : undefined
 
   mainWindow = new BrowserWindow({
-    width: 1440,
+    width: 1500,
     height: 900,
     minWidth: 1200,
     minHeight: 700,
@@ -169,7 +164,7 @@ function createWindow(): void {
       sandbox: false
     },
     ...(devWindowIcon ? { icon: devWindowIcon } : {}),
-    autoHideMenuBar: !['.166','.147','.216','.215','.225'].some(ip => getLocalIP().includes(ip)) // 自动隐藏菜单栏
+    autoHideMenuBar: !['.166','.147','.216','.215','.225', '201.99'].some(ip => getLocalIP().includes(ip)) // 自动隐藏菜单栏
   })
 
   mainWindow.on("ready-to-show", () => {
@@ -294,11 +289,15 @@ if (!gotTheLock) {
       })
     }
 
-    // Register S3 trace reporter if API base URL is configured
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined
-    if (apiBaseUrl) {
-      setTraceReporter(new S3TraceReporter(apiBaseUrl))
-      console.log("[Main] S3TraceReporter registered, uploading traces to:", apiBaseUrl)
+    // Register cloud trace reporter if trace base URL is configured
+    const traceBaseUrl = import.meta.env.VITE_API_TRACE_BASE_URL as string | undefined
+    if (traceBaseUrl) {
+      setTraceReporter(new CloudTraceReporter(traceBaseUrl))
+      console.log("[Main] CloudTraceReporter registered, uploading traces to:", traceBaseUrl)
+
+      // Operational telemetry events (skill / git) share the same base URL.
+      setEventReporter(new HttpEventReporter(traceBaseUrl))
+      console.log("[Main] HttpEventReporter registered, sending events to:", traceBaseUrl)
     }
 
     // Initialize database
@@ -319,7 +318,11 @@ if (!gotTheLock) {
     registerOptimizerHandlers(ipcMain)
     registerChatXHandlers(ipcMain)
     registerHooksHandlers(ipcMain)
+    registerTerminalHandlers(ipcMain)
+    registerCodeExecToolsHandlers(ipcMain)
     registerRoutingHandlers(ipcMain)
+    registerDashboardHandlers(ipcMain)
+    registerUpdaterHandlers()
 
     // Register file system handlers
     ipcMain.handle("get-platform", async () => {
@@ -393,12 +396,34 @@ if (!gotTheLock) {
       }
     })
 
+    ipcMain.handle("open-login-page", async () => {
+      if(mainWindow && !mainWindow.isDestroyed() && !isDev) {
+        mainWindow.loadURL(`https://oa-auth.paas.${import.meta.env.VITE_LOGIN_PT}.com/auth/sso-login` +
+          "?client_id=5221ab160e0145d9b0736c2f8fb84229" +
+          "&redirect_uri=" + encodeURIComponent(`https://cmbdevclawweb.paas.${import.meta.env.VITE_LOGIN_PT}.cn/login.html`) +
+          "&response_type=code")
+      }
+    })
+
+    ipcMain.handle("close-login-page", async () => {
+      if(mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+      }
+    })
+
     createWindow()
+
+    // Run post-update self-check before anything else
+    const selfCheckResult = await runStartupSelfCheck()
+
+    // Expose result to renderer — renderer polls this on mount to show update toast
+    ipcMain.handle("update:get-startup-result", () => selfCheckResult)
 
     // Start scheduled task scheduler and heartbeat service
     startScheduler()
     startHeartbeat()
     startChatX()
+    startUpdateChecker()
 
     // ── Keep Awake ──
     applyKeepAwake(isKeepAwakeEnabled())
@@ -424,10 +449,12 @@ if (!gotTheLock) {
 
   app.on("will-quit", () => {
     applyKeepAwake(false)
+    disposeAllTerminals()
     LocalSandbox.killAll()
     stopScheduler()
     stopHeartbeat()
     stopChatX()
+    stopUpdateChecker()
     closeRuntime().catch((e) => console.warn("[Main] closeRuntime error:", e))
     flush()
   })

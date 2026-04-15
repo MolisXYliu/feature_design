@@ -15,7 +15,7 @@ interface EvolutionRunProgress {
 
 interface AppState {
   // Main content view routing
-  mainView: "thread" | "customize" | "evolution" | "kanban"
+  mainView: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard"
 
   // Threads
   threads: Thread[]
@@ -38,6 +38,17 @@ interface AppState {
   // Kanban view state
   showKanbanView: boolean
   showSubagentsInKanban: boolean
+
+  // Claude Code view state
+  showClaudeCodeView: boolean
+  previousThreadId: string | null  // 切换到 Claude Code 前保存的线程 ID
+  setShowClaudeCodeView: (show: boolean) => void
+
+  // Dashboard view state
+  showDashboardView: boolean
+  setShowDashboardView: (show: boolean) => void
+  dashboardAllowed: boolean | null  // null = loading
+  loadDashboardAllowed: () => Promise<void>
 
   // Customize view state
   showCustomizeView: boolean
@@ -73,7 +84,7 @@ interface AppState {
 
   // Customize actions
   setShowCustomizeView: (show: boolean, tab?: string) => void
-  setMainView: (view: "thread" | "customize" | "evolution" | "kanban") => void
+  setMainView: (view: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard") => void
 
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
@@ -136,6 +147,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   mainView: "thread",
   showKanbanView: false,
   showSubagentsInKanban: true,
+  showClaudeCodeView: false,
+  showDashboardView: false,
+  dashboardAllowed: null,
+  previousThreadId: null,
   showCustomizeView: false,
   customizeInitialTab: null,
   pluginVersion: 0,
@@ -167,6 +182,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       currentThreadId: thread.thread_id,
       showKanbanView: false,
       showCustomizeView: false,
+      showClaudeCodeView: false,
+      showDashboardView: false,
+      previousThreadId: null,
       mainView: "thread"
       // skillGenerationByThread is NOT reset here: new threads start with no entry
       // in the map, so the card is naturally absent without discarding other threads' state.
@@ -179,6 +197,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       currentThreadId: threadId,
       showKanbanView: false,
       showCustomizeView: false,
+      showClaudeCodeView: false,
+      showDashboardView: false,
+      previousThreadId: null,
       mainView: "thread"
       // skillGenerationByThread is NOT cleared here: each thread retains its own card
       // state so switching back to a thread shows the card exactly as it was left.
@@ -200,7 +221,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         return {
           threads,
-          currentThreadId: newCurrentId
+          currentThreadId: newCurrentId,
+          // 如果被删除的线程是之前保存的，清掉避免恢复到无效 id
+          previousThreadId: state.previousThreadId === threadId ? null : state.previousThreadId
         }
       })
     } catch (error) {
@@ -262,17 +285,76 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ rightPanelCollapsed: collapsed })
   },
 
-  // Kanban actions
-  setShowKanbanView: (show: boolean) => {
+  // Claude Code actions
+  setShowClaudeCodeView: (show: boolean) => {
     if (show) {
+      // 保存当前线程 ID，切回时恢复；如果已有保存的（如从看板过来），不覆盖
+      const prev = get().previousThreadId || get().currentThreadId
       set({
-        showKanbanView: true,
+        showClaudeCodeView: true,
+        showKanbanView: false,
         showCustomizeView: false,
-        mainView: "kanban",
+        showDashboardView: false,
+        mainView: "claudecode",
+        previousThreadId: prev,
         currentThreadId: null
       })
     } else {
-      set({ showKanbanView: false, mainView: "thread" })
+      const restored = get().previousThreadId
+      set({
+        showClaudeCodeView: false,
+        mainView: "thread",
+        currentThreadId: restored,
+        previousThreadId: null
+      })
+    }
+  },
+
+  // Dashboard actions
+  loadDashboardAllowed: async () => {
+    const allowed = await window.api.dashboard.isAllowed().catch(() => false)
+    set({ dashboardAllowed: allowed })
+  },
+
+  setShowDashboardView: (show: boolean) => {
+    if (show) {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        showDashboardView: true,
+        showClaudeCodeView: false,
+        showKanbanView: false,
+        showCustomizeView: false,
+        mainView: "dashboard",
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+    } else {
+      const restored = get().previousThreadId
+      set({
+        showDashboardView: false,
+        mainView: "thread",
+        ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
+      })
+    }
+  },
+
+  // Kanban actions
+  setShowKanbanView: (show: boolean) => {
+    if (show) {
+      // 保存当前线程（如果有且没有已保存的）
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        showKanbanView: true,
+        showCustomizeView: false,
+        showClaudeCodeView: false,
+        showDashboardView: false,
+        mainView: "kanban",
+        currentThreadId: null,
+        previousThreadId: prev
+      })
+    } else {
+      const restored = get().previousThreadId
+      set({ showKanbanView: false, mainView: "thread", ...(restored ? { currentThreadId: restored, previousThreadId: null } : {}) })
     }
   },
 
@@ -285,14 +367,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         showCustomizeView: true,
         showKanbanView: false,
+        showClaudeCodeView: false,
+        showDashboardView: false,
         customizeInitialTab: tab ?? null,
         mainView: "customize"
       })
     } else {
+      const restored = get().previousThreadId
       set({
         showCustomizeView: false,
         customizeInitialTab: null,
-        mainView: "thread"
+        mainView: "thread",
+        ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
       })
     }
   },
@@ -303,6 +389,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         mainView: "kanban",
         showKanbanView: true,
         showCustomizeView: false,
+        showClaudeCodeView: false,
         currentThreadId: null
       })
       return
@@ -312,7 +399,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         mainView: "customize",
         showCustomizeView: true,
-        showKanbanView: false
+        showKanbanView: false,
+        showClaudeCodeView: false
       })
       return
     }
@@ -322,15 +410,46 @@ export const useAppStore = create<AppState>((set, get) => ({
         mainView: "customize",
         showCustomizeView: true,
         showKanbanView: false,
+        showClaudeCodeView: false,
         customizeInitialTab: "evolution"
       })
       return
     }
 
+    if (view === "dashboard") {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        mainView: "dashboard",
+        showDashboardView: true,
+        showCustomizeView: false,
+        showKanbanView: false,
+        showClaudeCodeView: false,
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+      return
+    }
+
+    if (view === "claudecode") {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        mainView: "claudecode",
+        showClaudeCodeView: true,
+        showCustomizeView: false,
+        showKanbanView: false,
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+      return
+    }
+
+    const restored = get().previousThreadId
     set({
       mainView: "thread",
       showCustomizeView: false,
-      showKanbanView: false
+      showKanbanView: false,
+      showClaudeCodeView: false,
+      ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
     })
   },
 

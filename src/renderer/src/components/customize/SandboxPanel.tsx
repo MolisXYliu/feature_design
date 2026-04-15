@@ -17,19 +17,22 @@ const MODE_OPTIONS: ModeOption[] = [
   {
     value: "elevated",
     label: "强隔离沙箱",
-    description: "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
+    description:
+      "使用独立沙箱用户 + 防火墙 + 强 ACL 隔离运行命令。首次启用需要管理员权限进行一次性配置（UAC 提示）。提供最强的隔离级别。",
     icon: <ShieldPlus className="size-4" />
   },
   {
     value: "unelevated",
     label: "受限令牌沙箱",
-    description: "使用 Codex 受限令牌沙箱隔离命令执行：工作目录外文件写保护、主流网络工具软阻断（npm/pip/git/curl）。无需管理员权限，零配置。",
+    description:
+      "使用 Codex 受限令牌沙箱隔离命令执行：工作目录外文件写保护、主流网络工具软阻断（npm/pip/git/curl）。无需管理员权限，零配置。",
     icon: <Shield className="size-4" />
   },
   {
     value: "readonly",
     label: "只读沙箱",
-    description: "命令可读取所有文件，普通权限下禁止写入；以管理员身份运行时允许写入工作目录。适合安全审查、代码分析等场景。",
+    description:
+      "命令可读取所有文件，普通权限下禁止写入；以管理员身份运行时允许写入工作目录。适合安全审查、代码分析等场景。",
     icon: <ShieldCheck className="size-4" />
   },
   {
@@ -90,72 +93,79 @@ export function SandboxPanel(): React.JSX.Element {
     })
   }, [loadSettings])
 
-  const handleSelectMode = useCallback(async (newMode: SandboxMode) => {
-    if (newMode === mode || modePending) return
+  const handleSelectMode = useCallback(
+    async (newMode: SandboxMode) => {
+      if (newMode === mode || modePending) return
 
-    // Elevated mode requires setup flow
-    if (newMode === "elevated") {
-      setModePending(true)
-      setElevatedSetupError(null)
+      // Elevated mode requires setup flow
+      if (newMode === "elevated") {
+        setModePending(true)
+        setElevatedSetupError(null)
 
-      try {
-        // Step 1: Check if setup is already complete
-        setElevatedSetupStatus("checking")
-        const { setupComplete } = await window.api.sandbox.checkElevatedSetup()
+        try {
+          // Step 1: Check if setup is already complete
+          setElevatedSetupStatus("checking")
+          const { setupComplete } = await window.api.sandbox.checkElevatedSetup()
 
-        if (setupComplete) {
-          // Setup already done, just switch mode
-          await window.api.sandbox.setMode("elevated")
-          // BUG 3 fix: explicitly reload to ensure mode badge updates immediately
-          await loadSettings()
-          if (mountedRef.current) {
-            setElevatedSetupStatus("done")
-            // BUG 5 fix: auto-clear done status after 3 seconds
-            setTimeout(() => { if (mountedRef.current) setElevatedSetupStatus("idle") }, 3000)
-          }
-        } else {
-          // Step 2: Run setup with UAC
-          setElevatedSetupStatus("running")
-          const result = await window.api.sandbox.runElevatedSetup()
-
-          if (result.success) {
+          if (setupComplete) {
+            // Setup already done, just switch mode
             await window.api.sandbox.setMode("elevated")
+            // BUG 3 fix: explicitly reload to ensure mode badge updates immediately
             await loadSettings()
             if (mountedRef.current) {
               setElevatedSetupStatus("done")
-              setTimeout(() => { if (mountedRef.current) setElevatedSetupStatus("idle") }, 3000)
+              // BUG 5 fix: auto-clear done status after 3 seconds
+              setTimeout(() => {
+                if (mountedRef.current) setElevatedSetupStatus("idle")
+              }, 3000)
             }
           } else {
-            if (mountedRef.current) {
-              setElevatedSetupError(result.error || "配置失败")
-              setElevatedSetupStatus("error")
+            // Step 2: Run setup with UAC
+            setElevatedSetupStatus("running")
+            const result = await window.api.sandbox.runElevatedSetup()
+
+            if (result.success) {
+              await window.api.sandbox.setMode("elevated")
+              await loadSettings()
+              if (mountedRef.current) {
+                setElevatedSetupStatus("done")
+                setTimeout(() => {
+                  if (mountedRef.current) setElevatedSetupStatus("idle")
+                }, 3000)
+              }
+            } else {
+              if (mountedRef.current) {
+                setElevatedSetupError(result.error || "配置失败")
+                setElevatedSetupStatus("error")
+              }
             }
           }
+        } catch (e) {
+          if (mountedRef.current) {
+            setElevatedSetupError(String(e))
+            setElevatedSetupStatus("error")
+          }
+        } finally {
+          if (mountedRef.current) setModePending(false)
         }
+        return
+      }
+
+      // Other modes: direct switch
+      setModePending(true)
+      setElevatedSetupStatus("idle")
+      setElevatedSetupError(null)
+      try {
+        await window.api.sandbox.setMode(newMode)
       } catch (e) {
-        if (mountedRef.current) {
-          setElevatedSetupError(String(e))
-          setElevatedSetupStatus("error")
-        }
+        console.error("[SandboxPanel] Failed to set mode:", e)
+        loadSettings()
       } finally {
         if (mountedRef.current) setModePending(false)
       }
-      return
-    }
-
-    // Other modes: direct switch
-    setModePending(true)
-    setElevatedSetupStatus("idle")
-    setElevatedSetupError(null)
-    try {
-      await window.api.sandbox.setMode(newMode)
-    } catch (e) {
-      console.error("[SandboxPanel] Failed to set mode:", e)
-      loadSettings()
-    } finally {
-      if (mountedRef.current) setModePending(false)
-    }
-  }, [mode, modePending, loadSettings])
+    },
+    [mode, modePending, loadSettings]
+  )
 
   const handleFallbackToUnelevated = useCallback(async () => {
     if (modePending) return
@@ -197,7 +207,6 @@ export function SandboxPanel(): React.JSX.Element {
   return (
     <div className="flex flex-1 overflow-hidden isolate">
       <div className="w-full flex flex-col p-6 gap-8 overflow-y-auto">
-
         {/* Yolo 模式 */}
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
@@ -207,7 +216,10 @@ export function SandboxPanel(): React.JSX.Element {
 
           <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-600 dark:text-amber-400">
             <Info className="size-4 mt-0.5 shrink-0" />
-            <p>开启后，Agent 执行命令时不再弹出审批确认，所有操作自动放行。适合熟悉任务内容、希望全自动运行的场景。切换后将在下一次对话中生效。</p>
+            <p>
+              开启后，Agent
+              执行命令时不再弹出审批确认，所有操作自动放行。适合熟悉任务内容、希望全自动运行的场景。切换后将在下一次对话中生效。
+            </p>
           </div>
 
           <button
@@ -222,20 +234,28 @@ export function SandboxPanel(): React.JSX.Element {
             )}
           >
             <div className="flex items-center gap-3">
-              <Zap className={cn("size-4 shrink-0", yolo ? "text-amber-500" : "text-muted-foreground")} />
+              <Zap
+                className={cn("size-4 shrink-0", yolo ? "text-amber-500" : "text-muted-foreground")}
+              />
               <div className="flex flex-col gap-1">
                 <span className="text-sm font-medium">YOLO 模式</span>
-                <p className="text-xs text-muted-foreground">跳过所有命令执行审批，Agent 全自动运行</p>
+                <p className="text-xs text-muted-foreground">
+                  跳过所有命令执行审批，Agent 全自动运行
+                </p>
               </div>
             </div>
-            <div className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors",
-              yolo ? "bg-amber-500" : "bg-muted-foreground/30"
-            )}>
-              <span className={cn(
-                "inline-block size-4 rounded-full bg-white shadow transition-transform mt-0.5",
-                yolo ? "translate-x-4" : "translate-x-0.5"
-              )} />
+            <div
+              className={cn(
+                "relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors",
+                yolo ? "bg-amber-500" : "bg-muted-foreground/30"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block size-4 rounded-full bg-white shadow transition-transform mt-0.5",
+                  yolo ? "translate-x-4" : "translate-x-0.5"
+                )}
+              />
             </div>
           </button>
         </div>
@@ -244,7 +264,9 @@ export function SandboxPanel(): React.JSX.Element {
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
             <Shield className="size-5" />
-            <h2 className={cn("text-lg font-bold", !isWindows && "text-muted-foreground")}>Windows 沙箱</h2>
+            <h2 className={cn("text-lg font-bold", !isWindows && "text-muted-foreground")}>
+              Windows 沙箱
+            </h2>
             {!isWindows && (
               <span className="text-xs text-muted-foreground">（仅 Windows 可用）</span>
             )}
@@ -292,7 +314,10 @@ export function SandboxPanel(): React.JSX.Element {
                     </button>
                     <button
                       className="px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => { setDevMode(false); setDevPassword("") }}
+                      onClick={() => {
+                        setDevMode(false)
+                        setDevPassword("")
+                      }}
                     >
                       ✕
                     </button>
@@ -306,7 +331,12 @@ export function SandboxPanel(): React.JSX.Element {
             <div className="flex flex-col gap-2">
               <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-400">
                 <Info className="size-4 mt-0.5 shrink-0" />
-                <p>根据公司安全管控要求，Agent 执行命令须在隔离环境中运行，<strong>非经审批不得关闭或降级沙箱模式</strong>。日常开发请保持使用<strong>强隔离沙箱</strong>，其他模式仅限经授权的开发人员在调试场景下使用。</p>
+                <p>
+                  根据公司安全管控要求，Agent 执行命令须在隔离环境中运行，日常开发请保持使用
+                  <strong>强隔离沙箱</strong>。
+                  <strong>当前版本临时放开“关闭（不启用沙箱）”选择</strong>
+                  ，其他受限模式仍仅限经授权的开发人员在调试场景下使用。
+                </p>
               </div>
               {unlocked && (
                 <div className="flex items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-600 dark:text-blue-400">
@@ -324,7 +354,10 @@ export function SandboxPanel(): React.JSX.Element {
 
           <div className={cn("flex flex-col gap-3 max-w-lg", !isWindows && "opacity-40")}>
             {MODE_OPTIONS.map((opt) => {
-              const isRestricted = opt.value !== "elevated" && opt.value !== "unelevated" && !unlocked
+              // Temporary policy:
+              // Allow selecting "none" (关闭/不启用沙箱) without developer unlock.
+              // Keep other restricted modes behind developer channel for now.
+              const isRestricted = opt.value === "readonly" && !unlocked
               const isDisabled = !isWindows || modePending || isRestricted
               return (
                 <div key={opt.value} className="relative">
@@ -342,10 +375,12 @@ export function SandboxPanel(): React.JSX.Element {
                           : "border-border hover:border-primary/40 hover:bg-muted/40"
                     )}
                   >
-                    <div className={cn(
-                      "mt-0.5 shrink-0",
-                      mode === opt.value ? "text-primary" : "text-muted-foreground"
-                    )}>
+                    <div
+                      className={cn(
+                        "mt-0.5 shrink-0",
+                        mode === opt.value ? "text-primary" : "text-muted-foreground"
+                      )}
+                    >
                       {opt.icon}
                     </div>
                     <div className="flex flex-col gap-1">
@@ -368,7 +403,6 @@ export function SandboxPanel(): React.JSX.Element {
                 </div>
               )
             })}
-
           </div>
 
           {/* Elevated setup status */}
@@ -401,7 +435,10 @@ export function SandboxPanel(): React.JSX.Element {
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={() => { setElevatedSetupStatus("idle"); setElevatedSetupError(null) }}
+                  onClick={() => {
+                    setElevatedSetupStatus("idle")
+                    setElevatedSetupError(null)
+                  }}
                   className="self-start rounded-md border border-red-500/30 px-3 py-1.5 text-xs hover:bg-red-500/10 transition-colors"
                 >
                   重试
@@ -418,7 +455,6 @@ export function SandboxPanel(): React.JSX.Element {
             </div>
           )}
         </div>
-
       </div>
     </div>
   )

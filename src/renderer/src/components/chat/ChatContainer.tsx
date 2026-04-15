@@ -21,7 +21,6 @@ import {
   Layers,
   Clock,
   Notebook,
-  Megaphone,
   Zap,
   Sparkles,
   Wrench,
@@ -31,7 +30,6 @@ import {
   Loader2
 } from "lucide-react"
 import type { FileAttachment } from "@/types"
-import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useAppStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -41,8 +39,10 @@ import { ModelSwitcher } from "./ModelSwitcher"
 import { WorkspacePicker } from "./WorkspacePicker"
 import { ChatTodos } from "./ChatTodos"
 import { ContextUsageIndicator } from "./ContextUsageIndicator"
+import { GitBranchSwitcher } from "./GitBranchSwitcher"
 import type { Message, SkillMetadata } from "@/types"
 import { MessageBubble } from "./MessageBubble"
+import { UpdateStatusCard } from "./UpdateStatusCard"
 import {
   SkillCreateConfirmDialog,
   type SkillConfirmRequest
@@ -50,7 +50,8 @@ import {
 import { uploadChatData, ChatReportPayload } from "@/api"
 import { marketApi, MarketItem } from "../../api/market"
 import { insertLog, updateMMJUserInfo } from "../../../js/mmjUtils"
-import DisplayDiffTest from "./DisplayDiffTest"
+import { UpdateDialog } from "../update/UpdateDialog"
+import { toast } from "sonner"
 
 interface AgentStreamValues {
   todos?: Array<{ id?: string; content?: string; status?: string }>
@@ -117,6 +118,52 @@ const MAX_ATTACHMENTS = 3
 const MAX_TOTAL_CHARS = 24_000
 const escXml = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 
+const ROTATING_WORDS = [
+  "编写代码", "调试问题", "创建技能", "管理任务",
+  "重构项目", "解答疑惑", "审查代码", "优化性能",
+  "编写测试", "设计方案", "分析日志", "部署上线"
+]
+
+function RotatingHeadline() {
+  const [wordIndex, setWordIndex] = useState(0)
+  const [displayed, setDisplayed] = useState("")
+  const [phase, setPhase] = useState<"typing" | "showing" | "erasing">("typing")
+
+  useEffect(() => {
+    const word = ROTATING_WORDS[wordIndex]
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    if (phase === "typing") {
+      if (displayed.length < word.length) {
+        timer = setTimeout(() => setDisplayed(word.slice(0, displayed.length + 1)), 150)
+      } else {
+        setPhase("showing")
+      }
+    } else if (phase === "showing") {
+      timer = setTimeout(() => setPhase("erasing"), 2000)
+    } else if (phase === "erasing") {
+      if (displayed.length > 0) {
+        timer = setTimeout(() => setDisplayed(displayed.slice(0, -1)), 80)
+      } else {
+        setWordIndex((i) => (i + 1) % ROTATING_WORDS.length)
+        setPhase("typing")
+      }
+    }
+
+    return () => { if (timer) clearTimeout(timer) }
+  }, [displayed, phase, wordIndex])
+
+  return (
+    <div className="mb-6 flex items-center justify-start">
+      <div className="text-2xl md:text-3xl font-bold tracking-tight leading-none">
+        <span className="text-foreground">为你</span>
+        <span className="text-[#D97757] mx-3">{'>'}</span>
+        <span className="text-[#D97757]">{displayed}</span>
+      </div>
+    </div>
+  )
+}
+
 export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -142,7 +189,6 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     }))
   )
   const [yoloMode, setYoloMode] = useState(false)
-  const [showCopyNotification, setShowCopyNotification] = useState(false)
   const [glowVisible, setGlowVisible] = useState(false)
   // NUX (first-run sandbox setup)
   const [showNux, setShowNux] = useState(false)
@@ -160,10 +206,9 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const thinkingCycleRef = useRef(-1)
   const wasLoadingRef = useRef(false)
   const loadingMessageCountRef = useRef(0)
-  const [latestVersion, setLatestVersion] = useState("")
+  const [needUpdateVersion, setNeedUpdateVersion] = useState(false)
   const [modelContextLimit, setModelContextLimit] = useState<number | undefined>(undefined)
-
-  const [version, setVersion] = useState("")
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
 
   useEffect(() => {
     const { ipcRenderer } = window.electron
@@ -171,14 +216,15 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     // 主动请求版本，不依赖推送时序
     ipcRenderer.invoke("get-version").then((ver: unknown) => {
       console.log("版本 (invoke)：", ver)
-      if (ver) setVersion(ver as string)
+      if (ver) {
+        localStorage.setItem("version", ver as string)
+        updateMMJUserInfo()
+      }
     }).catch((e: unknown) => console.warn("get-version failed:", e))
 
     // 保留推送监听作为备用
     const removeListener = ipcRenderer.on("version", (ver: unknown) => {
       console.log("版本 (push)：", ver)
-      setVersion(ver as string)
-
       localStorage.setItem("version", ver as string)
       updateMMJUserInfo()
     })
@@ -333,6 +379,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     draftInput: input,
     scheduledTaskLoading,
     scheduledTaskId,
+    modelRetry,
     setTodos,
     setPendingApproval,
     appendMessage,
@@ -344,6 +391,26 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   // Get the stream data via subscription - reactive updates without re-rendering provider
   const streamData = useThreadStream(threadId)
   const stream = streamData.stream
+  const [savedToolNameInput, setSavedToolNameInput] = useState("")
+  const [savedToolDescriptionInput, setSavedToolDescriptionInput] = useState("")
+  const [saveToolMetadataLoading, setSaveToolMetadataLoading] = useState(false)
+
+  useEffect(() => {
+    const approval = pendingApproval as unknown as Record<string, unknown> | null
+    if (approval?.operation === "save_code_exec_tool") {
+      setSaveToolMetadataLoading(false)
+      setSavedToolNameInput(String(approval.savedToolName || ""))
+      setSavedToolDescriptionInput(String(approval.savedToolDescription || ""))
+      return
+    }
+
+    if (!pendingApproval || approval?.operation !== "prepare_save_code_exec_tool") {
+      setSaveToolMetadataLoading(false)
+    }
+
+    setSavedToolNameInput("")
+    setSavedToolDescriptionInput("")
+  }, [pendingApproval])
   const isLoading = streamData.isLoading || scheduledTaskLoading
 
   // ── File attachments state ──
@@ -510,32 +577,45 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     return () => { ignore = true }
   }, [currentModel])
 
-  const queryLatestVersion = useCallback(async () => {
+  const syncNeedUpdateVersion = useCallback(async () => {
     try {
-      const response = await fetch(
-        import.meta.env.VITE_API_BASE_URL + "/api/trajectories/cmbdevclaw/versions/list",
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json"
-            // Remove placeholder auth token for now
-          }
-        }
-      )
-      const data = await response.json()
-      setLatestVersion(data?.current?.version)
-    } catch (e) {
-      console.log(e)
+      const status = await window.api.update.getStatus()
+      setNeedUpdateVersion(Boolean(status.update) && status.status !== "idle")
+    } catch (error) {
+      console.warn("[ChatContainer] Failed to sync update status:", error)
+      setNeedUpdateVersion(false)
     }
   }, [])
 
-  const needUpdateVersion = useMemo(() => {
-    return latestVersion !== version
-  }, [latestVersion, version])
+  useEffect(() => {
+    const updateApi = window.api.update
+    void syncNeedUpdateVersion()
+
+    const removeAvailable = updateApi.onAvailable(() => {
+      setNeedUpdateVersion(true)
+    })
+    const removeDownloaded = updateApi.onDownloaded(() => {
+      setNeedUpdateVersion(true)
+    })
+    const removeError = updateApi.onError(() => {
+      void syncNeedUpdateVersion()
+    })
+
+    return () => {
+      removeAvailable()
+      removeDownloaded()
+      removeError()
+    }
+  }, [syncNeedUpdateVersion])
+
+  useEffect(() => {
+    if (!updateDialogOpen) {
+      void syncNeedUpdateVersion()
+    }
+  }, [updateDialogOpen, syncNeedUpdateVersion])
 
   useEffect(() => {
     queryRemoteSkills()
-    queryLatestVersion()
     const fetchYoloMode = (): void => {
       window.api.sandbox
         .getYoloMode()
@@ -628,22 +708,42 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
   const handleApprovalDecision = useCallback(
     async (decision: "approve" | "approve_session" | "approve_permanent" | "reject" | "edit"): Promise<void> => {
-      if (!pendingApproval || !stream) return
+      if (!pendingApproval) return
 
       // Check if this is an orchestrator-sourced approval (has requestId)
-      const approvalAny = pendingApproval as Record<string, unknown>
+      const approvalAny = pendingApproval as unknown as Record<string, unknown>
       if (approvalAny._orchestratorRequestId) {
+        const operation = approvalAny.operation as string | undefined
+        if (operation === "prepare_save_code_exec_tool" && decision === "approve") {
+          setSaveToolMetadataLoading(true)
+        } else {
+          setSaveToolMetadataLoading(false)
+        }
+
         // Send decision to main process via the orchestrator's IPC channel
         window.api.sandbox.sendApprovalDecision({
           requestId: approvalAny._orchestratorRequestId as string,
           type: decision === "edit" ? "reject" : decision,
-          tool_call_id: pendingApproval.tool_call?.id || ""
+          tool_call_id: pendingApproval.tool_call?.id || "",
+          ...(approvalAny.operation === "save_code_exec_tool" && decision === "approve"
+            ? { savedToolName: savedToolNameInput }
+            : {}),
+          ...(approvalAny.operation === "save_code_exec_tool" && decision === "approve"
+            ? { savedToolDescription: savedToolDescriptionInput }
+            : {})
         })
-        setPendingApproval(null)
+
+        if (!(operation === "prepare_save_code_exec_tool" && decision === "approve")) {
+          setPendingApproval(null)
+        }
         return
       }
 
       // Legacy HITL approval path (non-execute tools)
+      if (!stream) {
+        setPendingApproval(null)
+        return
+      }
       setPendingApproval(null)
 
       try {
@@ -656,7 +756,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         console.error("[ChatContainer] Resume command failed:", err)
       }
     },
-    [pendingApproval, setPendingApproval, stream, threadId, currentModel]
+    [currentModel, pendingApproval, savedToolDescriptionInput, savedToolNameInput, setPendingApproval, stream, threadId]
   )
 
   const agentValues = stream?.values as AgentStreamValues | undefined
@@ -870,7 +970,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
     if (pendingApproval) {
       // P0 fix: notify main process to reject the pending approval instead of silently dropping it.
       // Otherwise the orchestrator's Promise hangs until the 5-minute timeout.
-      const approvalAny = pendingApproval as Record<string, unknown>
+      const approvalAny = pendingApproval as unknown as Record<string, unknown>
       if (approvalAny._orchestratorRequestId) {
         window.api.sandbox.sendApprovalDecision({
           requestId: approvalAny._orchestratorRequestId as string,
@@ -993,14 +1093,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   }
 
   useEffect(() => {
-    let mounted = true
-
-
     void loadSkills()
-
-    return () => {
-      mounted = false
-    }
   }, [])
 
   // ── Skill creation human-confirmation listener ──────────
@@ -1454,12 +1547,47 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
   const handleCopyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(
       () => {
-        setShowCopyNotification(true)
-        setTimeout(() => setShowCopyNotification(false), 2000)
+        toast.success("已复制目标链接到剪切板，请在浏览器中打开查看")
       },
-      (err) => console.error("Failed to copy text: ", err)
+      (err) => {
+        console.error("Failed to copy text: ", err)
+        toast.error("复制失败，请重试")
+      }
     )
   }
+
+  const extractMessageText = useCallback((content: Message["content"]): string => {
+    if (typeof content === "string") return content
+    if (!Array.isArray(content)) return ""
+
+    return content
+      .map((block) => {
+        if (block.type === "text") return block.text ?? ""
+        if (typeof block.content === "string") return block.content
+        return ""
+      })
+      .filter(Boolean)
+      .join("\n")
+  }, [])
+
+  const handleEditUserMessage = useCallback(
+    (message: Message): void => {
+      const original = extractMessageText(message.content)
+      const withoutAttachmentPreview = original.replace(/^(?:📎[^\n]*\n)+(?:\n)?/u, "").trim()
+      const nextInput = withoutAttachmentPreview || original
+      setInput(nextInput)
+
+      requestAnimationFrame(() => {
+        const textarea = inputRef.current
+        if (!textarea) return
+        textarea.focus()
+        const cursor = nextInput.length
+        textarea.setSelectionRange(cursor, cursor)
+      })
+      toast.success("已填充到输入框，编辑后可重新发送")
+    },
+    [extractMessageText, setInput]
+  )
 
   return (
     <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -1596,32 +1724,13 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
       )}
 
       {/* Skill generation progress is shown in the right panel's 代理 section */}
-      {/* Copy notification */}
-      {showCopyNotification && (
-        <div className="fixed top-[20vh] right-[40vw] z-50 animate-in fade-in-0 slide-in-from-top-2">
-          <div className="rounded-lg border border-border bg-background/95 backdrop-blur-sm px-4 py-2 shadow-lg">
-            <div className="flex items-center gap-2 text-sm text-foreground">
-              <div className="size-4 rounded-full bg-green-500 flex items-center justify-center">
-                <svg className="size-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <span>已复制目标链接到剪切板，请在浏览器中打开查看</span>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4">
           <div className="max-w-3xl mx-auto space-y-4">
             {displayMessages.length === 0 && !isLoading && (
               <div className="pt-14 pb-8">
-                <div className="mb-6 flex items-center justify-start">
-                  <div className="text-2xl md:text-3xl font-bold tracking-tight text-foreground leading-none">
-                    我能帮你做什么？
-                  </div>
-                </div>
+                <RotatingHeadline />
                 {skillsLoading ? (
                   <div className="text-sm text-muted-foreground text-center py-10">正在加载技能列表...</div>
                 ) : skills.length === 0 ? null : (
@@ -1799,54 +1908,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                           </div>
                         </button>
 
-                        {/*版本check*/}
-                        <button
-                          onClick={async () => {
-                            const viteappdownloadurl = import.meta.env.VITE_APP_DOWNLOAD_URL;
-                            handleCopyToClipboard(viteappdownloadurl);
+                        <UpdateStatusCard
+                          hasUpdate={needUpdateVersion}
+                          onClick={() => {
+                            setUpdateDialogOpen(true)
                           }}
-                          type="button"
-                          className={`group relative w-full rounded-xl ${
-                            needUpdateVersion
-                              ? 'border-red-400/60 bg-gradient-to-br from-red-50/90 to-red-100/70 hover:border-red-500 hover:from-red-100 hover:to-red-150/80 shadow-red-100/50'
-                              : 'group w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-left hover:bg-accent/35 hover:border-border transition-colors '
-                          } px-4 py-3.5 text-left transition-all duration-300 ease-out hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] backdrop-blur-sm`}
-                        >
-                          <div className="flex items-center gap-3.5">
-                            <div
-                              className={`${
-                                needUpdateVersion
-                                  ? 'bg-red-100 text-red-600 border-red-200 group-hover:bg-red-200 group-hover:text-red-700 group-hover:shadow-red-200/50'
-                                  : 'rounded-md border border-border/80 p-1.5 text-muted-foreground group-hover:text-foreground transition-colors'
-                              } rounded-lg border p-1 transition-all duration-300 shadow-sm group-hover:shadow-md`}>
-                              <Megaphone size={14} className="drop-shadow-sm" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className={`text-sm font-semibold leading-5 ${
-                                needUpdateVersion ? 'text-red-700' : ''
-                              } transition-colors duration-200`}>
-                                {needUpdateVersion? '发现新版本！' : '版本列表'}
-                              </div>
-                            </div>
-                            {needUpdateVersion && (
-                              <div className="flex items-center gap-2">
-                                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-sm"></div>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 悬浮时的渐变覆盖层 */}
-                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none ${
-                            needUpdateVersion
-                              ? 'bg-gradient-to-br from-red-400/8 via-transparent to-red-500/6'
-                              : 'bg-gradient-to-br from-blue-400/8 via-transparent to-indigo-500/6'
-                          }`}></div>
-
-                          {/* 边框光效 */}
-                          <div className={`absolute inset-0 rounded-xl opacity-0 group-hover:opacity-30 transition-opacity duration-300 pointer-events-none border ${
-                            needUpdateVersion ? 'border-red-300' : 'border-blue-300'
-                          } blur-sm`}></div>
-                        </button>
+                        />
 
 
                       </div>
@@ -1877,6 +1944,12 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
             {displayMessages.map((message, index) => {
               const previousMessage = index > 0 ? displayMessages[index - 1] : null;
               const isLastMessage = index === displayMessages.length - 1;
+              const nextNonToolMessage =
+                displayMessages.slice(index + 1).find((m) => m.role !== "tool") ?? null;
+              const showAssistantMeta =
+                message.role !== "assistant" ||
+                !nextNonToolMessage ||
+                nextNonToolMessage.role !== "assistant";
 
               return (
                 <MessageBubble
@@ -1884,9 +1957,11 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   message={message}
                   previousMessage={previousMessage}
                   isStreaming={isLastMessage && isLoading}
+                  showAssistantMeta={showAssistantMeta}
                   toolResults={toolResults}
                   pendingApproval={pendingApproval}
                   onApprovalDecision={handleApprovalDecision}
+                  onEditUserMessage={handleEditUserMessage}
                   threadId={threadId}
                 />
               );
@@ -1899,6 +1974,19 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
 
 
             {/* Orchestrator standalone approval bar moved outside ScrollArea — see below */}
+            {/* Model retry indicator — shown when the fetch layer is retrying a transient error */}
+            {modelRetry && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50/60 dark:border-amber-500/40 dark:bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                <span className="inline-block size-3 mt-0.5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span>
+                    模型暂时不可用（{modelRetry.reason}），正在重试 {modelRetry.attempt}/{modelRetry.maxRetries}
+                    {modelRetry.delayMs > 0 && <>（等待 {Math.round(modelRetry.delayMs / 100) / 10}s）</>}
+                    …
+                  </span>
+                </div>
+              </div>
+            )}
             {/* Streaming indicator and inline TODOs */}
             {isLoading && (
               <div className="space-y-3">
@@ -1937,46 +2025,148 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
         </div>
       </ScrollArea>
       {/* Orchestrator approval bar — placed outside ScrollArea so it's always visible */}
-      {pendingApproval && (pendingApproval as Record<string, unknown>)._orchestratorRequestId && (
+      {pendingApproval && (pendingApproval as unknown as Record<string, unknown>)._orchestratorRequestId && (
         <div className="px-4 pb-2">
+          {(() => {
+            const approval = pendingApproval as unknown as Record<string, unknown>
+            const operation = approval.operation
+            const isFileApproval = operation === "write_file" || operation === "edit_file"
+            const isCodeExecApproval = operation === "code_exec"
+            const isPrepareSaveCodeExecToolApproval = operation === "prepare_save_code_exec_tool"
+            const isSaveCodeExecToolApproval = operation === "save_code_exec_tool"
+            const isManualSaveCodeExecToolApproval = isSaveCodeExecToolApproval && Boolean(approval.savedToolMetadataError)
+            const approvalParams = approval.params ?? pendingApproval.tool_call?.args?.params ?? {}
+            const hasApprovalParams =
+              approvalParams &&
+              typeof approvalParams === "object" &&
+              !Array.isArray(approvalParams) &&
+              Object.keys(approvalParams as Record<string, unknown>).length > 0
+            const isSaveToolApprovalInvalid =
+              isSaveCodeExecToolApproval &&
+              (
+                !savedToolDescriptionInput.trim() ||
+                (isManualSaveCodeExecToolApproval && !savedToolNameInput.trim())
+              )
+            const approvalTypes = Array.isArray(approval._approvalTypes)
+              ? approval._approvalTypes as Array<"approve" | "approve_session" | "approve_permanent" | "reject">
+              : ["approve", "approve_session", "approve_permanent", "reject"]
+
+            return (
           <div className={`max-w-3xl mx-auto rounded-lg border-2 p-4 space-y-3 ${
-            (pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+            isFileApproval
               ? "border-blue-500/50 bg-blue-500/5"
-              : "border-amber-500/50 bg-amber-500/5"
+              : isCodeExecApproval || isPrepareSaveCodeExecToolApproval || isSaveCodeExecToolApproval
+                ? "border-emerald-500/50 bg-emerald-500/5"
+                : "border-amber-500/50 bg-amber-500/5"
           }`}>
             <div className="flex items-center gap-2">
-              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
+              {isFileApproval
                 ? <FilePenLine className="size-4 text-blue-500" />
+                : isCodeExecApproval
+                  ? <Code2 className="size-4 text-emerald-500" />
+                : isPrepareSaveCodeExecToolApproval
+                  ? <Wrench className="size-4 text-emerald-500" />
+                : isSaveCodeExecToolApproval
+                  ? <Wrench className="size-4 text-emerald-500" />
                 : <ShieldCheck className="size-4 text-amber-500" />}
               <span className="text-sm font-medium">
-                {(pendingApproval as Record<string, unknown>).operation === "write_file"
+                {operation === "write_file"
                   ? "写入文件需要审批"
-                  : (pendingApproval as Record<string, unknown>).operation === "edit_file"
+                  : operation === "edit_file"
                     ? "编辑文件需要审批"
+                    : isCodeExecApproval
+                      ? "执行 MCP 脚本需要审批"
+                    : isPrepareSaveCodeExecToolApproval
+                      ? "是否将脚本注册为工具，便于后续复用"
+                    : isSaveCodeExecToolApproval
+                      ? "保存脚本工具需要确认"
                     : "命令需要审批"}
               </span>
             </div>
-            <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm break-all overflow-hidden">
-              {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file"
-                ? `${(pendingApproval as Record<string, unknown>).operation === "write_file" ? "写入" : "编辑"}: ${String((pendingApproval as Record<string, unknown>).filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
-                : (pendingApproval as Record<string, unknown>).command
-                  ? String((pendingApproval as Record<string, unknown>).command)
-                  : pendingApproval.tool_call?.args?.command
-                    ? String(pendingApproval.tool_call.args.command)
-                    : "unknown command"}
-            </div>
-            {(pendingApproval as Record<string, unknown>)._retryReason && (
-              <div className="text-xs text-amber-600 dark:text-amber-400">
-                {String((pendingApproval as Record<string, unknown>)._retryReason)}
+            {isCodeExecApproval || isPrepareSaveCodeExecToolApproval || isSaveCodeExecToolApproval ? (
+              <>
+                {isSaveCodeExecToolApproval && (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+                        {isManualSaveCodeExecToolApproval ? "tool_name" : "tool_id"}
+                      </div>
+                      {isManualSaveCodeExecToolApproval ? (
+                        <>
+                          <input
+                            className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                            value={savedToolNameInput}
+                            onChange={(event) => setSavedToolNameInput(event.target.value)}
+                            placeholder="例如：list_github_issues"
+                          />
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            最终 tool_id 会基于 tool_name 规范化生成。
+                          </div>
+                        </>
+                      ) : (
+                        <div className="font-mono break-all">
+                          {String(approval.savedToolId || pendingApproval.tool_call?.args?.toolId || "")}
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">description</div>
+                      <textarea
+                        className="min-h-20 w-full resize-y rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+                        value={savedToolDescriptionInput}
+                        onChange={(event) => setSavedToolDescriptionInput(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+                {isManualSaveCodeExecToolApproval && (
+                  <div className="text-xs text-amber-600 dark:text-amber-400">
+                    {String(approval.savedToolMetadataError)}
+                  </div>
+                )}
+                <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm whitespace-pre-wrap break-all overflow-auto max-h-64">
+                  {String(approval.code || pendingApproval.tool_call?.args?.code || "")}
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {hasApprovalParams && (
+                    <div className="rounded-md bg-muted/30 px-3 py-2 text-xs overflow-auto">
+                      <div className="mb-1 text-[11px] font-medium text-muted-foreground">params</div>
+                      <pre className="whitespace-pre-wrap break-all font-mono">
+                        {JSON.stringify(approvalParams, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  <div className="rounded-md bg-muted/30 px-3 py-2 text-xs">
+                    <div className="mb-1 text-[11px] font-medium text-muted-foreground">timeout</div>
+                    <div className="font-mono">
+                      {String(approval.timeoutMs ?? pendingApproval.tool_call?.args?.timeoutMs ?? "default")} ms
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md bg-muted/50 px-3 py-2 font-mono text-sm break-all overflow-hidden">
+                {isFileApproval
+                  ? `${operation === "write_file" ? "写入" : "编辑"}: ${String(approval.filePath || pendingApproval.tool_call?.args?.filePath || "unknown")}`
+                  : approval.command
+                    ? String(approval.command)
+                    : pendingApproval.tool_call?.args?.command
+                      ? String(pendingApproval.tool_call.args.command)
+                      : "unknown command"}
               </div>
             )}
-            {(pendingApproval as Record<string, unknown>).reason && (
+            {Boolean(approval._retryReason) && (
+              <div className="text-xs text-amber-600 dark:text-amber-400">
+                {String(approval._retryReason)}
+              </div>
+            )}
+            {Boolean(approval.reason) && (
               <div className="text-xs text-muted-foreground">
-                原因：{String((pendingApproval as Record<string, unknown>).reason)}
+                原因：{String(approval.reason)}
               </div>
             )}
             <div className="flex items-center gap-2">
-              {(pendingApproval as Record<string, unknown>)._retryReason ? (
+              {approval._retryReason ? (
                 <>
                   <button
                     className="px-3 py-1.5 text-xs bg-amber-500 text-white rounded-md hover:bg-amber-600 transition-colors"
@@ -1993,34 +2183,67 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                 </>
               ) : (
                 <>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-                    onClick={() => handleApprovalDecision("approve")}
-                  >
-                    {(pendingApproval as Record<string, unknown>).operation === "write_file" || (pendingApproval as Record<string, unknown>).operation === "edit_file" ? "允许" : "运行"}
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                    onClick={() => handleApprovalDecision("approve_session")}
-                  >
-                    本会话允许
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
-                    onClick={() => handleApprovalDecision("approve_permanent")}
-                  >
-                    始终允许
-                  </button>
-                  <button
-                    className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
-                    onClick={() => handleApprovalDecision("reject")}
-                  >
-                    拒绝
-                  </button>
+                  {isPrepareSaveCodeExecToolApproval && saveToolMetadataLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      正在生成工具信息，请稍候...
+                    </div>
+                  ) : (
+                    <>
+                  {approvalTypes.includes("approve") && (
+                    <button
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-md transition-colors",
+                        isSaveToolApprovalInvalid
+                          ? "bg-primary/50 text-primary-foreground/80 cursor-not-allowed"
+                          : "bg-primary text-primary-foreground hover:bg-primary/90"
+                      )}
+                      onClick={() => handleApprovalDecision("approve")}
+                      disabled={isSaveToolApprovalInvalid}
+                    >
+                      {isFileApproval
+                        ? "允许"
+                        : isCodeExecApproval
+                          ? "执行脚本"
+                        : isPrepareSaveCodeExecToolApproval
+                          ? "允许注册为工具"
+                        : isSaveCodeExecToolApproval
+                          ? "保存为工具"
+                          : "运行"}
+                    </button>
+                  )}
+                  {approvalTypes.includes("approve_session") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                      onClick={() => handleApprovalDecision("approve_session")}
+                    >
+                      本会话允许
+                    </button>
+                  )}
+                  {approvalTypes.includes("approve_permanent") && (
+                    <button
+                      className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                      onClick={() => handleApprovalDecision("approve_permanent")}
+                    >
+                      始终允许
+                    </button>
+                  )}
+                  {approvalTypes.includes("reject") && (
+                    <button
+                      className="px-3 py-1.5 text-xs border border-border rounded-md hover:bg-muted transition-colors"
+                      onClick={() => handleApprovalDecision("reject")}
+                    >
+                      拒绝
+                    </button>
+                  )}
+                    </>
+                  )}
                 </>
               )}
             </div>
           </div>
+            )
+          })()}
         </div>
       )}
       {/* Input */}
@@ -2031,7 +2254,7 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
               <div
                 ref={dropZoneRef}
                 className={cn(
-                  "relative flex-1 min-w-0 flex flex-col rounded-xl border border-border shadow-sm transition-colors duration-300",
+                  "relative flex-1 min-w-0 flex flex-col rounded-3xl border border-border  transition-colors duration-300",
                   glowVisible ? "bg-white/80" : "bg-white",
                   dragOver && "border-primary"
                 )}
@@ -2093,73 +2316,81 @@ export function ChatContainer({ threadId }: ChatContainerProps): React.JSX.Eleme
                   placeholder={attachments.length > 0 ? "输入消息或直接发送文件..." : "输入消息..."}
                   disabled={isLoading}
                   className={cn(
-                    "relative z-[1] flex-1 resize-none bg-transparent",
-                    "px-4 py-3 text-sm placeholder:text-muted-foreground",
+                    "relative z-[1] w-full resize-none bg-transparent overflow-y-auto",
+                    "p-4 text-sm placeholder:text-muted-foreground",
                     "focus:outline-none disabled:opacity-70",
                     attachments.length > 0 && "pt-1.5"
                   )}
-                  rows={1}
+                  rows={3}
                   style={{ minHeight: "44px", maxHeight: "200px" }}
                 />
                 {/* Bottom bar: + button left, send button right */}
-                <div className="flex items-center justify-between px-2 pb-2">
-                  <button
-                    type="button"
-                    disabled={isLoading || attachmentLoading || attachments.length >= MAX_ATTACHMENTS || totalAttachmentChars >= MAX_TOTAL_CHARS}
-                    onClick={handleAttachClick}
-                    title="添加文件 (txt, md, csv, docx, xlsx)"
-                    className="flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <Plus className="size-4" />
-                  </button>
-                  {isLoading ? (
+                <div className="flex items-center justify-between px-3 pb-2">
+                  <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={handleCancel}
-                      aria-label="停止生成"
-                      className="flex items-center justify-center size-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      disabled={isLoading || attachmentLoading || attachments.length >= MAX_ATTACHMENTS || totalAttachmentChars >= MAX_TOTAL_CHARS}
+                      onClick={handleAttachClick}
+                      title="添加文件 (txt, md, csv, docx, xlsx)"
+                      className="flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      <Square className="size-3 fill-current" />
+                      <Plus className="size-4" />
                     </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      disabled={!input.trim() && attachments.length === 0}
-                      className="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <Send className="size-3.5" />
-                    </button>
-                  )}
+                    <div className="w-px h-4 bg-border mx-1" />
+                    <ModelSwitcher threadId={threadId} />
+                    <div className="w-px h-4 bg-border mx-1" />
+                    <WorkspacePicker threadId={threadId} />
+
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isLoading ? (
+                      <button
+                        type="button"
+                        onClick={handleCancel}
+                        aria-label="停止生成"
+                        className="flex items-center justify-center size-7 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                      >
+                        <Square className="size-3 fill-current" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!input.trim() && attachments.length === 0}
+                        className="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <Send className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ModelSwitcher threadId={threadId} />
-                <div className="w-px h-4 bg-border" />
-                <WorkspacePicker threadId={threadId} />
-                {yoloMode && (
-                  <>
-                    <div className="w-px h-4 bg-border" />
-                    <button
-                      type="button"
-                      title="点击打开设置"
-                      onClick={() => setShowCustomizeView(true, "sandbox")}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
-                    >
-                      <Zap className="size-3" />
-                      YOLO
-                    </button>
-                  </>
-                )}
-              </div>
-              {tokenUsage && (
-                <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel} contextLimit={modelContextLimit} />
-              )}
+            {/*chat container bottom panel — moved inside input box above */}
+            <div className={'flex items-center justify-between'}>
+             <div className={'flex items-center space-x-4'}>
+               {yoloMode && (
+                 <button
+                   type="button"
+                   title="点击打开设置"
+                   onClick={() => setShowCustomizeView(true, "sandbox")}
+                   className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                 >
+                   <Zap className="size-3" />
+                   YOLO
+                 </button>
+               )}
+               {tokenUsage && (
+                 <ContextUsageIndicator tokenUsage={tokenUsage} modelId={currentModel}
+                                        contextLimit={modelContextLimit} />
+               )}
+             </div>
+            {/*  GitBranch */}
+            <GitBranchSwitcher workspacePath={workspacePath} />
             </div>
           </div>
         </form>
       </div>
+      <UpdateDialog open={updateDialogOpen} onOpenChange={setUpdateDialogOpen} />
     </div>
   )
 }

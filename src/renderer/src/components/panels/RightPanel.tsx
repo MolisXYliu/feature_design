@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react"
+import { useState, useRef, useCallback, useEffect, useMemo, memo, lazy, Suspense } from "react"
 import {
   ListTodo,
   FolderTree,
@@ -27,21 +27,31 @@ import {
   Webhook,
   Maximize2,
   Minimize2,
-  EyeOff
+  EyeOff,
+  Loader2,
+  Copy,
+  Check
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 import { useAppStore, selectSkillGenerationAgent, selectSkillRetryContext } from "@/lib/store"
 import { useShallow } from "zustand/react/shallow"
 import { useThreadState, useThreadStream } from "@/lib/thread-context"
 import { getFileType } from "@/lib/file-types"
 import { Badge } from "@/components/ui/badge"
 import { DiffDisplay } from "@/components/chat/ToolCallRenderer"
-import { FileViewer } from "@/components/tabs/FileViewer"
 import { onOpenResourcePreview } from "@/lib/resource-preview-events"
 import type { Todo, SkillMetadata, PluginMetadata } from "@/types"
 import { SubagentCard } from "@/components/panels/SubagentPanel"
 
 type HookConfig = Awaited<ReturnType<typeof window.api.hooks.list>>[number]
+
+const FileViewer = lazy(() =>
+  import("@/components/tabs/FileViewer").then((m) => ({ default: m.FileViewer }))
+)
+const GitPanelView = lazy(() =>
+  import("@/components/panels/GitPanelView").then((m) => ({ default: m.GitPanelView }))
+)
 
 const HEADER_HEIGHT = 52 // px
 const HANDLE_HEIGHT = 6 // px
@@ -133,15 +143,26 @@ function ResizeHandle({ onDrag }: ResizeHandleProps): React.JSX.Element {
 }
 
 interface RightPanelProps {
-  moduleMode: "work" | "preview"
+  moduleMode: "work" | "preview" | "git"
   onRequestPreviewMode?: () => void
+  onRequestGitMode?: () => void
   onRequestWorkMode?: () => void
   onPreviewFullscreenChange?: (isFullscreen: boolean) => void
+}
+
+function LazySectionFallback({ label }: { label: string }): React.JSX.Element {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center text-muted-foreground">
+      <Loader2 className="mr-2 size-4 animate-spin" />
+      <span className="text-sm">{label}</span>
+    </div>
+  )
 }
 
 export function RightPanel({
   moduleMode,
   onRequestPreviewMode,
+  onRequestGitMode,
   onRequestWorkMode,
   onPreviewFullscreenChange
 }: RightPanelProps): React.JSX.Element {
@@ -170,6 +191,8 @@ export function RightPanel({
   const [previewDiff, setPreviewDiff] = useState<CodeDiffPayload | null>(null)
   const [previewReloadToken, setPreviewReloadToken] = useState(0)
   const lastAppliedPreviewKeyRef = useRef<string | null>(null)
+  const lastRecordedBatchKeyRef = useRef<string | null>(null)
+  const lastAutoSwitchedBatchKeyRef = useRef<string | null>(null)
   const lastThreadIdRef = useRef<string | null>(null)
   const prevStreamLoadingRef = useRef(false)
   const [tasksOpen, setTasksOpen] = useState(false)
@@ -271,6 +294,44 @@ export function RightPanel({
     return null
   }, [threadState?.messages, streamData.messages])
 
+  const latestCompletedLlmBatch = useMemo(() => {
+    const persisted = threadState?.messages ?? []
+    const streaming = (streamData.messages as Array<{ id?: string; tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }> }> | undefined) ?? []
+    const all = [
+      ...persisted.map((m) => ({ message: m })),
+      ...streaming.map((m) => ({ message: m }))
+    ]
+    const completedToolCallIds = new Set<string>()
+    for (const item of all) {
+      const message = item.message as { role?: string; type?: string; tool_call_id?: string }
+      if ((message.role === "tool" || message.type === "tool") && message.tool_call_id) {
+        completedToolCallIds.add(message.tool_call_id)
+      }
+    }
+    for (let i = all.length - 1; i >= 0; i--) {
+      const msg = all[i].message
+      const toolCalls = msg?.tool_calls || []
+      const files = new Set<string>()
+      const toolIds: string[] = []
+      for (const tool of toolCalls) {
+        if (!tool?.id || !completedToolCallIds.has(tool.id)) continue
+        const filePath = getToolCallFilePath(tool)
+        if (filePath) {
+          files.add(filePath)
+          toolIds.push(tool.id)
+        }
+      }
+      if (files.size > 0) {
+        const messageId = msg?.id || `m-${i}`
+        return {
+          batchKey: `${messageId}:${toolIds.sort().join(",")}`,
+          files: Array.from(files)
+        }
+      }
+    }
+    return null
+  }, [threadState?.messages, streamData.messages])
+
   useEffect(() => {
     const wasLoading = prevStreamLoadingRef.current
     const isLoading = streamData.isLoading
@@ -278,15 +339,64 @@ export function RightPanel({
 
     // Render preview when this round finishes: true -> false
     if (!(wasLoading && !isLoading)) return
+    if (
+      latestCompletedLlmBatch?.files?.length &&
+      lastAutoSwitchedBatchKeyRef.current !== latestCompletedLlmBatch.batchKey
+    ) {
+      lastAutoSwitchedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+      const switchPanelByWorkspaceType = async (): Promise<void> => {
+        try {
+          if (!currentThreadId) return
+          const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+          if (summary.isGitRepo || summary.isWorktree) {
+            if (moduleMode !== "git") {
+              onRequestGitMode?.()
+            }
+            return
+          }
+        } catch {
+          // ignore summary refresh errors
+        }
+        if (!latestResourceEvent) return
+        if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
+        lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+        setPreviewPath(latestResourceEvent.path)
+        setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+        setPreviewReloadToken((v) => v + 1)
+        onRequestPreviewMode?.()
+      }
+      void switchPanelByWorkspaceType()
+      return
+    }
     if (!latestResourceEvent) return
     if (lastAppliedPreviewKeyRef.current === latestResourceEvent.key) return
 
-    lastAppliedPreviewKeyRef.current = latestResourceEvent.key
-    setPreviewPath(latestResourceEvent.path)
-    setPreviewDiff(latestResourceEvent.codeDiff ?? null)
-    setPreviewReloadToken((v) => v + 1)
-    onRequestPreviewMode?.()
-  }, [streamData.isLoading, latestResourceEvent, onRequestPreviewMode])
+    // For git repos without edits (only file reads), don't auto-switch to preview mode
+    // Stay on git panel unless user manually switches
+    const handleResourceEventWithoutEdits = async (): Promise<void> => {
+      try {
+        if (!currentThreadId) return
+        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
+        if (summary.isGitRepo || summary.isWorktree) {
+          // Git repo: don't auto-switch to preview mode, just update preview content silently
+          lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+          setPreviewPath(latestResourceEvent.path)
+          setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+          setPreviewReloadToken((v) => v + 1)
+          return
+        }
+      } catch {
+        // ignore summary refresh errors
+      }
+      // Non-git repo: switch to preview mode as before
+      lastAppliedPreviewKeyRef.current = latestResourceEvent.key
+      setPreviewPath(latestResourceEvent.path)
+      setPreviewDiff(latestResourceEvent.codeDiff ?? null)
+      setPreviewReloadToken((v) => v + 1)
+      onRequestPreviewMode?.()
+    }
+    void handleResourceEventWithoutEdits()
+  }, [streamData.isLoading, latestResourceEvent, latestCompletedLlmBatch, onRequestPreviewMode, onRequestGitMode, currentThreadId, moduleMode])
 
   useEffect(() => {
     if (!currentThreadId) return
@@ -295,6 +405,8 @@ export function RightPanel({
       setPreviewPath(null)
       setPreviewDiff(null)
       lastAppliedPreviewKeyRef.current = null
+      lastRecordedBatchKeyRef.current = null
+      lastAutoSwitchedBatchKeyRef.current = null
       prevStreamLoadingRef.current = false
     }
   }, [currentThreadId])
@@ -305,9 +417,24 @@ export function RightPanel({
       if (data.threadId === currentThreadId && previewPath) {
         setPreviewReloadToken((v) => v + 1)
       }
+      if (data.threadId === currentThreadId) {
+        window.api.workspace.getGitPanelSummary(currentThreadId).then((summary) => {
+          if (summary.isGitRepo || summary.isWorktree) {
+            if (moduleMode !== "git") {
+              onRequestGitMode?.()
+            }
+            return
+          }
+          if (moduleMode !== "preview") {
+            onRequestPreviewMode?.()
+          }
+        }).catch(() => {
+          // ignore summary refresh errors
+        })
+      }
     })
     return cleanup
-  }, [currentThreadId, previewPath])
+  }, [currentThreadId, previewPath, moduleMode, onRequestGitMode, onRequestPreviewMode])
 
   useEffect(() => {
     const cleanup = onOpenResourcePreview(({ threadId, filePath }) => {
@@ -325,6 +452,15 @@ export function RightPanel({
       onPreviewFullscreenChange?.(false)
     }
   }, [moduleMode, previewPath, onPreviewFullscreenChange])
+
+  useEffect(() => {
+    if (!currentThreadId || !latestCompletedLlmBatch || latestCompletedLlmBatch.files.length === 0) return
+    if (lastRecordedBatchKeyRef.current === latestCompletedLlmBatch.batchKey) return
+    lastRecordedBatchKeyRef.current = latestCompletedLlmBatch.batchKey
+    window.api.workspace.recordLlmModifiedFiles(currentThreadId, latestCompletedLlmBatch.files).catch((error) => {
+      console.error("[RightPanel] Failed to record LLM modified files:", error)
+    })
+  }, [currentThreadId, latestCompletedLlmBatch])
 
   // Store content heights in pixels (null = auto/equal distribution)
   const [tasksHeight, setTasksHeight] = useState<number | null>(null)
@@ -696,9 +832,9 @@ export function RightPanel({
       )}
     >
       {moduleMode === "preview" && (
-        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-background">
           <div
-            className="bg-white p-2 h-full min-h-0"
+            className="bg-background p-2 h-full min-h-0"
             style={{ height: PREVIEW_MAX_HEIGHT }}
           >
             {previewPath ? (
@@ -709,6 +845,7 @@ export function RightPanel({
                 workspacePath={threadState?.workspacePath ?? null}
                 threadId={currentThreadId ?? ""}
                 reloadToken={previewReloadToken}
+                onReload={() => setPreviewReloadToken((v) => v + 1)}
                 onFullscreenChange={onPreviewFullscreenChange}
                 onHidePreview={onRequestWorkMode}
               />
@@ -735,6 +872,30 @@ export function RightPanel({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {moduleMode === "git" && (
+        <div className="flex h-full min-h-0 flex-col border border-border/75 rounded-2xl bg-white">
+          <div className="bg-white p-2 h-full min-h-0">
+            <Suspense fallback={<LazySectionFallback label="加载 Git 面板..." />}>
+              <GitPanelView
+                threadId={currentThreadId ?? ""}
+                workspacePath={threadState?.workspacePath ?? null}
+                onOpenFileFolder={async (filePath) => {
+                  try {
+                    const resolved = resolvePreviewPaths(filePath, threadState?.workspacePath ?? null)
+                    const platform = await window.electron.ipcRenderer.invoke("get-platform")
+                    const normalizedPath =
+                      platform === "win32" ? resolved.fullPath.replace(/\//g, "\\") : resolved.fullPath
+                    await window.electron.ipcRenderer.invoke("show-item-in-folder", normalizedPath)
+                  } catch (error) {
+                    console.error("[GitPanel] Failed to show item in folder:", error)
+                  }
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       )}
@@ -1208,6 +1369,7 @@ function ResourcePreview({
   workspacePath,
   threadId,
   reloadToken,
+  onReload,
   onFullscreenChange,
   onHidePreview
 }: {
@@ -1216,11 +1378,24 @@ function ResourcePreview({
   workspacePath: string | null
   threadId: string
   reloadToken: number
+  onReload?: () => void
   onFullscreenChange?: (isFullscreen: boolean) => void
   onHidePreview?: () => void
 }): React.JSX.Element {
   const fileName = filePath.split(/[\\/]/).pop() || filePath
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [previewMode, setPreviewMode] = useState<"preview" | "source">("preview")
+  const [copySuccess, setCopySuccess] = useState(false)
+  const extension = getPathExtension(filePath).toLowerCase()
+  const supportsSourceView =
+    !codeDiff &&
+    (extension === "md" ||
+      extension === "markdown" ||
+      extension === "mdx" ||
+      extension === "html" ||
+      extension === "htm")
+  const previewFileType = useMemo(() => getFileType(fileName), [fileName])
+  const canCopyContent = !codeDiff && (previewFileType.type === "code" || previewFileType.type === "text")
 
   const resolved = useMemo(
     () => resolvePreviewPaths(filePath, workspacePath),
@@ -1247,6 +1422,32 @@ function ResourcePreview({
     onFullscreenChange?.(false)
     onHidePreview?.()
   }
+
+  const handleCopyFileContent = useCallback(async () => {
+    if (!canCopyContent) {
+      toast.error("当前文件类型不支持复制内容")
+      return
+    }
+
+    try {
+      const result = resolved.inWorkspace
+        ? await window.api.workspace.readFile(threadId, resolved.workspaceFilePath)
+        : await window.api.workspace.readExternalFile(resolved.fullPath)
+
+      if (!result.success || result.content === undefined) {
+        toast.error(result.error || "复制失败，请重试")
+        return
+      }
+
+      await navigator.clipboard.writeText(result.content)
+      setCopySuccess(true)
+      setTimeout(() => setCopySuccess(false), 2000)
+      toast.success("文件内容已复制")
+    } catch (error) {
+      console.error("[ResourcePreview] Failed to copy file content:", error)
+      toast.error("复制失败，请重试")
+    }
+  }, [canCopyContent, resolved, threadId])
 
   useEffect(() => {
     if (!isFullscreen) return
@@ -1280,29 +1481,76 @@ function ResourcePreview({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {supportsSourceView ? (
+            <div className="inline-flex items-center rounded-md border border-border bg-background text-[11px]">
+              <button
+                type="button"
+                onClick={() => setPreviewMode("preview")}
+                aria-pressed={previewMode === "preview"}
+                className={cn(
+                  "px-2 py-0.5 transition-colors",
+                  previewMode === "preview"
+                    ? "bg-background-interactive text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                预览
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode("source")}
+                aria-pressed={previewMode === "source"}
+                className={cn(
+                  "border-l border-border px-2 py-0.5 transition-colors",
+                  previewMode === "source"
+                    ? "bg-background-interactive text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                源码
+              </button>
+            </div>
+          ) : null}
+          <button
+            onClick={handleCopyFileContent}
+            disabled={!canCopyContent}
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground enabled:hover:text-foreground enabled:hover:bg-background-interactive transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title={canCopyContent ? "复制文件内容" : "当前文件类型不支持复制"}
+            aria-label={canCopyContent ? "复制文件内容" : "当前文件类型不支持复制"}
+          >
+            {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+          </button>
+          <button
+            onClick={onReload}
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            title="刷新预览"
+            aria-label="刷新预览"
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
           <button
             onClick={toggleFullscreen}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title={isFullscreen ? "缩小全屏" : "全屏预览"}
+            aria-label={isFullscreen ? "缩小全屏" : "全屏预览"}
           >
             {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-            {isFullscreen ? "缩小" : "全屏"}
           </button>
           <button
             onClick={handleHidePreview}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="隐藏预览并切换到工作目录"
+            aria-label="隐藏预览并切换到工作目录"
           >
             <EyeOff className="size-3.5" />
-            隐藏
           </button>
           <button
             onClick={openInFolder}
-            className="inline-flex items-center gap-1 rounded-md border border-border/80 px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
+            className="inline-flex items-center justify-center rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background-interactive transition-colors"
             title="打开文件所在文件夹"
+            aria-label="打开文件所在文件夹"
           >
             <FolderOpen className="size-3.5" />
-            文件夹
           </button>
         </div>
       </div>
@@ -1315,13 +1563,16 @@ function ResourcePreview({
         )}
 
         {!codeDiff && (
-          <FileViewer
-            threadId={threadId}
-            filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
-            externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
-            htmlFillHeight={isFullscreen}
-            reloadToken={reloadToken}
-          />
+          <Suspense fallback={<LazySectionFallback label="加载文件预览..." />}>
+            <FileViewer
+              threadId={threadId}
+              filePath={resolved.inWorkspace ? resolved.workspaceFilePath : resolved.fullPath}
+              externalFullPath={resolved.inWorkspace ? undefined : resolved.fullPath}
+              htmlFillHeight
+              reloadToken={reloadToken}
+              previewMode={supportsSourceView ? previewMode : undefined}
+            />
+          </Suspense>
         )}
       </div>
     </div>
@@ -1963,6 +2214,24 @@ const EVENT_BADGE_COLORS: Record<string, string> = {
   Notification: "bg-purple-500/15 text-purple-600 dark:text-purple-400"
 }
 
+const EVENT_LABEL: Record<string, string> = {
+  PreToolUse: "调用前",
+  PostToolUse: "调用后",
+  Stop: "停止时",
+  Notification: "通知"
+}
+
+const TOOL_LABEL: Record<string, string> = {
+  execute:          "执行命令",
+  write_file:       "写入文件",
+  edit_file:        "编辑文件",
+  read_file:        "读取文件",
+  memory_search:    "搜索记忆",
+  memory_get:       "读取记忆",
+  manage_scheduler: "调度任务",
+  manage_skill:     "技能管理",
+}
+
 function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () => void }): React.JSX.Element {
   if (hooks.length === 0) {
     return (
@@ -1986,17 +2255,27 @@ function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () =
     }
   }
 
-  const renderHookCard = (hook: HookConfig): React.JSX.Element => (
+  const renderHookCard = (hook: HookConfig): React.JSX.Element => {
+    const isPrompt = hook.type === "prompt"
+    const summary = isPrompt ? (hook.prompt ?? "") : (hook.command ?? "")
+    return (
     <div
       key={hook.id}
       className={cn("p-3 rounded-sm border border-border", !hook.enabled && "opacity-60")}
     >
       <div className="flex items-center gap-2 text-sm">
         <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0", EVENT_BADGE_COLORS[hook.event] ?? "bg-muted text-muted-foreground")}>
-          {hook.event}
+          {EVENT_LABEL[hook.event] ?? hook.event}
         </span>
+        {isPrompt && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-violet-500/15 text-violet-600 dark:text-violet-400">
+            策略
+          </span>
+        )}
         {hook.matcher && hook.matcher !== "*" && (
-          <span className="text-[10px] text-muted-foreground shrink-0 font-mono">{hook.matcher}</span>
+          <span className="text-[10px] text-muted-foreground shrink-0 font-mono">
+            {TOOL_LABEL[hook.matcher] ?? hook.matcher}
+          </span>
         )}
         <button
           className="ml-auto shrink-0"
@@ -2006,9 +2285,12 @@ function HooksContent({ hooks, onChange }: { hooks: HookConfig[]; onChange: () =
           <Power className={cn("size-3", hook.enabled ? "text-status-nominal" : "text-muted-foreground")} />
         </button>
       </div>
-      <p className="text-xs text-muted-foreground mt-1.5 font-mono break-all line-clamp-2">{hook.command}</p>
+      <p className={cn(
+        "text-xs text-muted-foreground mt-1.5 break-all line-clamp-2",
+        isPrompt ? "italic" : "font-mono"
+      )}>{summary}</p>
     </div>
-  )
+  )}
 
   return (
     <div className="p-3 space-y-2">
