@@ -4,8 +4,9 @@ import { StreamingMarkdown } from "./StreamingMarkdown"
 import { getToolLabel } from "@/lib/tool-labels"
 import { emitOpenResourcePreview } from "@/lib/resource-preview-events"
 import { useState } from "react"
-import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine } from "lucide-react"
+import { ChevronDown, ChevronRight, Eye, Wrench, Copy, Check, PencilLine, ThumbsUp, ThumbsDown } from "lucide-react"
 import { toast } from "sonner"
+import { MessageFeedbackDialog } from "./MessageFeedbackDialog"
 
 function extractMessagePlainText(content: Message["content"]): string {
   if (typeof content === "string") return content
@@ -103,6 +104,10 @@ export function MessageBubble({
   const [collapsedTools, setCollapsedTools] = useState<Set<string>>(new Set())
   const [collapsedHtmlTools, setCollapsedHtmlTools] = useState<Set<string>>(new Set())
   const [copySuccess, setCopySuccess] = useState(false)
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false)
+  const [likedMessageId, setLikedMessageId] = useState<string | null>(null)
+  const [dislikedMessageId, setDislikedMessageId] = useState<string | null>(null)
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const isUser = message.role === "user"
   const isTool = message.role === "tool"
   const createdAtLabel = formatMessageTime(message.created_at)
@@ -208,6 +213,52 @@ export function MessageBubble({
     }
   }
 
+  const handleOpenFeedbackDialog = (type: "like" | "dislike") => {
+    setFeedbackDialogOpen(true)
+    if (type === "like") {
+      setLikedMessageId(message.id)
+      setDislikedMessageId(null)
+    } else {
+      setLikedMessageId(null)
+      setDislikedMessageId(message.id)
+    }
+  }
+
+  const handleFeedbackSubmit = async (type: "like" | "dislike", feedbackId: string) => {
+    setFeedbackSubmitting(true)
+    try {
+      // Track feedback event
+      if (type === "like") {
+        window.electron?.ipcRenderer?.invoke("track-event", {
+          eventName: "message.feedback.like",
+          eventCategory: "chat",
+          properties: {
+            messageId: message.id,
+            threadId: threadId
+          }
+        }).catch((err) => console.error("Failed to track like event:", err))
+      } else {
+        window.electron?.ipcRenderer?.invoke("track-event", {
+          eventName: "message.feedback.dislike.submit",
+          eventCategory: "chat",
+          properties: {
+            feedbackId: feedbackId,
+            messageId: message.id,
+            threadId: threadId
+          }
+        }).catch((err) => console.error("Failed to track dislike feedback:", err))
+      }
+
+      toast.success("反馈提交成功")
+    } catch (error) {
+      console.error("反馈提交失败", error)
+      toast.error("反馈提交失败，请重试")
+    } finally {
+      setFeedbackSubmitting(false)
+      setFeedbackDialogOpen(false)
+    }
+  }
+
   // Don't render if there's no content and no tool calls
   if (!content && !hasToolCalls) {
     return null
@@ -292,6 +343,41 @@ export function MessageBubble({
               aria-label="复制消息"
             >
               {copySuccess ? <Check className="size-3.5 text-status-nominal" /> : <Copy className="size-3.5" />}
+            </button>
+            {/* 点赞按钮 */}
+            <button
+              type="button"
+              onClick={() => {
+                setLikedMessageId(message.id)
+                setDislikedMessageId(null)
+                handleFeedbackSubmit("like", "")
+                toast.success("感谢您的点赞！😊")
+              }}
+              className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
+                likedMessageId === message.id
+                  ? "text-green-500 bg-green-500/20"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+              }`}
+              title="点赞"
+              aria-label="点赞"
+            >
+              <ThumbsUp className="size-3.5" />
+            </button>
+            {/* 点踩按钮 */}
+            <button
+              type="button"
+              onClick={() => {
+                handleOpenFeedbackDialog("dislike")
+              }}
+              className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
+                dislikedMessageId === message.id
+                  ? "text-red-500 bg-red-500/20"
+                  : "text-muted-foreground hover:text-foreground hover:bg-background-interactive"
+              }`}
+              title="点踩"
+              aria-label="点踩"
+            >
+              <ThumbsDown className="size-3.5" />
             </button>
           </div>
         )}
@@ -442,6 +528,15 @@ export function MessageBubble({
           </div>
         )}
       </div>
+      {/* 点赞点踩反馈对话框 */}
+      <MessageFeedbackDialog
+        open={feedbackDialogOpen}
+        onClose={() => setFeedbackDialogOpen(false)}
+        onSubmit={handleFeedbackSubmit}
+        submitting={feedbackSubmitting}
+        messageId={message.id}
+        threadId={threadId}
+      />
     </div>
   )
 }
