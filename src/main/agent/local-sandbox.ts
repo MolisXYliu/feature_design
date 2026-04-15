@@ -210,7 +210,14 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ["CARGO_GIT_FETCH_WITH_CLI", "true"],
       // curl from Git for Windows (mingw64/bin/curl.exe) is a multi-backend build; tell it
       // to use the OpenSSL backend to avoid SChannel SEC_E_NO_CREDENTIALS errors.
-      ["CURL_SSL_BACKEND", "openssl"]
+      ["CURL_SSL_BACKEND", "openssl"],
+      // Python: keep user installs and caches in the same TEMP-backed sandbox locations
+      // used by unelevated package installs, so a later `python -c "import ..."` can see
+      // packages that pip installed with --user/default-user fallback.
+      ["PYTHONUSERBASE", path.win32.join(realTempDir, "sandbox-python-user")],
+      ["PIP_CACHE_DIR", path.win32.join(realTempDir, "sandbox-pip-cache")],
+      ["POETRY_CACHE_DIR", path.win32.join(realTempDir, "sandbox-poetry-cache")],
+      ["CONDA_PKGS_DIRS", path.win32.join(realTempDir, "sandbox-conda-pkgs")]
     ]
 
     // Preserve host user's JAVA_HOME so the sandbox user can locate the JDK.
