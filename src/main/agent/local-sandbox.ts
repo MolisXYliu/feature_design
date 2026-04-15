@@ -193,6 +193,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
   private readonly getHooks: () => HookConfig[]
   /** App-owned persistent cache root granted as a Codex writable root per workspace. */
   private readonly _sandboxCacheRoot: string
+  /** Shared download/artifact cache root reused across workspaces. */
+  private readonly _sharedSandboxCacheRoot: string
   /** Optional orchestrator for fine-grained approval + sandbox retry */
   private orchestrator?: ToolOrchestrator
   /** When true, block direct git add/commit/push and force git_workflow usage. */
@@ -217,10 +219,18 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     return path.win32.join(systemDrive, "Users", username)
   }
 
-  private static buildSandboxCacheRoot(env: Record<string, string>, workingDir: string): string {
+  private static buildSandboxCacheBase(env: Record<string, string>): string {
     const localAppData = env.LOCALAPPDATA
       || process.env.LOCALAPPDATA
       || path.win32.join(homedir(), "AppData", "Local")
+    return path.win32.join(localAppData, "CmbCoworkAgent", "SandboxCaches")
+  }
+
+  private static buildSharedSandboxCacheRoot(env: Record<string, string>): string {
+    return path.win32.join(LocalSandbox.buildSandboxCacheBase(env), "shared")
+  }
+
+  private static buildSandboxCacheRoot(env: Record<string, string>, workingDir: string): string {
     let canonicalWorkingDir = workingDir
     try {
       canonicalWorkingDir = realpathSync(workingDir)
@@ -230,10 +240,10 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const key = canonicalWorkingDir.replace(/\//g, "\\").toLowerCase()
     const hash = createHash("sha256").update(key).digest("hex").slice(0, 16)
     const name = path.win32.basename(canonicalWorkingDir).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 40) || "workspace"
-    return path.win32.join(localAppData, "CmbCoworkAgent", "SandboxCaches", `${name}-${hash}`)
+    return path.win32.join(LocalSandbox.buildSandboxCacheBase(env), `${name}-${hash}`)
   }
 
-  private static getSandboxToolCacheDirs(cacheRoot: string) {
+  private static getSandboxToolCacheDirs(cacheRoot: string, sharedCacheRoot = cacheRoot) {
     const pythonUserBase = path.win32.join(cacheRoot, "python-userbase")
     const pythonSiteCustomize = path.win32.join(cacheRoot, "python-sitecustomize")
     const pythonScriptDirs = [
@@ -245,27 +255,28 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
     return {
       root: cacheRoot,
-      npmCache: path.win32.join(cacheRoot, "npm-cache"),
+      sharedRoot: sharedCacheRoot,
+      npmCache: path.win32.join(sharedCacheRoot, "npm-cache"),
       npmPrefix: path.win32.join(cacheRoot, "npm-prefix"),
-      yarnCache: path.win32.join(cacheRoot, "yarn-cache"),
+      yarnCache: path.win32.join(sharedCacheRoot, "yarn-cache"),
       yarnGlobal: path.win32.join(cacheRoot, "yarn-global"),
       pnpmHome: path.win32.join(cacheRoot, "pnpm-home"),
-      pnpmStore: path.win32.join(cacheRoot, "pnpm-store"),
-      corepackHome: path.win32.join(cacheRoot, "corepack-home"),
-      nodeGypCache: path.win32.join(cacheRoot, "node-gyp-cache"),
-      playwrightBrowsers: path.win32.join(cacheRoot, "playwright-browsers"),
-      puppeteerCache: path.win32.join(cacheRoot, "puppeteer-cache"),
-      cypressCache: path.win32.join(cacheRoot, "cypress-cache"),
-      electronCache: path.win32.join(cacheRoot, "electron-cache"),
-      electronBuilderCache: path.win32.join(cacheRoot, "electron-builder-cache"),
+      pnpmStore: path.win32.join(sharedCacheRoot, "pnpm-store"),
+      corepackHome: path.win32.join(sharedCacheRoot, "corepack-home"),
+      nodeGypCache: path.win32.join(sharedCacheRoot, "node-gyp-cache"),
+      playwrightBrowsers: path.win32.join(sharedCacheRoot, "playwright-browsers"),
+      puppeteerCache: path.win32.join(sharedCacheRoot, "puppeteer-cache"),
+      cypressCache: path.win32.join(sharedCacheRoot, "cypress-cache"),
+      electronCache: path.win32.join(sharedCacheRoot, "electron-cache"),
+      electronBuilderCache: path.win32.join(sharedCacheRoot, "electron-builder-cache"),
       goPath: path.win32.join(cacheRoot, "go"),
-      goModCache: path.win32.join(cacheRoot, "go", "pkg", "mod"),
+      goModCache: path.win32.join(sharedCacheRoot, "go-mod-cache"),
       goBin: path.win32.join(cacheRoot, "go", "bin"),
-      goBuildCache: path.win32.join(cacheRoot, "go-build-cache"),
+      goBuildCache: path.win32.join(sharedCacheRoot, "go-build-cache"),
       cargoHome: path.win32.join(cacheRoot, "cargo-home"),
       rustupHome: path.win32.join(cacheRoot, "rustup-home"),
-      nugetPackages: path.win32.join(cacheRoot, "nuget-packages"),
-      nugetHttpCache: path.win32.join(cacheRoot, "nuget-http-cache"),
+      nugetPackages: path.win32.join(sharedCacheRoot, "nuget-packages"),
+      nugetHttpCache: path.win32.join(sharedCacheRoot, "nuget-http-cache"),
       nugetScratch: path.win32.join(cacheRoot, "nuget-scratch"),
       dotnetHome: path.win32.join(cacheRoot, "dotnet-home"),
       gemHome: path.win32.join(cacheRoot, "gem-home"),
@@ -273,27 +284,27 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       pythonUserBase,
       pythonSiteCustomize,
       pythonScriptDirs,
-      pipCache: path.win32.join(cacheRoot, "pip-cache"),
-      uvCache: path.win32.join(cacheRoot, "uv-cache"),
+      pipCache: path.win32.join(sharedCacheRoot, "pip-cache"),
+      uvCache: path.win32.join(sharedCacheRoot, "uv-cache"),
       pipxHome: path.win32.join(cacheRoot, "pipx-home"),
       pipxBin: path.win32.join(cacheRoot, "pipx-bin"),
-      poetryCache: path.win32.join(cacheRoot, "poetry-cache"),
+      poetryCache: path.win32.join(sharedCacheRoot, "poetry-cache"),
       poetryConfig: path.win32.join(cacheRoot, "poetry-config"),
       poetryData: path.win32.join(cacheRoot, "poetry-data"),
-      condaPkgs: path.win32.join(cacheRoot, "conda-pkgs"),
+      condaPkgs: path.win32.join(sharedCacheRoot, "conda-pkgs"),
       gradleHome: path.win32.join(cacheRoot, "gradle-home"),
-      mavenRepo: path.win32.join(cacheRoot, "m2-repository"),
+      mavenRepo: path.win32.join(sharedCacheRoot, "m2-repository"),
       sbtBase: path.win32.join(cacheRoot, "sbt"),
       ivyHome: path.win32.join(cacheRoot, "ivy2"),
-      coursierCache: path.win32.join(cacheRoot, "coursier-cache"),
-      vcpkgCache: path.win32.join(cacheRoot, "vcpkg-cache"),
+      coursierCache: path.win32.join(sharedCacheRoot, "coursier-cache"),
+      vcpkgCache: path.win32.join(sharedCacheRoot, "vcpkg-cache"),
       tempDir: path.win32.join(cacheRoot, "tmp"),
       xdgCache: path.win32.join(cacheRoot, "xdg-cache")
     }
   }
 
-  private static buildSandboxToolEnv(cacheRoot: string): { env: Array<[string, string]>; pathEntries: string[] } {
-    const dirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot)
+  private static buildSandboxToolEnv(cacheRoot: string, sharedCacheRoot = cacheRoot): { env: Array<[string, string]>; pathEntries: string[] } {
+    const dirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot, sharedCacheRoot)
     return {
       env: [
         ["NPM_CONFIG_CACHE", dirs.npmCache],
@@ -357,18 +368,19 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   private static readonly _preparedSandboxCacheDirs = new Map<string, string[]>()
 
-  private static prepareSandboxCacheDirs(cacheRoot: string): string[] {
-    const dirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot)
-    const cacheKey = normalizeDirKey(cacheRoot)
+  private static prepareSandboxCacheDirs(cacheRoot: string, sharedCacheRoot = cacheRoot): string[] {
+    const dirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot, sharedCacheRoot)
+    const cacheKey = `${normalizeDirKey(cacheRoot)}|${normalizeDirKey(sharedCacheRoot)}`
     const siteCustomizePath = path.win32.join(dirs.pythonSiteCustomize, "sitecustomize.py")
     const cachedDirs = LocalSandbox._preparedSandboxCacheDirs.get(cacheKey)
     if (cachedDirs && existsSync(siteCustomizePath)) {
       return cachedDirs
     }
 
-    const { pathEntries } = LocalSandbox.buildSandboxToolEnv(cacheRoot)
+    const { pathEntries } = LocalSandbox.buildSandboxToolEnv(cacheRoot, sharedCacheRoot)
     const allDirs = [
       dirs.root,
+      dirs.sharedRoot,
       dirs.npmCache,
       dirs.npmPrefix,
       dirs.yarnCache,
@@ -446,15 +458,16 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   private static buildElevatedSandboxEnvPreamble(
     shellBase: string,
-    cacheRoot: string
+    cacheRoot: string,
+    sharedCacheRoot = cacheRoot
   ): string {
     const profileRoot = LocalSandbox.getElevatedSandboxUserProfileRoot(true)
     const homeDrive = path.win32.parse(profileRoot).root.replace(/\\$/, "")
     const homePath = profileRoot.slice(homeDrive.length) || "\\"
     const localAppData = path.win32.join(profileRoot, "AppData", "Local")
     const roamingAppData = path.win32.join(profileRoot, "AppData", "Roaming")
-    const toolEnv = LocalSandbox.buildSandboxToolEnv(cacheRoot)
-    const toolDirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot)
+    const toolEnv = LocalSandbox.buildSandboxToolEnv(cacheRoot, sharedCacheRoot)
+    const toolDirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot, sharedCacheRoot)
     const pathPrefix = Array.from(new Set(toolEnv.pathEntries)).join(";")
     // Redirect standard Windows profile env vars to the sandbox user's persistent profile.
     // The sandbox user (CodexSandboxOnline) has full control over its own profile, so all
@@ -535,9 +548,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
    * are redirected to the same app-owned persistent cache root used by elevated mode.
    * No user.home redirect needed — keep JVM home behavior aligned with Codex.
    */
-  private static buildUnelevatedEnvPreamble(shellBase: string, cacheRoot: string): string {
-    const toolEnv = LocalSandbox.buildSandboxToolEnv(cacheRoot)
-    const toolDirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot)
+  private static buildUnelevatedEnvPreamble(shellBase: string, cacheRoot: string, sharedCacheRoot = cacheRoot): string {
+    const toolEnv = LocalSandbox.buildSandboxToolEnv(cacheRoot, sharedCacheRoot)
+    const toolDirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot, sharedCacheRoot)
     const pathPrefix = Array.from(new Set(toolEnv.pathEntries)).join(";")
 
     // ── JVM flags ──
@@ -716,6 +729,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     const h = options.hooks
     this.getHooks = typeof h === "function" ? h : () => h ?? []
     this._sandboxCacheRoot = LocalSandbox.buildSandboxCacheRoot(baseEnv, this.workingDir)
+    this._sharedSandboxCacheRoot = LocalSandbox.buildSharedSandboxCacheRoot(baseEnv)
     this.abortSignal = options.abortSignal
 
     // Eagerly cache the elevation check during construction to avoid blocking
@@ -2289,9 +2303,13 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
 
     const isElevatedSandbox = effectiveMode === "elevated"
-    const sandboxCacheDirs = LocalSandbox.prepareSandboxCacheDirs(this._sandboxCacheRoot)
+    const sandboxCacheRoots = Array.from(new Set([
+      this._sandboxCacheRoot,
+      this._sharedSandboxCacheRoot
+    ].map((dir) => path.win32.normalize(dir))))
+    const sandboxCacheDirs = LocalSandbox.prepareSandboxCacheDirs(this._sandboxCacheRoot, this._sharedSandboxCacheRoot)
     const sandboxCacheWritableRootsOverride = effectiveMode === "elevated" || effectiveMode === "unelevated"
-      ? LocalSandbox.buildWritableRootsOverride([this._sandboxCacheRoot])
+      ? LocalSandbox.buildWritableRootsOverride(sandboxCacheRoots)
       : undefined
 
     // Elevated mode: proactively ensure the workspace has ACL setup before spawning codex.exe.
@@ -2307,12 +2325,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
           console.log(`[LocalSandbox] elevated: granting sandbox user ACL for new workspace (no UAC): ${this.workingDir}`)
           try {
             await LocalSandbox.grantElevatedWorkspaceAcl(this.workingDir)
-            await LocalSandbox.grantElevatedWorkspaceAcl(this._sandboxCacheRoot)
+            await Promise.all(sandboxCacheRoots.map((dir) => LocalSandbox.grantElevatedWorkspaceAcl(dir)))
             markWorkspaceElevatedSetupDone(this.workingDir)
             console.log(`[LocalSandbox] elevated: ACL grant done for ${this.workingDir}`)
           } catch (err) {
             console.warn(`[LocalSandbox] elevated: icacls grant failed, falling back to full setup: ${err}`)
-            const setupResult = await runElevatedSetupForPaths([this.workingDir, this._sandboxCacheRoot])
+            const setupResult = await runElevatedSetupForPaths([this.workingDir, ...sandboxCacheRoots])
             if (setupResult.success) {
               markWorkspaceElevatedSetupDone(this.workingDir)
             }
@@ -2320,7 +2338,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         } else {
           // Initial setup not done — need full elevated setup (UAC required)
           console.log(`[LocalSandbox] elevated: initial setup required, running with UAC: ${this.workingDir}`)
-          const setupResult = await runElevatedSetupForPaths([this.workingDir, this._sandboxCacheRoot])
+          const setupResult = await runElevatedSetupForPaths([this.workingDir, ...sandboxCacheRoots])
           if (setupResult.success) {
             markWorkspaceElevatedSetupDone(this.workingDir)
             console.log(`[LocalSandbox] elevated: initial setup done for ${this.workingDir}`)
@@ -2369,11 +2387,11 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       : ""
     // Unelevated sandbox: set shared tool env vars to the persistent writable cache root.
     const unelevatedJvmPreamble = !isElevatedSandbox && effectiveMode !== "none"
-      ? LocalSandbox.buildUnelevatedEnvPreamble(shellBase, this._sandboxCacheRoot)
+      ? LocalSandbox.buildUnelevatedEnvPreamble(shellBase, this._sandboxCacheRoot, this._sharedSandboxCacheRoot)
       : ""
     const unelevatedPreamble = [clearProxyPreamble, unelevatedJvmPreamble].filter(Boolean).join(shellBase === "cmd" ? " & " : "; ")
     const sandboxUserEnvPreamble = isElevatedSandbox
-      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._sandboxCacheRoot)
+      ? LocalSandbox.buildElevatedSandboxEnvPreamble(shellBase, this._sandboxCacheRoot, this._sharedSandboxCacheRoot)
       : unelevatedPreamble
     const commandWithSandboxEnv = sandboxUserEnvPreamble
       ? shellBase === "cmd"
@@ -2671,7 +2689,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     if (isElevatedSandbox && result.exitCode !== 0 && result.output.includes("setup refresh failed") && attempt <= 1) {
       console.log(`[LocalSandbox] elevated: setup refresh failed for ${this.workingDir}, running elevated setup with UAC (attempt=${attempt})...`)
       // runElevatedSetupForPaths / markWorkspaceElevatedSetupDone already imported statically
-      const setupResult = await runElevatedSetupForPaths([this.workingDir])
+      const setupResult = await runElevatedSetupForPaths([this.workingDir, ...sandboxCacheRoots])
       if (setupResult.success) {
         markWorkspaceElevatedSetupDone(this.workingDir)
         // Retry the command once now that ACLs are in place (increment attempt to prevent further retries)
