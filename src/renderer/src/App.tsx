@@ -75,10 +75,10 @@ function App(): React.JSX.Element {
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT)
   const [rightModule, setRightModule] = useState<"work" | "preview" | "git">("work")
   const [previewFullscreen, setPreviewFullscreen] = useState(false)
-  const [hasPendingGitDiff, setHasPendingGitDiff] = useState(false)
+  const [pendingGitDiffByThread, setPendingGitDiffByThread] = useState<Record<string, boolean>>({})
+  const [isGitWorkspaceByThread, setIsGitWorkspaceByThread] = useState<Record<string, boolean>>({})
   const [zoomLevel, setZoomLevel] = useState(1)
   const [bus, setBus] = useState(true)
-  const autoOpenedGitForThreadRef = useRef<string | null>(null)
   const panelToggleBaseClass =
     "group inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-150 outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0 active:scale-95"
   const moduleActiveClass = "text-status-warning bg-status-warning/15 border-status-warning/45 hover:bg-status-warning/20"
@@ -242,97 +242,52 @@ function App(): React.JSX.Element {
     handlePreviewCollapse()
   }, [handlePreviewCollapse])
 
+  const setThreadPendingGitDiff = useCallback((threadId: string, pending: boolean) => {
+    setPendingGitDiffByThread((prev) => {
+      if (prev[threadId] === pending) return prev
+      return { ...prev, [threadId]: pending }
+    })
+  }, [])
+
+  const handleThreadGitStatusChange = useCallback((threadId: string, isGit: boolean) => {
+    setIsGitWorkspaceByThread((prev) => {
+      if (prev[threadId] === isGit) return prev
+      return { ...prev, [threadId]: isGit }
+    })
+  }, [])
+
   const selectGitModule = useCallback(() => {
+    if (currentThreadId) {
+      setThreadPendingGitDiff(currentThreadId, false)
+    }
     setRightModule("git")
     handlePreviewExpand()
-  }, [handlePreviewExpand])
+  }, [currentThreadId, handlePreviewExpand, setThreadPendingGitDiff])
 
-  useEffect(() => {
-    let cancelled = false
-
-    const syncRightModuleByWorkspace = async (): Promise<void> => {
-      if (!currentThreadId || mainView !== "thread") {
-        setHasPendingGitDiff(false)
-        setRightModule("work")
-        handlePreviewCollapse()
-        return
-      }
-
-      try {
-        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
-        if (cancelled) return
-        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
-        const hasPendingDiff = Boolean(summary.hasPendingDiff)
-        setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
-
-        if (isGitWorkspace && hasPendingDiff) {
-          autoOpenedGitForThreadRef.current = currentThreadId
-          setRightModule("git")
-          handlePreviewExpand()
-          return
-        }
-
-        if (isGitWorkspace) {
-          autoOpenedGitForThreadRef.current = null
-        }
-        setRightModule("work")
-        handlePreviewCollapse()
-      } catch {
-        if (cancelled) return
-        setHasPendingGitDiff(false)
-        setRightModule("work")
-        handlePreviewCollapse()
-      }
-    }
-
-    void syncRightModuleByWorkspace()
-
-    return () => {
-      cancelled = true
-    }
-  }, [currentThreadId, mainView, handlePreviewCollapse, handlePreviewExpand])
+  const isCurrentThreadGit = currentThreadId ? Boolean(isGitWorkspaceByThread[currentThreadId]) : false
+  const hasPendingGitDiff = currentThreadId
+    ? Boolean(pendingGitDiffByThread[currentThreadId] && isCurrentThreadGit)
+    : false
 
   useEffect(() => {
     if (!currentThreadId || mainView !== "thread") {
-      setHasPendingGitDiff(false)
-      return
+      setRightModule("work")
+      handlePreviewCollapse()
     }
-    let cancelled = false
+  }, [currentThreadId, mainView, handlePreviewCollapse])
 
-    const refreshSummary = async (): Promise<void> => {
-      try {
-        const summary = await window.api.workspace.getGitPanelSummary(currentThreadId)
-        const isGitWorkspace = Boolean(summary.isGitRepo || summary.isWorktree)
-        const hasPendingDiff = Boolean(summary.hasPendingDiff)
-        if (!cancelled) {
-          setHasPendingGitDiff(Boolean(isGitWorkspace && hasPendingDiff))
-          if (isGitWorkspace && hasPendingDiff && autoOpenedGitForThreadRef.current !== currentThreadId) {
-            autoOpenedGitForThreadRef.current = currentThreadId
-            setRightModule("git")
-            handlePreviewExpand()
-            return
-          }
-          if (!hasPendingDiff && autoOpenedGitForThreadRef.current === currentThreadId) {
-            autoOpenedGitForThreadRef.current = null
-          }
-        }
-      } catch {
-        if (!cancelled) setHasPendingGitDiff(false)
-      }
-    }
+  useEffect(() => {
+    if (!currentThreadId || mainView !== "thread") return
 
-    void refreshSummary()
     const cleanupFs = window.api.workspace.onFilesChanged((data) => {
-      if (data.threadId === currentThreadId) {
-        void refreshSummary()
-      }
+      if (data.threadId !== currentThreadId) return
+      if (!isGitWorkspaceByThread[currentThreadId]) return
+      if (rightModule === "git") return
+      setThreadPendingGitDiff(currentThreadId, true)
     })
 
-    return () => {
-      cancelled = true
-      cleanupFs()
-    }
-  }, [currentThreadId, mainView, handlePreviewExpand])
+    return cleanupFs
+  }, [currentThreadId, mainView, rightModule, isGitWorkspaceByThread, setThreadPendingGitDiff])
 
   // Reset drag start on mouse up
   useEffect(() => {
@@ -599,7 +554,13 @@ function App(): React.JSX.Element {
                 {!previewFullscreen && (
                   <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
                     {currentThreadId ? (
-                      <TabbedPanel threadId={currentThreadId} showTabBar={false} />
+                      <TabbedPanel
+                        threadId={currentThreadId}
+                        showTabBar={false}
+                        hasPendingGitDiffNotice={hasPendingGitDiff && rightModule !== "git"}
+                        onRequestOpenGitPanel={selectGitModule}
+                        onThreadGitStatusChange={handleThreadGitStatusChange}
+                      />
                     ) : (
                       <div className="flex flex-1 items-center justify-center text-muted-foreground">
                         选择或创建一个任务开始
@@ -621,7 +582,6 @@ function App(): React.JSX.Element {
                   <RightPanel
                     moduleMode={rightModule}
                     onRequestPreviewMode={selectPreviewModule}
-                    onRequestGitMode={selectGitModule}
                     onRequestWorkMode={selectWorkModule}
                     onPreviewFullscreenChange={setPreviewFullscreen}
                   />

@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input"
 
 interface WorkspacePickerProps {
   threadId: string
+  onGitStatusChange?: (threadId: string, isGit: boolean) => void
 }
 
 type WorkspaceMode = "local" | "worktree"
@@ -72,7 +73,7 @@ function PathRow({ label, path, highlight = false }: { label: string; path: stri
   )
 }
 
-export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.Element {
+export function WorkspacePicker({ threadId, onGitStatusChange }: WorkspacePickerProps): React.JSX.Element {
   const { workspacePath, setWorkspacePath, setWorkspaceFiles, messages } = useCurrentThread(threadId)
   const canChangeWorkspace = messages.length === 0
   const [open, setOpen] = useState(false)
@@ -139,6 +140,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
         setIsGit(gitInfo.isGit)
         setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
         setIsWorktreePath(gitInfo.isWorktreePath)
+        onGitStatusChange?.(threadId, gitInfo.isGit)
         if (gitInfo.isGit && gitInfo.gitRoot) {
           await refreshWorktreeList(gitInfo.gitRoot)
         } else {
@@ -156,6 +158,8 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
           setWorktreeBaseBranch((meta.worktreeBaseBranch as string) ?? null)
           setMode("worktree")
         }
+      } else {
+        onGitStatusChange?.(threadId, false)
       }
     }
     loadWorkspace()
@@ -172,6 +176,7 @@ export function WorkspacePicker({ threadId }: WorkspacePickerProps): React.JSX.E
       setIsGit(gitInfo.isGit)
       setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
       setIsWorktreePath(gitInfo.isWorktreePath)
+      onGitStatusChange?.(threadId, gitInfo.isGit)
       if (gitInfo.isGit && gitInfo.gitRoot) {
         await refreshWorktreeList(gitInfo.gitRoot)
       } else {

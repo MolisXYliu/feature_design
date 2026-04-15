@@ -1693,8 +1693,10 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle("workspace:getGitPanelSummary", async (_event, { threadId }: { threadId: string }) => {
     try {
+      logGitStep(threadId, "summary", "请求 getGitPanelSummary")
       const context = await resolveThreadWorkspaceContext(threadId)
       if (!context.workspacePath || !context.isGitRepo) {
+        logGitStep(threadId, "summary", "非 Git 工作区，返回空摘要")
         return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
       }
       const workspacePath = context.workspacePath
@@ -1705,6 +1707,7 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         GIT_CONTEXT_CACHE_TTL_MS,
         () => getGitPanelSummaryQuick(workspacePath)
       )
+      logGitStep(threadId, "summary", `完成 hasPendingDiff=${hasPendingDiff} changedFiles=${changedFiles}`)
       return {
         success: true,
         isWorktree: context.isWorktree,
@@ -1712,7 +1715,12 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         hasPendingDiff,
         changedFiles
       }
-    } catch {
+    } catch (error) {
+      logGitStep(
+        threadId,
+        "summary",
+        `异常：${error instanceof Error ? error.message : String(error)}`
+      )
       return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
     }
   })
