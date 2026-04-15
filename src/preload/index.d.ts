@@ -215,7 +215,7 @@ interface CustomAPI {
       hasPendingDiff: boolean
       changedFiles: number
     }>
-    isGit: (folderPath: string) => Promise<{
+    isGit: (folderPath: string, options?: { includeWorktrees?: boolean }) => Promise<{
       isGit: boolean
       gitRoot: string | null
       worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>

@@ -1413,16 +1413,24 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     }
   )
 
-  // Check if a folder is a git repo and return root path + worktrees
-  ipcMain.handle("workspace:isGit", async (_event, folderPath: string) => {
-    const gitRoot = await getGitRoot(folderPath)
-    if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
+  // Check if a folder is a git repo and optionally include worktree list.
+  ipcMain.handle(
+    "workspace:isGit",
+    async (
+      _event,
+      payload: string | { folderPath: string; includeWorktrees?: boolean }
+    ) => {
+      const folderPath = typeof payload === "string" ? payload : payload.folderPath
+      const includeWorktrees = typeof payload === "string" ? true : Boolean(payload.includeWorktrees)
+      const gitRoot = await getGitRoot(folderPath)
+      if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
 
-    const isWorktreePath = await detectIsWorktreePath(folderPath)
+      const isWorktreePath = await detectIsWorktreePath(folderPath)
 
-    const worktrees = await listWorktrees(gitRoot)
-    return { isGit: true, gitRoot, worktrees, isWorktreePath }
-  })
+      const worktrees = includeWorktrees ? await listWorktrees(gitRoot) : []
+      return { isGit: true, gitRoot, worktrees, isWorktreePath }
+    }
+  )
 
   // List worktrees for a git repo
   ipcMain.handle("workspace:listWorktrees", async (_event, gitRoot: string) => {

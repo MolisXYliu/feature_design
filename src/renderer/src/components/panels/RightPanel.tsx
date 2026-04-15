@@ -834,6 +834,7 @@ export function RightPanel({
           <div className="bg-white p-2 h-full min-h-0">
             <Suspense fallback={<LazySectionFallback label="加载 Git 面板..." />}>
               <GitPanelView
+                key={currentThreadId ?? "git-panel-empty-thread"}
                 threadId={currentThreadId ?? ""}
                 workspacePath={threadState?.workspacePath ?? null}
                 onOpenFileFolder={async (filePath) => {

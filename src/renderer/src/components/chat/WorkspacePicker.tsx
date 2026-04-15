@@ -126,6 +126,7 @@ export function WorkspacePicker({ threadId, onGitStatusChange }: WorkspacePicker
       setWorktreeBaseBranch(null)
       setCreatingWorktree(false)
       setWorktreeError(null)
+      setWorktreeList([])
 
       const p = await window.api.workspace.get(threadId)
       if (cancelled) return
@@ -135,17 +136,12 @@ export function WorkspacePicker({ threadId, onGitStatusChange }: WorkspacePicker
         if (cancelled) return
         if (result.success && result.files) setWorkspaceFiles(result.files)
 
-        const gitInfo = await window.api.workspace.isGit(p)
+        const gitInfo = await window.api.workspace.isGit(p, { includeWorktrees: false })
         if (cancelled) return
         setIsGit(gitInfo.isGit)
         setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
         setIsWorktreePath(gitInfo.isWorktreePath)
         onGitStatusChange?.(threadId, gitInfo.isGit)
-        if (gitInfo.isGit && gitInfo.gitRoot) {
-          await refreshWorktreeList(gitInfo.gitRoot)
-        } else {
-          setWorktreeList([])
-        }
 
         // Load worktree context from thread metadata
         const thread = await window.api.threads.get(threadId)
@@ -168,20 +164,21 @@ export function WorkspacePicker({ threadId, onGitStatusChange }: WorkspacePicker
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId])
 
+  useEffect(() => {
+    if (!open || !isGit || !gitRoot) return
+    void refreshWorktreeList(gitRoot)
+  }, [open, isGit, gitRoot])
+
   async function handleSelectFolder(): Promise<void> {
     await selectWorkspaceFolder(threadId, setWorkspacePath, setWorkspaceFiles, setLoading, setOpen)
     const newPath = await window.api.workspace.get(threadId)
     if (newPath) {
-      const gitInfo = await window.api.workspace.isGit(newPath)
+      const gitInfo = await window.api.workspace.isGit(newPath, { includeWorktrees: false })
       setIsGit(gitInfo.isGit)
       setGitRoot(gitInfo.isGit ? gitInfo.gitRoot : null)
       setIsWorktreePath(gitInfo.isWorktreePath)
       onGitStatusChange?.(threadId, gitInfo.isGit)
-      if (gitInfo.isGit && gitInfo.gitRoot) {
-        await refreshWorktreeList(gitInfo.gitRoot)
-      } else {
-        setWorktreeList([])
-      }
+      setWorktreeList([])
       setMode("local")
       setIsWorktree(false)
       setWorktreeBranch(null)

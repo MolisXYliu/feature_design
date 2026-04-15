@@ -416,14 +416,15 @@ const api = {
       }>
     },
     isGit: (
-      folderPath: string
+      folderPath: string,
+      options?: { includeWorktrees?: boolean }
     ): Promise<{
       isGit: boolean
       gitRoot: string | null
       worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>
       isWorktreePath: boolean
     }> => {
-      return ipcRenderer.invoke("workspace:isGit", folderPath) as Promise<{
+      return ipcRenderer.invoke("workspace:isGit", { folderPath, includeWorktrees: options?.includeWorktrees }) as Promise<{
         isGit: boolean
         gitRoot: string | null
         worktrees: Array<{ path: string; branch: string; isMain: boolean; createdAt?: Date }>

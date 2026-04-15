@@ -53,6 +53,12 @@ export function GitPanelView({
     error?: string
   } | null>(null)
 
+  useEffect(() => {
+    setState(null)
+    setError(null)
+    setExpandedFilePaths(new Set())
+  }, [threadId])
+
   const showToast = useCallback((text: string, variant: "success" | "error" = "success"): void => {
     if (variant === "success") {
       toast.success(text)
