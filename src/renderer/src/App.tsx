@@ -321,17 +321,15 @@ function App(): React.JSX.Element {
       }
     }
 
-    refreshSummary()
-    const timer = window.setInterval(refreshSummary, 3000)
+    void refreshSummary()
     const cleanupFs = window.api.workspace.onFilesChanged((data) => {
       if (data.threadId === currentThreadId) {
-        refreshSummary()
+        void refreshSummary()
       }
     })
 
     return () => {
       cancelled = true
-      window.clearInterval(timer)
       cleanupFs()
     }
   }, [currentThreadId, mainView, handlePreviewExpand])

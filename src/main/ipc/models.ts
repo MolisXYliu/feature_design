@@ -307,6 +307,98 @@ async function runStatusPorcelain(
   }
 }
 
+interface TimedPromiseCacheEntry<T> {
+  promise: Promise<T>
+  settledAt: number | null
+}
+
+function getCacheKeyForPath(inputPath: string): string {
+  const resolved = path.resolve(inputPath)
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+function getCachedPromise<T>(
+  cache: Map<string, TimedPromiseCacheEntry<T>>,
+  cacheKey: string,
+  ttlMs: number,
+  compute: () => Promise<T>
+): Promise<T> {
+  const now = Date.now()
+  const cached = cache.get(cacheKey)
+  if (cached) {
+    if (cached.settledAt === null || now - cached.settledAt < ttlMs) {
+      return cached.promise
+    }
+    cache.delete(cacheKey)
+  }
+
+  const entry: TimedPromiseCacheEntry<T> = {
+    promise: Promise.resolve() as Promise<T>,
+    settledAt: null
+  }
+
+  const promise = compute()
+    .then((result) => {
+      entry.settledAt = Date.now()
+      return result
+    })
+    .catch((error) => {
+      if (cache.get(cacheKey) === entry) {
+        cache.delete(cacheKey)
+      }
+      throw error
+    })
+
+  entry.promise = promise
+  cache.set(cacheKey, entry)
+  return promise
+}
+
+interface GitPanelSummaryStats {
+  hasPendingDiff: boolean
+  changedFiles: number
+}
+
+const GIT_CONTEXT_CACHE_TTL_MS = 1000
+const gitRootCache = new Map<string, TimedPromiseCacheEntry<string | null>>()
+const worktreeCache = new Map<string, TimedPromiseCacheEntry<boolean>>()
+const summaryCache = new Map<string, TimedPromiseCacheEntry<GitPanelSummaryStats>>()
+
+function collectChangedFilesFromStatus(
+  worktreePath: string,
+  statusOutput: string,
+  trackedFiles: string[],
+  options?: { filterByTracked?: boolean }
+): string[] {
+  const trackedSet = new Set<string>()
+  for (const tracked of trackedFiles) {
+    for (const rel of toWorktreeRelativePath(worktreePath, tracked)) {
+      trackedSet.add(rel)
+    }
+  }
+
+  const filterByTracked = Boolean(options?.filterByTracked) && trackedSet.size > 0
+  const changedSet = new Set<string>()
+
+  for (const raw of parsePorcelainPaths(statusOutput)) {
+    const candidates = toWorktreeRelativePath(worktreePath, raw)
+    if (candidates.length === 0) continue
+
+    if (filterByTracked) {
+      const matched = candidates.find((candidate) => trackedSet.has(candidate))
+      if (matched) changedSet.add(matched)
+      continue
+    }
+
+    const best = candidates.find((candidate) => candidate && !candidate.startsWith("../") && !path.isAbsolute(candidate))
+    if (best) {
+      changedSet.add(best)
+    }
+  }
+
+  return Array.from(changedSet)
+}
+
 function parseNumstatTotals(output: string): { additions: number; deletions: number } {
   let additions = 0
   let deletions = 0
@@ -394,12 +486,15 @@ function isGitDirWorktree(gitDir: string): boolean {
 }
 
 async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
-  try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
-    return isGitDirWorktree(stdout)
-  } catch {
-    return false
-  }
+  const cacheKey = getCacheKeyForPath(folderPath)
+  return getCachedPromise(worktreeCache, cacheKey, GIT_CONTEXT_CACHE_TTL_MS, async () => {
+    try {
+      const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
+      return isGitDirWorktree(stdout)
+    } catch {
+      return false
+    }
+  })
 }
 
 function logGitStep(threadId: string, action: string, detail: string): void {
@@ -728,30 +823,15 @@ async function buildGitPanelState(
   const normalizedTrackedFiles = Array.from(trackedSet)
   const filterByTracked = normalizedTrackedFiles.length > 0 && !includeAllWhenNoTracked
 
-  const parseChangedFromStatus = (statusOutput: string): string[] => {
-    const parsed = parsePorcelainPaths(statusOutput)
-    const changedSet = new Set<string>()
-    for (const raw of parsed) {
-      const candidates = toWorktreeRelativePath(worktreePath, raw)
-      if (candidates.length === 0) continue
-      if (filterByTracked) {
-        const matched = candidates.find((c) => trackedSet.has(c))
-        if (matched) changedSet.add(matched)
-        continue
-      }
-      const best = candidates.find((c) => c && !c.startsWith("../") && !path.isAbsolute(c))
-      if (best) changedSet.add(best)
-    }
-    return Array.from(changedSet)
-  }
-
   if (normalizedTrackedFiles.length === 0 && !includeAllWhenNoTracked) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
   const statusPathspecs = filterByTracked ? normalizedTrackedFiles : ["."]
   const statusOut = await runStatusPorcelain(worktreePath, statusPathspecs, { silent })
-  const changedFiles = parseChangedFromStatus(statusOut)
+  const changedFiles = collectChangedFilesFromStatus(worktreePath, statusOut, normalizedTrackedFiles, {
+    filterByTracked
+  })
 
   if (changedFiles.length === 0) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
@@ -851,13 +931,28 @@ async function buildGitPanelState(
   }
 }
 
-async function getGitRoot(folderPath: string): Promise<string | null> {
-  try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
-    return stdout.trim()
-  } catch {
-    return null
+async function getGitPanelSummaryQuick(worktreePath: string): Promise<{
+  hasPendingDiff: boolean
+  changedFiles: number
+}> {
+  const statusOut = await runStatusPorcelain(worktreePath, ["."], { silent: true })
+  const changedFiles = collectChangedFilesFromStatus(worktreePath, statusOut, [])
+  return {
+    hasPendingDiff: changedFiles.length > 0,
+    changedFiles: changedFiles.length
   }
+}
+
+async function getGitRoot(folderPath: string): Promise<string | null> {
+  const cacheKey = getCacheKeyForPath(folderPath)
+  return getCachedPromise(gitRootCache, cacheKey, GIT_CONTEXT_CACHE_TTL_MS, async () => {
+    try {
+      const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
+      return stdout.trim()
+    } catch {
+      return null
+    }
+  })
 }
 
 async function listWorktrees(gitRoot: string): Promise<WorktreeInfo[]> {
@@ -1602,17 +1697,20 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
       if (!context.workspacePath || !context.isGitRepo) {
         return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
       }
-      const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked, {
-        silent: true,
-        includeAllWhenNoTracked: true
-      })
+      const workspacePath = context.workspacePath
+      const cacheKey = getCacheKeyForPath(workspacePath)
+      const { hasPendingDiff, changedFiles } = await getCachedPromise(
+        summaryCache,
+        cacheKey,
+        GIT_CONTEXT_CACHE_TTL_MS,
+        () => getGitPanelSummaryQuick(workspacePath)
+      )
       return {
         success: true,
         isWorktree: context.isWorktree,
         isGitRepo: true,
-        hasPendingDiff: state.files.length > 0,
-        changedFiles: state.files.length
+        hasPendingDiff,
+        changedFiles
       }
     } catch {
       return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
