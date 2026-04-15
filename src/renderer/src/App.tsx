@@ -100,16 +100,7 @@ function App(): React.JSX.Element {
               const result = await res.json()
               if (result.returnCode === 'SUC0000') {
                 const resBody = result.body
-                const pathName = resBody.pathName||''
-                if(pathName.includes('零售客户经营开发团队')){
-                  setBus(true)
-                }else{
-                  if(['00010719','01008194','01080687','00011026'].includes(resBody.sapId)){
-                    setBus(true)
-                  }else{
-                    setBus(false)
-                  }
-                }
+                setBus(true)
                 window.api.models.upsertUserInfo({
                     sapId: resBody.sapId,//8
                     ystId: resBody.ystId,//6
@@ -121,6 +112,8 @@ function App(): React.JSX.Element {
                     ystIdToken:resBody.ystIdToken,
                     ystAccessToken: resBody.ystAccessToken
                 })
+              } else if (result.returnCode === 'BIZ9000'){
+                setBus(false)
               } else{
                 window.electron.openLoginPage()
               }
