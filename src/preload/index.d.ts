@@ -316,6 +316,7 @@ interface CustomAPI {
     setEnabled: (id: string, enabled: boolean) => Promise<void>
     testConnection: (params: {
       id?: string
+      config?: McpConnectorUpsert
       url?: string
       advanced?: McpConnectorConfig["advanced"]
     }) => Promise<{ success: boolean; tools?: string[]; error?: string }>

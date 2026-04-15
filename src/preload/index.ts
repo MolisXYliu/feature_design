@@ -588,6 +588,7 @@ const api = {
       ipcRenderer.invoke("mcp:setEnabled", { id, enabled }),
     testConnection: (params: {
       id?: string
+      config?: McpConnectorUpsert
       url?: string
       advanced?: McpConnectorConfig["advanced"]
     }): Promise<{ success: boolean; tools?: string[]; error?: string }> =>

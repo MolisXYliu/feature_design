@@ -184,6 +184,8 @@ export interface GrepMatch {
 }
 
 // MCP Connector types
+export type McpConnectorKind = "remote" | "stdio"
+
 export interface McpConnectorAdvanced {
   headers?: Record<string, string>
   transport?: "sse" | "streamable-http"
@@ -197,7 +199,11 @@ export interface McpConnectorAdvanced {
 export interface McpConnectorConfig {
   id: string
   name: string
-  url: string
+  kind?: McpConnectorKind
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
   enabled: boolean
   advanced?: McpConnectorAdvanced
   lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
@@ -207,7 +213,11 @@ export interface McpConnectorConfig {
 
 export interface McpConnectorUpsert {
   name: string
-  url: string
+  kind?: McpConnectorKind
+  url?: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
   enabled?: boolean
   advanced?: McpConnectorAdvanced
   lazyLoad?: boolean  // true = lazy load tools, false/undefined = load all tools
@@ -308,6 +318,7 @@ export interface PluginMetadata {
 export interface PluginMcpServerConfig {
   command?: string
   args?: string[]
+  env?: Record<string, string>
   url?: string
   transport?: "sse" | "streamable-http"
   headers?: Record<string, string>

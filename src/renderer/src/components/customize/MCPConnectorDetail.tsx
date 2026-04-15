@@ -5,6 +5,19 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import type { McpConnectorConfig } from "@/types"
 
+function getConnectorKind(connector: McpConnectorConfig): "remote" | "stdio" {
+  if (connector.kind === "stdio") return "stdio"
+  if (connector.kind === "remote") return "remote"
+  return connector.command ? "stdio" : "remote"
+}
+
+function getConnectorSummary(connector: McpConnectorConfig): string {
+  if (getConnectorKind(connector) === "stdio") {
+    return [connector.command ?? "", ...(connector.args ?? [])].filter(Boolean).join(" ")
+  }
+  return connector.url ?? ""
+}
+
 export function MCPConnectorDetail(props: {
   connector: McpConnectorConfig | null
   onToggleEnabled: (id: string, enabled: boolean) => void
@@ -46,8 +59,15 @@ export function MCPConnectorDetail(props: {
     try {
       const res = testByUrlOnly
         ? await window.api.mcp.testConnection({
-            url: connector.url,
-            advanced: connector.advanced
+            config: {
+              name: connector.name,
+              kind: getConnectorKind(connector),
+              url: connector.url,
+              command: connector.command,
+              args: connector.args,
+              env: connector.env,
+              advanced: connector.advanced
+            }
           })
         : await window.api.mcp.testConnection({ id: connector.id })
       setTestResult(res)
@@ -128,7 +148,7 @@ export function MCPConnectorDetail(props: {
       <div className="p-4 border-b border-border flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold truncate">{connector.name}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5 truncate">{connector.url}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">{getConnectorSummary(connector)}</p>
         </div>
         {!hideActions && (
           <div className="flex items-center gap-1.5 shrink-0">
