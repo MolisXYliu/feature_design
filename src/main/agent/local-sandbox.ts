@@ -11,7 +11,7 @@
 
 import { spawn, execSync, type ChildProcess } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { constants as fsConstants, existsSync, mkdirSync, realpathSync } from "node:fs"
+import { constants as fsConstants, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
@@ -54,6 +54,40 @@ const SENSITIVE_DIR_NAMES = new Set([
 
 const WINDOWS_SANDBOX_OFFLINE_USERNAME = "CodexSandboxOffline"
 const WINDOWS_SANDBOX_ONLINE_USERNAME = "CodexSandboxOnline"
+
+// Python's tempfile uses private 0o700 directories on Windows. Under Codex's
+// WRITE_RESTRICTED token those DACLs omit the capability SID, so pip cannot
+// reopen its own pip-unpack-* directories. Keep the patch scoped to sandbox TEMP.
+const PYTHON_TEMP_ACL_SITE_CUSTOMIZE = `import os
+
+if os.name == "nt" and os.environ.get("CMB_SANDBOX_FIX_PYTHON_TEMP_ACL") == "1":
+    _orig_mkdir = os.mkdir
+    _roots = []
+    for _key in ("TEMP", "TMP"):
+        _value = os.environ.get(_key)
+        if _value:
+            try:
+                _roots.append(os.path.normcase(os.path.abspath(_value)))
+            except Exception:
+                pass
+
+    def _under_temp(path):
+        try:
+            full = os.path.normcase(os.path.abspath(path))
+        except Exception:
+            return False
+        for root in _roots:
+            if full == root or full.startswith(root + os.sep):
+                return True
+        return False
+
+    def _mkdir_inherit_acl(path, mode=0o777, *args, **kwargs):
+        if mode in (0o600, 0o700) and _under_temp(path):
+            mode = 0o777
+        return _orig_mkdir(path, mode, *args, **kwargs)
+
+    os.mkdir = _mkdir_inherit_acl
+`
 
 /**
  * Check if a path falls within a sensitive directory that should be blocked
@@ -201,6 +235,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
 
   private static getSandboxToolCacheDirs(cacheRoot: string) {
     const pythonUserBase = path.win32.join(cacheRoot, "python-userbase")
+    const pythonSiteCustomize = path.win32.join(cacheRoot, "python-sitecustomize")
     const pythonScriptDirs = [
       path.win32.join(pythonUserBase, "Scripts")
     ]
@@ -225,6 +260,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       dotnetHome: path.win32.join(cacheRoot, "dotnet-home"),
       gemHome: path.win32.join(cacheRoot, "gem-home"),
       pythonUserBase,
+      pythonSiteCustomize,
       pythonScriptDirs,
       pipCache: path.win32.join(cacheRoot, "pip-cache"),
       pipxHome: path.win32.join(cacheRoot, "pipx-home"),
@@ -262,6 +298,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         ["GEM_HOME", dirs.gemHome],
         ["BUNDLE_PATH", dirs.gemHome],
         ["PYTHONUSERBASE", dirs.pythonUserBase],
+        ["CMB_SANDBOX_FIX_PYTHON_TEMP_ACL", "1"],
         ["PIP_CACHE_DIR", dirs.pipCache],
         ["PIPX_HOME", dirs.pipxHome],
         ["PIPX_BIN_DIR", dirs.pipxBin],
@@ -305,6 +342,7 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       dirs.dotnetHome,
       dirs.gemHome,
       dirs.pythonUserBase,
+      dirs.pythonSiteCustomize,
       ...dirs.pythonScriptDirs,
       dirs.pipCache,
       dirs.pipxHome,
@@ -324,6 +362,15 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       try { mkdirSync(dir, { recursive: true }) } catch (err) {
         console.warn(`[LocalSandbox] failed to prepare sandbox cache dir ${dir}: ${err}`)
       }
+    }
+    try {
+      writeFileSync(
+        path.win32.join(dirs.pythonSiteCustomize, "sitecustomize.py"),
+        PYTHON_TEMP_ACL_SITE_CUSTOMIZE,
+        "utf8"
+      )
+    } catch (err) {
+      console.warn(`[LocalSandbox] failed to prepare Python sandbox sitecustomize: ${err}`)
     }
     return uniqueDirs
   }
@@ -394,8 +441,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
       const pathPreamble = pathPrefix ? `set "PATH=${cmdSetLiteral(pathPrefix)};%PATH%"` : ""
+      const pythonPathPreamble = `set "PYTHONPATH=${cmdSetLiteral(toolDirs.pythonSiteCustomize)};%PYTHONPATH%"`
       const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
-      return [base, pathPreamble, jvmOpts, gitSslCmd].filter(Boolean).join(" & ")
+      return [base, pathPreamble, pythonPathPreamble, jvmOpts, gitSslCmd].filter(Boolean).join(" & ")
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
@@ -403,11 +451,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
       const pathPreamble = pathPrefix ? `$env:PATH=${powershellSingleQuote(pathPrefix)} + ';' + $env:PATH` : ""
+      const pythonPathPreamble = `$env:PYTHONPATH=${powershellSingleQuote(toolDirs.pythonSiteCustomize)} + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })`
       const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
       const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
       const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
-      return [base, pathPreamble, jvmOpts, gitSslPs].filter(Boolean).join("; ")
+      return [base, pathPreamble, pythonPathPreamble, jvmOpts, gitSslPs].filter(Boolean).join("; ")
     }
 
     return ""
@@ -437,8 +486,9 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         .map(([key, value]) => `set "${key}=${cmdSetLiteral(value)}"`)
         .join(" & ")
       const pathPreamble = pathPrefix ? `set "PATH=${cmdSetLiteral(pathPrefix)};%PATH%"` : ""
+      const pythonPathPreamble = `set "PYTHONPATH=${cmdSetLiteral(toolDirs.pythonSiteCustomize)};%PYTHONPATH%"`
       const jvmOpts = `set "JAVA_TOOL_OPTIONS=%JAVA_TOOL_OPTIONS% ${cmdSetLiteral(javaToolFlags)}" & set "MAVEN_OPTS=%MAVEN_OPTS% ${cmdSetLiteral(mavenFlags)}" & set "SBT_OPTS=%SBT_OPTS% ${cmdSetLiteral(sbtFlags)}"`
-      return [toolCache, pathPreamble, jvmOpts].filter(Boolean).join(" & ")
+      return [toolCache, pathPreamble, pythonPathPreamble, jvmOpts].filter(Boolean).join(" & ")
     }
 
     if (shellBase === "pwsh" || shellBase === "powershell") {
@@ -446,11 +496,12 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
         .map(([key, value]) => `$env:${key}=${powershellSingleQuote(value)}`)
         .join("; ")
       const pathPreamble = pathPrefix ? `$env:PATH=${powershellSingleQuote(pathPrefix)} + ';' + $env:PATH` : ""
+      const pythonPathPreamble = `$env:PYTHONPATH=${powershellSingleQuote(toolDirs.pythonSiteCustomize)} + $(if ($env:PYTHONPATH) { ';' + $env:PYTHONPATH } else { '' })`
       const javaToolFlagsEscaped = javaToolFlags.replace(/\\/g, "\\\\")
       const mavenFlagsEscaped = mavenFlags.replace(/\\/g, "\\\\")
       const sbtFlagsEscaped = sbtFlags.replace(/\\/g, "\\\\")
       const jvmOpts = `$env:JAVA_TOOL_OPTIONS="$($env:JAVA_TOOL_OPTIONS) ${javaToolFlagsEscaped}"; $env:MAVEN_OPTS="$($env:MAVEN_OPTS) ${mavenFlagsEscaped}"; $env:SBT_OPTS="$($env:SBT_OPTS) ${sbtFlagsEscaped}"`
-      return [toolCache, pathPreamble, jvmOpts].filter(Boolean).join("; ")
+      return [toolCache, pathPreamble, pythonPathPreamble, jvmOpts].filter(Boolean).join("; ")
     }
 
     return ""
