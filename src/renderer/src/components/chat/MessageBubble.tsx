@@ -221,7 +221,7 @@ export function MessageBubble({
             {content}
           </div>
           <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-            <span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>
+            {/*<span className="text-[11px] text-muted-foreground">{createdAtLabel}</span>*/}
             <button
               type="button"
               onClick={handleCopyMessage}
