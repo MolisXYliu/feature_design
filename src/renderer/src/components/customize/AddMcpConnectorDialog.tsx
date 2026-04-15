@@ -11,12 +11,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import type { McpConnectorConfig, McpConnectorUpsert } from "@/types"
-
-function getConnectorKind(connector?: McpConnectorConfig | null): "remote" | "stdio" {
-  if (connector?.kind === "stdio") return "stdio"
-  if (connector?.kind === "remote") return "remote"
-  return connector?.command ? "stdio" : "remote"
-}
+import { resolveMcpConnectorKind } from "../../../../main/mcp/connector-kind"
 
 export function AddMcpConnectorDialog(props: {
   open: boolean
@@ -26,7 +21,7 @@ export function AddMcpConnectorDialog(props: {
 }): React.JSX.Element {
   const { open, onOpenChange, onSuccess, editConnector } = props
   const [name, setName] = useState(editConnector?.name ?? "")
-  const [kind, setKind] = useState<"remote" | "stdio">(getConnectorKind(editConnector))
+  const [kind, setKind] = useState<"remote" | "stdio">(resolveMcpConnectorKind(editConnector))
   const [url, setUrl] = useState(editConnector?.url ?? "")
   const [command, setCommand] = useState(editConnector?.command ?? "")
   const [argsText, setArgsText] = useState(editConnector?.args?.join("\n") ?? "")
@@ -60,7 +55,7 @@ export function AddMcpConnectorDialog(props: {
   useEffect(() => {
     if (open && editConnector) {
       setName(editConnector.name)
-      setKind(getConnectorKind(editConnector))
+      setKind(resolveMcpConnectorKind(editConnector))
       setUrl(editConnector.url ?? "")
       setCommand(editConnector.command ?? "")
       setArgsText(editConnector.args?.join("\n") ?? "")
@@ -90,7 +85,7 @@ export function AddMcpConnectorDialog(props: {
   const resetForm = useCallback(() => {
     if (editConnector) {
       setName(editConnector.name)
-      setKind(getConnectorKind(editConnector))
+      setKind(resolveMcpConnectorKind(editConnector))
       setUrl(editConnector.url ?? "")
       setCommand(editConnector.command ?? "")
       setArgsText(editConnector.args?.join("\n") ?? "")

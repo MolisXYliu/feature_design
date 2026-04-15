@@ -938,18 +938,14 @@ function normalizeMcpConnector(
 
   const hasUrl = typeof entry.url === "string" && entry.url.trim().length > 0
   const hasCommand = typeof entry.command === "string" && entry.command.trim().length > 0
-  const kind =
-    entry.kind === "stdio"
-      ? "stdio"
-      : entry.kind === "remote"
-        ? "remote"
-        : hasCommand
-          ? "stdio"
-          : hasUrl
-            ? "remote"
-            : null
-
-  if (!kind) return null
+  if (entry.kind !== "stdio" && entry.kind !== "remote" && !hasUrl && !hasCommand) {
+    return null
+  }
+  const kind = resolveMcpConnectorKind({
+    kind: entry.kind === "stdio" || entry.kind === "remote" ? entry.kind : undefined,
+    url: hasUrl ? String(entry.url) : undefined,
+    command: hasCommand ? String(entry.command) : undefined
+  })
 
   const advanced =
     entry.advanced && typeof entry.advanced === "object" && !Array.isArray(entry.advanced)

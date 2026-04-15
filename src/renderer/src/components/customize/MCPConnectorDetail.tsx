@@ -4,15 +4,10 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import type { McpConnectorConfig } from "@/types"
-
-function getConnectorKind(connector: McpConnectorConfig): "remote" | "stdio" {
-  if (connector.kind === "stdio") return "stdio"
-  if (connector.kind === "remote") return "remote"
-  return connector.command ? "stdio" : "remote"
-}
+import { resolveMcpConnectorKind } from "../../../../main/mcp/connector-kind"
 
 function getConnectorSummary(connector: McpConnectorConfig): string {
-  if (getConnectorKind(connector) === "stdio") {
+  if (resolveMcpConnectorKind(connector) === "stdio") {
     return [connector.command ?? "", ...(connector.args ?? [])].filter(Boolean).join(" ")
   }
   return connector.url ?? ""
@@ -61,7 +56,7 @@ export function MCPConnectorDetail(props: {
         ? await window.api.mcp.testConnection({
             config: {
               name: connector.name,
-              kind: getConnectorKind(connector),
+              kind: resolveMcpConnectorKind(connector),
               url: connector.url,
               command: connector.command,
               args: connector.args,
