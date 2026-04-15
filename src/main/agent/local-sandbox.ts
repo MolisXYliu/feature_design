@@ -355,8 +355,17 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     }
   }
 
+  private static readonly _preparedSandboxCacheDirs = new Map<string, string[]>()
+
   private static prepareSandboxCacheDirs(cacheRoot: string): string[] {
     const dirs = LocalSandbox.getSandboxToolCacheDirs(cacheRoot)
+    const cacheKey = normalizeDirKey(cacheRoot)
+    const siteCustomizePath = path.win32.join(dirs.pythonSiteCustomize, "sitecustomize.py")
+    const cachedDirs = LocalSandbox._preparedSandboxCacheDirs.get(cacheKey)
+    if (cachedDirs && existsSync(siteCustomizePath)) {
+      return cachedDirs
+    }
+
     const { pathEntries } = LocalSandbox.buildSandboxToolEnv(cacheRoot)
     const allDirs = [
       dirs.root,
@@ -407,19 +416,25 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
       ...pathEntries
     ]
     const uniqueDirs = Array.from(new Set(allDirs.map((dir) => path.win32.normalize(dir))))
+    let prepared = true
     for (const dir of uniqueDirs) {
       try { mkdirSync(dir, { recursive: true }) } catch (err) {
+        prepared = false
         console.warn(`[LocalSandbox] failed to prepare sandbox cache dir ${dir}: ${err}`)
       }
     }
     try {
       writeFileSync(
-        path.win32.join(dirs.pythonSiteCustomize, "sitecustomize.py"),
+        siteCustomizePath,
         PYTHON_TEMP_ACL_SITE_CUSTOMIZE,
         "utf8"
       )
     } catch (err) {
+      prepared = false
       console.warn(`[LocalSandbox] failed to prepare Python sandbox sitecustomize: ${err}`)
+    }
+    if (prepared) {
+      LocalSandbox._preparedSandboxCacheDirs.set(cacheKey, uniqueDirs)
     }
     return uniqueDirs
   }
@@ -472,6 +487,8 @@ export class LocalSandbox extends FilesystemBackend implements SandboxBackendPro
     //   MAVEN_OPTS        → maven.repo.local under the app-owned writable cache root.
     // This avoids conflicting -Duser.home values while keeping Maven writes inside the
     // same writable-root mechanism Codex grants for elevated workspace-write.
+    // Maven commands are routed to unelevated mode before this path, so the real user's
+    // ~/.m2/settings.xml remains available without exposing the host profile in elevated mode.
     // Force UTF-8 encoding for all JVM output to match our chcp 65001 / [Console]::OutputEncoding=UTF8 preamble.
     // Without this, Java defaults to system encoding (GBK on Chinese Windows) → garbled output in PowerShell.
     const javaUtf8Flags = "-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8"
