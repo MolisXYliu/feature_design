@@ -206,7 +206,6 @@ export function MessageBubble({
       await navigator.clipboard.writeText(plainTextForCopy)
       setCopySuccess(true)
       setTimeout(() => setCopySuccess(false), 1800)
-      toast.success("已复制消息内容")
     } catch (error) {
       console.error("[MessageBubble] Failed to copy message:", error)
       toast.error("复制失败，请重试")
@@ -248,8 +247,6 @@ export function MessageBubble({
           }
         }).catch((err) => console.error("Failed to track dislike feedback:", err))
       }
-
-      toast.success("反馈提交成功")
     } catch (error) {
       console.error("反馈提交失败", error)
       toast.error("反馈提交失败，请重试")
@@ -351,7 +348,6 @@ export function MessageBubble({
                 setLikedMessageId(message.id)
                 setDislikedMessageId(null)
                 handleFeedbackSubmit("like", "")
-                toast.success("感谢您的点赞！😊")
               }}
               className={`inline-flex items-center justify-center rounded p-1 transition-all transform hover:scale-110 active:scale-95 ${
                 likedMessageId === message.id
