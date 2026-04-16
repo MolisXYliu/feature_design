@@ -462,12 +462,12 @@ function App(): React.JSX.Element {
                         : moduleInactiveClass
                   }`}
                   onClick={selectGitModule}
-                  title="Git 操作"
-                  aria-label="Git 操作"
+                  title="Git 面板"
+                  aria-label="Git 面板"
                   aria-pressed={rightModule === "git"}
                 >
                   <GitBranch size={16} className="shrink-0" strokeWidth={1.8} />
-                  <span>Git 操作</span>
+                  <span>Git 面板</span>
                 </button>
                 <button
                   type="button"
