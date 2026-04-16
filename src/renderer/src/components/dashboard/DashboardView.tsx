@@ -217,12 +217,6 @@ export function DashboardView(): React.JSX.Element {
             <ProductivityPanel data={productivity} loading={loading} />
           </section>
 
-          {/* Feedback */}
-          <section>
-            <h2 className="text-sm font-semibold text-foreground mb-3">点赞 / 点踩反馈</h2>
-            <FeedbackPanel data={feedback} loading={loading} />
-          </section>
-
           {/* User Analysis */}
           <section>
             <h2 className="text-sm font-semibold text-foreground mb-3">用户分析</h2>
@@ -233,6 +227,12 @@ export function DashboardView(): React.JSX.Element {
           <section>
             <h2 className="text-sm font-semibold text-foreground mb-3">模型分析</h2>
             <ModelPanel data={modelStats} loading={loading} />
+          </section>
+
+          {/* Feedback */}
+          <section>
+            <h2 className="text-sm font-semibold text-foreground mb-3">点赞 / 点踩反馈</h2>
+            <FeedbackPanel data={feedback} loading={loading} />
           </section>
         </div>
       </ScrollArea>
