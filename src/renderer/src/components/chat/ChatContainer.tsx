@@ -2409,7 +2409,7 @@ export function ChatContainer({
                )}
              </div>
             {/*  GitBranch */}
-            <GitBranchSwitcher workspacePath={workspacePath} />
+            {/*<GitBranchSwitcher workspacePath={workspacePath} />*/}
             </div>
           </div>
         </form>
