@@ -14,6 +14,8 @@ import type {
 } from "../types"
 import { startWatching, stopWatching } from "../services/workspace-watcher"
 import { trackEvent } from "../services/event-reporter"
+import { getTracesDir } from "../agent/trace/collector"
+import type { AgentTrace } from "../agent/trace/types"
 
 const execFileAsync = promisify(execFile)
 
@@ -49,6 +51,64 @@ interface PushStepResult {
   step: "pull" | "commit" | "push" | "verify" | "final"
   status: PushStepStatus
   detail: string
+}
+
+/**
+ * Async collect skill usage statistics for a thread by scanning its trace files.
+ * Uses async fs APIs so it never blocks the Electron main process.
+ */
+async function collectThreadSkillStatsAsync(threadId: string): Promise<string[]> {
+  try {
+    const dir = path.join(getTracesDir(), threadId)
+    let files: string[]
+    try {
+      files = (await fs.readdir(dir)).filter((f) => f.endsWith(".jsonl"))
+    } catch {
+      return [] // dir doesn't exist yet — no traces
+    }
+    // Take the last 10 entries — trace files are appended chronologically,
+    // so the tail of the directory listing represents the most recent traces.
+    if (files.length > 10) files = files.slice(-10)
+    const skillSet = new Set<string>()
+    for (const file of files) {
+      const raw = await fs.readFile(path.join(dir, file), "utf-8")
+      for (const line of raw.trim().split("\n")) {
+        if (!line.trim()) continue
+        try {
+          const trace = JSON.parse(line) as AgentTrace
+          if (Array.isArray(trace.usedSkills)) {
+            for (const skill of trace.usedSkills) skillSet.add(skill)
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    return Array.from(skillSet)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Fire-and-forget: emit a git event enriched with thread skill stats.
+ * Runs fully async — never blocks the caller.
+ */
+function trackGitEventWithSkills(
+  eventName: string,
+  threadId: string,
+  baseProps: Record<string, unknown>
+): void {
+  void collectThreadSkillStatsAsync(threadId)
+    .then((usedSkills) => {
+      trackEvent(eventName, "git", {
+        ...baseProps,
+        threadId,
+        usedSkills,
+        skillCount: usedSkills.length
+      })
+    })
+    .catch((e) => {
+      console.warn(`[event] failed to emit ${eventName}:`, e)
+    })
 }
 
 function notifyWorkspaceFilesChanged(threadId: string, workspacePath: string): void {
@@ -307,6 +367,98 @@ async function runStatusPorcelain(
   }
 }
 
+interface TimedPromiseCacheEntry<T> {
+  promise: Promise<T>
+  settledAt: number | null
+}
+
+function getCacheKeyForPath(inputPath: string): string {
+  const resolved = path.resolve(inputPath)
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
+function getCachedPromise<T>(
+  cache: Map<string, TimedPromiseCacheEntry<T>>,
+  cacheKey: string,
+  ttlMs: number,
+  compute: () => Promise<T>
+): Promise<T> {
+  const now = Date.now()
+  const cached = cache.get(cacheKey)
+  if (cached) {
+    if (cached.settledAt === null || now - cached.settledAt < ttlMs) {
+      return cached.promise
+    }
+    cache.delete(cacheKey)
+  }
+
+  const entry: TimedPromiseCacheEntry<T> = {
+    promise: Promise.resolve() as Promise<T>,
+    settledAt: null
+  }
+
+  const promise = compute()
+    .then((result) => {
+      entry.settledAt = Date.now()
+      return result
+    })
+    .catch((error) => {
+      if (cache.get(cacheKey) === entry) {
+        cache.delete(cacheKey)
+      }
+      throw error
+    })
+
+  entry.promise = promise
+  cache.set(cacheKey, entry)
+  return promise
+}
+
+interface GitPanelSummaryStats {
+  hasPendingDiff: boolean
+  changedFiles: number
+}
+
+const GIT_CONTEXT_CACHE_TTL_MS = 1000
+const gitRootCache = new Map<string, TimedPromiseCacheEntry<string | null>>()
+const worktreeCache = new Map<string, TimedPromiseCacheEntry<boolean>>()
+const summaryCache = new Map<string, TimedPromiseCacheEntry<GitPanelSummaryStats>>()
+
+function collectChangedFilesFromStatus(
+  worktreePath: string,
+  statusOutput: string,
+  trackedFiles: string[],
+  options?: { filterByTracked?: boolean }
+): string[] {
+  const trackedSet = new Set<string>()
+  for (const tracked of trackedFiles) {
+    for (const rel of toWorktreeRelativePath(worktreePath, tracked)) {
+      trackedSet.add(rel)
+    }
+  }
+
+  const filterByTracked = Boolean(options?.filterByTracked) && trackedSet.size > 0
+  const changedSet = new Set<string>()
+
+  for (const raw of parsePorcelainPaths(statusOutput)) {
+    const candidates = toWorktreeRelativePath(worktreePath, raw)
+    if (candidates.length === 0) continue
+
+    if (filterByTracked) {
+      const matched = candidates.find((candidate) => trackedSet.has(candidate))
+      if (matched) changedSet.add(matched)
+      continue
+    }
+
+    const best = candidates.find((candidate) => candidate && !candidate.startsWith("../") && !path.isAbsolute(candidate))
+    if (best) {
+      changedSet.add(best)
+    }
+  }
+
+  return Array.from(changedSet)
+}
+
 function parseNumstatTotals(output: string): { additions: number; deletions: number } {
   let additions = 0
   let deletions = 0
@@ -394,12 +546,15 @@ function isGitDirWorktree(gitDir: string): boolean {
 }
 
 async function detectIsWorktreePath(folderPath: string): Promise<boolean> {
-  try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
-    return isGitDirWorktree(stdout)
-  } catch {
-    return false
-  }
+  const cacheKey = getCacheKeyForPath(folderPath)
+  return getCachedPromise(worktreeCache, cacheKey, GIT_CONTEXT_CACHE_TTL_MS, async () => {
+    try {
+      const stdout = await runGit(folderPath, ["rev-parse", "--git-dir"], { silent: true })
+      return isGitDirWorktree(stdout)
+    } catch {
+      return false
+    }
+  })
 }
 
 function logGitStep(threadId: string, action: string, detail: string): void {
@@ -728,30 +883,15 @@ async function buildGitPanelState(
   const normalizedTrackedFiles = Array.from(trackedSet)
   const filterByTracked = normalizedTrackedFiles.length > 0 && !includeAllWhenNoTracked
 
-  const parseChangedFromStatus = (statusOutput: string): string[] => {
-    const parsed = parsePorcelainPaths(statusOutput)
-    const changedSet = new Set<string>()
-    for (const raw of parsed) {
-      const candidates = toWorktreeRelativePath(worktreePath, raw)
-      if (candidates.length === 0) continue
-      if (filterByTracked) {
-        const matched = candidates.find((c) => trackedSet.has(c))
-        if (matched) changedSet.add(matched)
-        continue
-      }
-      const best = candidates.find((c) => c && !c.startsWith("../") && !path.isAbsolute(c))
-      if (best) changedSet.add(best)
-    }
-    return Array.from(changedSet)
-  }
-
   if (normalizedTrackedFiles.length === 0 && !includeAllWhenNoTracked) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
   }
 
   const statusPathspecs = filterByTracked ? normalizedTrackedFiles : ["."]
   const statusOut = await runStatusPorcelain(worktreePath, statusPathspecs, { silent })
-  const changedFiles = parseChangedFromStatus(statusOut)
+  const changedFiles = collectChangedFilesFromStatus(worktreePath, statusOut, normalizedTrackedFiles, {
+    filterByTracked
+  })
 
   if (changedFiles.length === 0) {
     return { files: [], changedFiles: [], totals: { additions: 0, deletions: 0, fileCount: 0 } }
@@ -851,13 +991,28 @@ async function buildGitPanelState(
   }
 }
 
-async function getGitRoot(folderPath: string): Promise<string | null> {
-  try {
-    const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
-    return stdout.trim()
-  } catch {
-    return null
+async function getGitPanelSummaryQuick(worktreePath: string): Promise<{
+  hasPendingDiff: boolean
+  changedFiles: number
+}> {
+  const statusOut = await runStatusPorcelain(worktreePath, ["."], { silent: true })
+  const changedFiles = collectChangedFilesFromStatus(worktreePath, statusOut, [])
+  return {
+    hasPendingDiff: changedFiles.length > 0,
+    changedFiles: changedFiles.length
   }
+}
+
+async function getGitRoot(folderPath: string): Promise<string | null> {
+  const cacheKey = getCacheKeyForPath(folderPath)
+  return getCachedPromise(gitRootCache, cacheKey, GIT_CONTEXT_CACHE_TTL_MS, async () => {
+    try {
+      const stdout = await runGit(folderPath, ["rev-parse", "--show-toplevel"], { silent: true })
+      return stdout.trim()
+    } catch {
+      return null
+    }
+  })
 }
 
 async function listWorktrees(gitRoot: string): Promise<WorktreeInfo[]> {
@@ -1318,16 +1473,24 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
     }
   )
 
-  // Check if a folder is a git repo and return root path + worktrees
-  ipcMain.handle("workspace:isGit", async (_event, folderPath: string) => {
-    const gitRoot = await getGitRoot(folderPath)
-    if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
+  // Check if a folder is a git repo and optionally include worktree list.
+  ipcMain.handle(
+    "workspace:isGit",
+    async (
+      _event,
+      payload: string | { folderPath: string; includeWorktrees?: boolean }
+    ) => {
+      const folderPath = typeof payload === "string" ? payload : payload.folderPath
+      const includeWorktrees = typeof payload === "string" ? true : Boolean(payload.includeWorktrees)
+      const gitRoot = await getGitRoot(folderPath)
+      if (!gitRoot) return { isGit: false, gitRoot: null, worktrees: [], isWorktreePath: false }
 
-    const isWorktreePath = await detectIsWorktreePath(folderPath)
+      const isWorktreePath = await detectIsWorktreePath(folderPath)
 
-    const worktrees = await listWorktrees(gitRoot)
-    return { isGit: true, gitRoot, worktrees, isWorktreePath }
-  })
+      const worktrees = includeWorktrees ? await listWorktrees(gitRoot) : []
+      return { isGit: true, gitRoot, worktrees, isWorktreePath }
+    }
+  )
 
   // List worktrees for a git repo
   ipcMain.handle("workspace:listWorktrees", async (_event, gitRoot: string) => {
@@ -1598,23 +1761,34 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle("workspace:getGitPanelSummary", async (_event, { threadId }: { threadId: string }) => {
     try {
+      logGitStep(threadId, "summary", "请求 getGitPanelSummary")
       const context = await resolveThreadWorkspaceContext(threadId)
       if (!context.workspacePath || !context.isGitRepo) {
+        logGitStep(threadId, "summary", "非 Git 工作区，返回空摘要")
         return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
       }
-      const tracked = getTrackedLlmFiles(context.metadata)
-      const state = await buildGitPanelState(context.workspacePath, tracked, {
-        silent: true,
-        includeAllWhenNoTracked: true
-      })
+      const workspacePath = context.workspacePath
+      const cacheKey = getCacheKeyForPath(workspacePath)
+      const { hasPendingDiff, changedFiles } = await getCachedPromise(
+        summaryCache,
+        cacheKey,
+        GIT_CONTEXT_CACHE_TTL_MS,
+        () => getGitPanelSummaryQuick(workspacePath)
+      )
+      logGitStep(threadId, "summary", `完成 hasPendingDiff=${hasPendingDiff} changedFiles=${changedFiles}`)
       return {
         success: true,
         isWorktree: context.isWorktree,
         isGitRepo: true,
-        hasPendingDiff: state.files.length > 0,
-        changedFiles: state.files.length
+        hasPendingDiff,
+        changedFiles
       }
-    } catch {
+    } catch (error) {
+      logGitStep(
+        threadId,
+        "summary",
+        `异常：${error instanceof Error ? error.message : String(error)}`
+      )
       return { success: true, isWorktree: false, isGitRepo: false, hasPendingDiff: false, changedFiles: 0 }
     }
   })
@@ -1658,17 +1832,16 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         notifyWorkspaceFilesChanged(threadId, worktreePath)
         logGitStep(threadId, "commit", "提交成功")
 
-        // Operational telemetry: git.commit.created
-        try {
+        // Operational telemetry (fire-and-forget, never blocks return)
+        {
           const insertions = state.files.reduce((acc, f) => acc + (f.additions || 0), 0)
           const deletions  = state.files.reduce((acc, f) => acc + (f.deletions  || 0), 0)
+          // branch fetch is cheap and already cached by git, keep it sync here
           let branch = ""
           try {
             branch = (await runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"], { silent: true })).trim()
-          } catch {
-            // ignore — branch is best-effort metadata
-          }
-          trackEvent("git.commit.created", "git", {
+          } catch { /* best-effort */ }
+          trackGitEventWithSkills("git.commit.created", threadId, {
             repoPath:     worktreePath,
             branch,
             filesChanged: state.changedFiles.length,
@@ -1676,8 +1849,6 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             deletions,
             triggeredBy:  "manual"
           })
-        } catch (e) {
-          console.warn("[event] failed to emit git.commit.created:", e)
         }
 
         return { success: true }
@@ -1735,20 +1906,18 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
             autoCommitHead = (await runGit(worktreePath, ["rev-parse", "HEAD"])).trim()
             steps.push({ step: "commit", status: "ok", detail: `自动提交成功：${commitMessage}` })
 
-            // Operational telemetry: git.commit.created (auto-commit before push)
-            try {
+            // Operational telemetry (fire-and-forget, never blocks push flow)
+            {
               const insertions = pending.files.reduce((acc, f) => acc + (f.additions || 0), 0)
               const deletions  = pending.files.reduce((acc, f) => acc + (f.deletions  || 0), 0)
-              trackEvent("git.commit.created", "git", {
+              trackGitEventWithSkills("git.commit.created", threadId, {
                 repoPath:     worktreePath,
                 branch,
                 filesChanged: pending.changedFiles.length,
                 insertions,
                 deletions,
-                triggeredBy:  "manual"
+                triggeredBy:  "auto-push"
               })
-            } catch (e) {
-              console.warn("[event] failed to emit git.commit.created (auto):", e)
             }
           } catch (commitError) {
             const detail = getExecErrorText(commitError)
@@ -1884,21 +2053,17 @@ export function registerModelHandlers(ipcMain: IpcMain): void {
         notifyWorkspaceFilesChanged(threadId, worktreePath)
         logGitStep(threadId, "push", "推送流程成功")
 
-        // Operational telemetry: git.push.executed
-        try {
+        // Operational telemetry (fire-and-forget, never blocks return)
+        {
           let remoteUrl = ""
           try {
             remoteUrl = (await runGit(worktreePath, ["remote", "get-url", "origin"], { silent: true })).trim()
-          } catch {
-            // ignore — remote URL is best-effort metadata
-          }
-          trackEvent("git.push.executed", "git", {
+          } catch { /* best-effort */ }
+          trackGitEventWithSkills("git.push.executed", threadId, {
             repoPath: worktreePath,
             branch,
             remoteUrl
           })
-        } catch (e) {
-          console.warn("[event] failed to emit git.push.executed:", e)
         }
 
         return { success: true, autoCommitted, steps }
