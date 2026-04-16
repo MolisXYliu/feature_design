@@ -60,7 +60,7 @@ import { createPlaywrightTool } from "./tools/playwright-tool"
 import { createToolSearchTools } from "./tools/tool-search-tool"
 import { createCodeExecTool } from "./tools/code-exec-tool"
 import { listSavedCodeExecTools } from "../code-exec/saved-tool-store"
-import { getWindowsSandboxMode, getYoloMode, getEnabledHooks, isCodeExecEnabled } from "../storage"
+import { getWindowsSandboxMode, getYoloMode, getEnabledHooks, isCodeExecEnabled, getLspConfig } from "../storage"
 import { ApprovalStore } from "./approval-store"
 import { ToolOrchestrator } from "./tool-orchestrator"
 import type { ApprovalRequest, ApprovalDecision } from "../types"
@@ -71,6 +71,8 @@ import {
 } from "../mcp/capability-service"
 import { createEagerMcpTool } from "../mcp/langchain-tool"
 import { InterleavedThinkingChatOpenAICompletions } from "./interleaved-thinking-completions"
+import { createLspTool } from "./tools/lsp-tool"
+import { detectJavaProject } from "../lsp"
 import {
   DEFAULT_AGENTS_MAX_BYTES,
   loadAgentsPromptForWorkspace
@@ -1148,6 +1150,17 @@ The workspace root is: ${workspacePath}`
   }
 
   extraTools.push(createPlaywrightTool(workspacePath))
+
+  // Conditionally inject Java LSP tool
+  try {
+    const lspConfig = getLspConfig()
+    if (lspConfig.enabled && detectJavaProject(workspacePath)) {
+      extraTools.push(createLspTool({ workspacePath }))
+      console.log("[Runtime] Java LSP tool injected for:", workspacePath)
+    }
+  } catch (e) {
+    console.warn("[Runtime] Failed to check LSP config:", e)
+  }
 
   // Wrap extra tools so that errors are returned as strings instead of throwing
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

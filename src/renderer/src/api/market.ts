@@ -249,10 +249,33 @@ export const marketApi = {
 
     const blob = await response.blob()
     const contentDisposition = response.headers.get("Content-Disposition")
-    const defaultExt = type === "skill" ? "zip" : type === "plugin" ? "zip" : "json"
+    const defaultExt = type === "skill" || type === "plugin" ? "zip" : "json"
     const filename = contentDisposition?.match(/filename="([^"]+)"/)?.[1] || `${name}.${defaultExt}`
 
     return { blob, filename }
+  },
+
+  async downloadLspVsix(): Promise<DownloadResponse> {
+    try {
+      if (typeof window.api?.lsp?.downloadVsix === "function") {
+        const downloadResult = await window.api.lsp.downloadVsix()
+        return {
+          success: downloadResult.success,
+          error: downloadResult.error
+        }
+      }
+
+      return {
+        success: false,
+        error: "LSP VSIX download API is not available"
+      }
+    } catch (downloadError) {
+      console.error("Failed to download LSP VSIX:", downloadError)
+      return {
+        success: false,
+        error: downloadError instanceof Error ? downloadError.message : "Failed to download LSP VSIX"
+      }
+    }
   },
 
   async getSkills(): Promise<MarketApiResponse> {

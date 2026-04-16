@@ -1293,6 +1293,67 @@ export function saveHeartbeatContent(content: string): void {
   writeFileSync(HEARTBEAT_MD_FILE, content)
 }
 
+// ── LSP Config ──
+
+const LSP_CONFIG_FILE = join(OPENWORK_DIR, "lsp-config.json")
+const LSP_RUNTIME_NAMES = ["JavaSE-1.8", "JavaSE-11", "JavaSE-17", "JavaSE-21"] as const
+
+function defaultLspConfig(): import("./types").LspConfig {
+  return {
+    enabled: false,
+    maxHeapMb: 1024,
+    lastError: null,
+    manualJavaHome: null
+  }
+}
+
+export function getLspConfig(): import("./types").LspConfig {
+  getOpenworkDir()
+  if (!existsSync(LSP_CONFIG_FILE)) return defaultLspConfig()
+  try {
+    const content = readFileSync(LSP_CONFIG_FILE, "utf-8")
+    const parsed = JSON.parse(content) as Record<string, unknown>
+    const defaults = defaultLspConfig()
+    let manualJavaHome = typeof parsed.manualJavaHome === "string" && parsed.manualJavaHome.trim()
+      ? parsed.manualJavaHome.trim()
+      : defaults.manualJavaHome
+
+    // Backward compatibility: migrate the first legacy per-version path into the single manual override.
+    if (!manualJavaHome && parsed.javaRuntimePaths && typeof parsed.javaRuntimePaths === "object") {
+      for (const name of LSP_RUNTIME_NAMES) {
+        const value = (parsed.javaRuntimePaths as Record<string, unknown>)[name]
+        if (typeof value === "string" && value.trim()) {
+          manualJavaHome = value.trim()
+          break
+        }
+      }
+    }
+
+    return {
+      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaults.enabled,
+      maxHeapMb: typeof parsed.maxHeapMb === "number" ? parsed.maxHeapMb : defaults.maxHeapMb,
+      lastError: typeof parsed.lastError === "string" ? parsed.lastError : defaults.lastError,
+      manualJavaHome
+    }
+  } catch {
+    return defaultLspConfig()
+  }
+}
+
+export function saveLspConfig(updates: Partial<import("./types").LspConfig>): void {
+  getOpenworkDir()
+  const current = getLspConfig()
+  const merged = { ...current, ...updates }
+  writeFileSync(LSP_CONFIG_FILE, JSON.stringify(merged, null, 2))
+}
+
+export function resetLspConfig(): import("./types").LspConfig {
+  getOpenworkDir()
+  const defaults = defaultLspConfig()
+  writeFileSync(LSP_CONFIG_FILE, JSON.stringify(defaults, null, 2))
+  return defaults
+}
+
 // ── Plugins ──
 
 const PLUGINS_DIR = join(OPENWORK_DIR, "plugins")
