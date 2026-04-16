@@ -248,7 +248,9 @@ function maybePromoteCodeExecAsTool(
     return result.output
   }
 
-  if (context.yoloMode || !context.requestApproval) return result.output
+  // YOLO skips execution approvals, but successful one-off scripts can still ask whether
+  // they should be promoted into reusable tools.
+  if (!context.requestApproval) return result.output
 
   void (async () => {
     try {

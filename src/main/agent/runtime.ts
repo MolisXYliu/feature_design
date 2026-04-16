@@ -947,43 +947,40 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions): Pr
   const yoloMode = getYoloMode()
   let approvalStore: ApprovalStore | undefined
   let requestApproval: ((req: ApprovalRequest) => Promise<ApprovalDecision>) | undefined
+  // Keep the generic approval IPC available even in YOLO mode so code_exec can still
+  // ask for post-run tool promotion confirmation. Shell/file approvals remain gated by
+  // whether the orchestrator is mounted below.
+  const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
+  requestApproval = (req: ApprovalRequest): Promise<ApprovalDecision> => {
+    return new Promise<ApprovalDecision>((resolve) => {
+      const timeoutId = setTimeout(() => {
+        if (pendingApprovals.has(req.id)) {
+          pendingApprovals.delete(req.id)
+          console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.webContents.send(`approval:timeout:${threadId}`, { requestId: req.id })
+          }
+          resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
+        }
+      }, APPROVAL_TIMEOUT_MS)
+
+      pendingApprovals.set(req.id, {
+        resolve: (decision: ApprovalDecision) => {
+          clearTimeout(timeoutId)
+          resolve(decision)
+        },
+        request: req,
+        targetWebContentsIds: BrowserWindow.getAllWindows().map(w => w.webContents.id)
+      })
+      console.log(`[Orchestrator] sending approval request on channel: approval:request:${threadId}, reqId=${req.id}, command=${req.command}`)
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send(`approval:request:${threadId}`, req)
+      }
+    })
+  }
+
   if (!yoloMode) {
     approvalStore = getOrCreateApprovalStore(threadId)
-
-    // The approval requester sends requests to the renderer via BrowserWindow IPC.
-    // It returns a Promise that is resolved when the renderer sends back a decision.
-    // P3 fix: auto-reject after 5 minutes to prevent indefinite hangs.
-    const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
-
-    requestApproval = (req: ApprovalRequest): Promise<ApprovalDecision> => {
-      return new Promise<ApprovalDecision>((resolve) => {
-        const timeoutId = setTimeout(() => {
-          if (pendingApprovals.has(req.id)) {
-            pendingApprovals.delete(req.id)
-            console.warn(`[Orchestrator] approval request timed out after ${APPROVAL_TIMEOUT_MS / 1000}s: reqId=${req.id}`)
-            // P2 fix: notify renderer that approval timed out so it can clear the UI
-            for (const win of BrowserWindow.getAllWindows()) {
-              win.webContents.send(`approval:timeout:${threadId}`, { requestId: req.id })
-            }
-            resolve({ type: "reject", tool_call_id: req.tool_call?.id ?? req.id })
-          }
-        }, APPROVAL_TIMEOUT_MS)
-
-        pendingApprovals.set(req.id, {
-          resolve: (decision: ApprovalDecision) => {
-            clearTimeout(timeoutId)
-            resolve(decision)
-          },
-          request: req,
-          targetWebContentsIds: BrowserWindow.getAllWindows().map(w => w.webContents.id)
-        })
-        console.log(`[Orchestrator] sending approval request on channel: approval:request:${threadId}, reqId=${req.id}, command=${req.command}`)
-        // Broadcast to all windows — the active one will display the approval UI
-        for (const win of BrowserWindow.getAllWindows()) {
-          win.webContents.send(`approval:request:${threadId}`, req)
-        }
-      })
-    }
 
     const rawExecute = (command: string, sandboxMode?: string): Promise<import("deepagents").ExecuteResponse> => {
       return backend.executeRaw(command, sandboxMode)
