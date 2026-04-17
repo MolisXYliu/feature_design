@@ -1317,7 +1317,11 @@ const api = {
       range: { from: string; to: string },
       granularity: "day" | "week" | "month" | "custom"
     ): Promise<{ success: boolean; data?: unknown; error?: string }> =>
-      ipcRenderer.invoke("dashboard:productivity", range, granularity)
+      ipcRenderer.invoke("dashboard:productivity", range, granularity),
+    exportExcel: (
+      sheets: Array<{ name: string; header: string[]; rows: (string | number)[][] }>
+    ): Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }> =>
+      ipcRenderer.invoke("dashboard:exportExcel", sheets)
   },
   update: {
     check: (): Promise<
