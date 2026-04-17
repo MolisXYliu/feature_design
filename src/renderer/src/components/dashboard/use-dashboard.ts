@@ -282,7 +282,7 @@ function parseUserStats(raw: any): UserStatsData {
 
   const byVersion: UserStatsData["byVersion"] = (aggs.by_version?.buckets ?? []).map((b: any) => ({
     version: b.key || "未知",
-    count: b.doc_count
+    count: b.unique_users?.value ?? b.doc_count
   }))
 
   const userTrend: UserStatsData["userTrend"] = (aggs.user_trend?.buckets ?? []).map((b: any) => ({

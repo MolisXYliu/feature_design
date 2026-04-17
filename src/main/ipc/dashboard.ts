@@ -209,7 +209,10 @@ async function fetchUserStats(range: TimeRange, granularity: Granularity): Promi
         }
       },
       by_org:     { terms: { field: "orgName",     size: 30 } },
-      by_version: { terms: { field: "appVersion",  size: 20 } }
+      by_version: {
+        terms: { field: "appVersion", size: 20 },
+        aggs: { unique_users: { cardinality: { field: "sapId" } } }
+      }
     }
   }
   return esQuery(getEsIndex("trace"), body)
@@ -537,11 +540,11 @@ function makeMockUserStats(range: TimeRange): unknown {
       },
       by_version: {
         buckets: [
-          { key: "1.3.0", doc_count: 512 },
-          { key: "1.2.5", doc_count: 298 },
-          { key: "1.2.0", doc_count: 187 },
-          { key: "1.1.x", doc_count: 143 },
-          { key: "1.0.x", doc_count: 107 }
+          { key: "1.3.0", doc_count: 512, unique_users: { value: 98 } },
+          { key: "1.2.5", doc_count: 298, unique_users: { value: 62 } },
+          { key: "1.2.0", doc_count: 187, unique_users: { value: 41 } },
+          { key: "1.1.x", doc_count: 143, unique_users: { value: 28 } },
+          { key: "1.0.x", doc_count: 107, unique_users: { value: 19 } }
         ]
       },
       user_trend: { buckets: trend }
