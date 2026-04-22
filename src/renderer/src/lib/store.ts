@@ -15,7 +15,7 @@ interface EvolutionRunProgress {
 
 interface AppState {
   // Main content view routing
-  mainView: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard"
+  mainView: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard" | "design"
 
   // Threads
   threads: Thread[]
@@ -41,13 +41,13 @@ interface AppState {
 
   // Claude Code view state
   showClaudeCodeView: boolean
-  previousThreadId: string | null  // 切换到 Claude Code 前保存的线程 ID
+  previousThreadId: string | null // 切换到 Claude Code 前保存的线程 ID
   setShowClaudeCodeView: (show: boolean) => void
 
   // Dashboard view state
   showDashboardView: boolean
   setShowDashboardView: (show: boolean) => void
-  dashboardAllowed: boolean | null  // null = loading
+  dashboardAllowed: boolean | null // null = loading
   loadDashboardAllowed: () => Promise<void>
 
   // Customize view state
@@ -81,11 +81,15 @@ interface AppState {
   // Kanban actions
   setShowKanbanView: (show: boolean) => void
   setShowSubagentsInKanban: (show: boolean) => void
+  //design actions
+  showDesignView: boolean
+  setShowDesignView: (show: boolean) => void
 
   // Customize actions
   setShowCustomizeView: (show: boolean, tab?: string) => void
-  setMainView: (view: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard") => void
-
+  setMainView: (
+    view: "thread" | "customize" | "evolution" | "kanban" | "claudecode" | "dashboard" | "design"
+  ) => void
   // Plugin state sync — increment to trigger RightPanel refresh
   pluginVersion: number
   bumpPluginVersion: () => void
@@ -96,11 +100,14 @@ interface AppState {
 
   // Skill generation virtual subagent — shown in the right panel agents section.
   // State is stored per-thread so switching threads preserves each thread's card.
-  skillGenerationByThread: Map<string, {
-    phase: "generating" | "done" | "error" | null
-    streamedText: string
-    errorText: string
-  }>
+  skillGenerationByThread: Map<
+    string,
+    {
+      phase: "generating" | "done" | "error" | null
+      streamedText: string
+      errorText: string
+    }
+  >
   setSkillGenerationPhase: (phase: "generating" | "done" | "error" | null, text?: string) => void
   appendSkillGenerationToken: (token: string) => void
 
@@ -130,8 +137,20 @@ interface AppState {
   evolutionStreamError: string | null
   setEvolutionStreamError: (err: string | null) => void
   // Options used for the last optimizer run (for retry)
-  evolutionLastRunOpts: { mode?: "auto" | "selected"; traceIds?: string[]; threadId?: string; traceLimit?: number } | null
-  setEvolutionLastRunOpts: (opts: { mode?: "auto" | "selected"; traceIds?: string[]; threadId?: string; traceLimit?: number } | null) => void
+  evolutionLastRunOpts: {
+    mode?: "auto" | "selected"
+    traceIds?: string[]
+    threadId?: string
+    traceLimit?: number
+  } | null
+  setEvolutionLastRunOpts: (
+    opts: {
+      mode?: "auto" | "selected"
+      traceIds?: string[]
+      threadId?: string
+      traceLimit?: number
+    } | null
+  ) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -147,6 +166,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   mainView: "thread",
   showKanbanView: false,
   showSubagentsInKanban: true,
+  showDesignView: false,
   showClaudeCodeView: false,
   showDashboardView: false,
   dashboardAllowed: null,
@@ -354,12 +374,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
     } else {
       const restored = get().previousThreadId
-      set({ showKanbanView: false, mainView: "thread", ...(restored ? { currentThreadId: restored, previousThreadId: null } : {}) })
+      set({
+        showKanbanView: false,
+        mainView: "thread",
+        ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
+      })
     }
   },
 
   setShowSubagentsInKanban: (show: boolean) => {
     set({ showSubagentsInKanban: show })
+  },
+
+  setShowDesignView: (show) => {
+    if (show) {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        mainView: "design",
+        showDesignView: true,
+        showCustomizeView: false,
+        showKanbanView: false,
+        showClaudeCodeView: false,
+        showDashboardView: false,
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+    } else {
+      const restored = get().previousThreadId
+      set({
+        mainView: "thread",
+        showDesignView: false,
+        ...(restored ? { currentThreadId: restored, previousThreadId: null } : {})
+      })
+    }
   },
 
   setShowCustomizeView: (show: boolean, tab?: string) => {
@@ -416,6 +463,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       return
     }
 
+    if (view === "design") {
+      const prev = get().previousThreadId || get().currentThreadId
+      set({
+        mainView: "design",
+        showDashboardView: true,
+        showCustomizeView: false,
+        showKanbanView: false,
+        showClaudeCodeView: false,
+        previousThreadId: prev,
+        currentThreadId: null
+      })
+      return
+    }
     if (view === "dashboard") {
       const prev = get().previousThreadId || get().currentThreadId
       set({
@@ -502,8 +562,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const threadId = state.currentThreadId
       if (!threadId) return {}
-      const current = state.skillGenerationByThread.get(threadId)
-        ?? { phase: "generating" as const, streamedText: "", errorText: "" }
+      const current = state.skillGenerationByThread.get(threadId) ?? {
+        phase: "generating" as const,
+        streamedText: "",
+        errorText: ""
+      }
       const next = new Map(state.skillGenerationByThread)
       next.set(threadId, { ...current, streamedText: current.streamedText + token })
       return { skillGenerationByThread: next }

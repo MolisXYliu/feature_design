@@ -18,6 +18,9 @@ import { CustomizeView } from "@/components/customize/CustomizeView"
 const DashboardView = lazy(() =>
   import("@/components/dashboard/DashboardView").then((m) => ({ default: m.DashboardView }))
 )
+const DesignView = lazy(() =>
+  import("@/components/design/DesignView").then((m) => ({ default: m.DesignView }))
+)
 import { ResizeHandle } from "@/components/ui/resizable"
 import { useAppStore } from "@/lib/store"
 import { ThreadProvider } from "@/lib/thread-context"
@@ -406,43 +409,80 @@ function App(): React.JSX.Element {
             }}
             className="flex flex-1 min-w-0 items-center justify-center gap-1.5"
           >
-            <svg className="size-7 shrink-0" viewBox="0 0 120 120" fill="none" style={{ animation: 'lobster-sway-bounce 2.5s ease-in-out infinite' }}>
+            <svg
+              className="size-7 shrink-0"
+              viewBox="0 0 120 120"
+              fill="none"
+              style={{ animation: "lobster-sway-bounce 2.5s ease-in-out infinite" }}
+            >
               <defs>
                 <linearGradient id="title-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#ff4d4d"/>
-                  <stop offset="100%" stopColor="#991b1b"/>
+                  <stop offset="0%" stopColor="#ff4d4d" />
+                  <stop offset="100%" stopColor="#991b1b" />
                 </linearGradient>
               </defs>
-              <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#title-lobster)"/>
-              <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="url(#title-lobster)"/>
-              <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="url(#title-lobster)"/>
-              <g style={{ animation: 'antenna-left 2.5s ease-in-out infinite', transformOrigin: '45px 15px' }}>
-                <path d="M45 15 Q35 5 30 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round"/>
+              <path
+                d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+                fill="url(#title-lobster)"
+              />
+              <path
+                d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"
+                fill="url(#title-lobster)"
+              />
+              <path
+                d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"
+                fill="url(#title-lobster)"
+              />
+              <g
+                style={{
+                  animation: "antenna-left 2.5s ease-in-out infinite",
+                  transformOrigin: "45px 15px"
+                }}
+              >
+                <path
+                  d="M45 15 Q35 5 30 8"
+                  stroke="#ff4d4d"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
               </g>
-              <g style={{ animation: 'antenna-right 2.5s ease-in-out infinite 0.3s', transformOrigin: '75px 15px' }}>
-                <path d="M75 15 Q85 5 90 8" stroke="#ff4d4d" strokeWidth="3" strokeLinecap="round"/>
+              <g
+                style={{
+                  animation: "antenna-right 2.5s ease-in-out infinite 0.3s",
+                  transformOrigin: "75px 15px"
+                }}
+              >
+                <path
+                  d="M75 15 Q85 5 90 8"
+                  stroke="#ff4d4d"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
               </g>
-              <g style={{ animation: 'lobster-blink 4s ease-in-out infinite', transformOrigin: '60px 35px' }}>
-                <circle cx="45" cy="35" r="6" fill="#050810"/>
-                <circle cx="75" cy="35" r="6" fill="#050810"/>
-                <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
-                <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
+              <g
+                style={{
+                  animation: "lobster-blink 4s ease-in-out infinite",
+                  transformOrigin: "60px 35px"
+                }}
+              >
+                <circle cx="45" cy="35" r="6" fill="#050810" />
+                <circle cx="75" cy="35" r="6" fill="#050810" />
+                <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
+                <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
               </g>
             </svg>
-            <span className="app-badge-name">CMBDev<span className="text-red-500">Claw</span></span>
+            <span className="app-badge-name">
+              CMBDev<span className="text-red-500">Claw</span>
+            </span>
           </div>
           {/* Right: right panel toggle */}
-          <div
-            className="flex flex-1 h-full items-center justify-end pl-1 gap-1"
-          >
+          <div className="flex flex-1 h-full items-center justify-end pl-1 gap-1">
             {mainView === "thread" && (
               <>
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    rightModule === "preview"
-                      ? moduleActiveClass
-                      : moduleInactiveClass
+                    rightModule === "preview" ? moduleActiveClass : moduleInactiveClass
                   }`}
                   onClick={selectPreviewModule}
                   title="文件预览"
@@ -472,9 +512,7 @@ function App(): React.JSX.Element {
                 <button
                   type="button"
                   className={`${panelToggleBaseClass} ${
-                    rightModule === "work"
-                      ? moduleActiveClass
-                      : moduleInactiveClass
+                    rightModule === "work" ? moduleActiveClass : moduleInactiveClass
                   }`}
                   onClick={selectWorkModule}
                   title="工作目录"
@@ -524,7 +562,7 @@ function App(): React.JSX.Element {
               <CustomizeView />
             </main>
           </div>
-        ) : mainView !== "claudecode" && mainView !== "dashboard" ? (
+        ) : mainView !== "claudecode" && mainView !== "dashboard" && mainView !== "design" ? (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
             {/* Left Sidebar */}
             {!sidebarCollapsed && (
@@ -535,7 +573,6 @@ function App(): React.JSX.Element {
                 <ResizeHandle onDrag={handleLeftResize} />
               </>
             )}
-
             {mainView === "kanban" ? (
               <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
                 <KanbanView />
@@ -562,7 +599,6 @@ function App(): React.JSX.Element {
                 )}
               </>
             )}
-
             {mainView === "thread" && !rightPanelCollapsed && (
               <>
                 {!previewFullscreen && <ResizeHandle onDrag={handleRightResize} />}
@@ -583,6 +619,31 @@ function App(): React.JSX.Element {
           </div>
         ) : null}
 
+        {/* Design 面板 */}
+        {mainView === "design" && (
+          <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
+            {!sidebarCollapsed && (
+              <>
+                <div style={{ width: leftWidth }} className="shrink-0">
+                  <ThreadSidebar />
+                </div>
+                <ResizeHandle onDrag={handleLeftResize} />
+              </>
+            )}
+            <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
+              <Suspense
+                fallback={
+                  <div className="flex flex-1 items-center justify-center">
+                    <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
+                <DesignView />
+              </Suspense>
+            </main>
+          </div>
+        )}
+
         {/* Dashboard 面板 */}
         {mainView === "dashboard" && (
           <div className="relative flex flex-1 overflow-hidden bg-grid-subtle">
@@ -595,7 +656,13 @@ function App(): React.JSX.Element {
               </>
             )}
             <main className="relative flex flex-1 flex-col min-w-0 overflow-hidden">
-              <Suspense fallback={<div className="flex flex-1 items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>}>
+              <Suspense
+                fallback={
+                  <div className="flex flex-1 items-center justify-center">
+                    <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                  </div>
+                }
+              >
                 <DashboardView />
               </Suspense>
             </main>
@@ -603,7 +670,13 @@ function App(): React.JSX.Element {
         )}
 
         {/* Claude Code 面板始终挂载在所有条件分支外，CSS 控制显隐，不受 customize/thread 切换影响 */}
-        <div className={mainView === "claudecode" ? "relative flex flex-1 overflow-hidden bg-grid-subtle" : "hidden"}>
+        <div
+          className={
+            mainView === "claudecode"
+              ? "relative flex flex-1 overflow-hidden bg-grid-subtle"
+              : "hidden"
+          }
+        >
           {/* claudecode 模式下也显示侧边栏 */}
           {mainView === "claudecode" && !sidebarCollapsed && (
             <>

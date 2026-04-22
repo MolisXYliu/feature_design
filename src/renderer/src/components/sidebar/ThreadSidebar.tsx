@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio, Terminal, BarChart3 } from "lucide-react"
+import { Plus, MessageSquare, Trash2, Pencil, Loader2, AlertCircle, Briefcase, HeartPulse, LayoutDashboard, Cpu, Radio, Terminal, BarChart3,Palette } from "lucide-react"
 import type { ChatXRobotConfig } from "@/types"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -192,6 +192,8 @@ export function ThreadSidebar(): React.JSX.Element {
     setShowCustomizeView,
     showKanbanView,
     setShowKanbanView,
+    showDesignView,
+    setShowDesignView,
     showClaudeCodeView,
     setShowClaudeCodeView,
     showDashboardView,
@@ -337,7 +339,10 @@ export function ThreadSidebar(): React.JSX.Element {
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-sidebar overflow-hidden">
       {/* New Thread Button - with dynamic safe area padding when zoomed out */}
-      <div className="p-2 space-y-1.5" style={{ paddingTop: "calc(8px + var(--sidebar-safe-padding, 0px))" }}>
+      <div
+        className="p-2 space-y-1.5"
+        style={{ paddingTop: "calc(8px + var(--sidebar-safe-padding, 0px))" }}
+      >
         <Button
           variant="ghost"
           size="sm"
@@ -364,6 +369,21 @@ export function ThreadSidebar(): React.JSX.Element {
           <span className="flex-1 text-left text-muted-foreground">自定义</span>
           {pendingEvolution && <span className="size-2 rounded-full bg-orange-500 shrink-0" />}
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "w-full justify-start gap-2 text-sm font-semibold",
+            showDesignView && "bg-muted"
+          )}
+          onClick={() => setShowDesignView(!showDesignView)}
+        >
+          <div className="flex size-5 items-center justify-center rounded-full bg-muted-foreground/15">
+            <Palette className="size-3" />
+          </div>
+          <span className="text-muted-foreground">design</span>
+        </Button>
+
         <Button
           variant="ghost"
           size="sm"
@@ -468,9 +488,7 @@ export function ThreadSidebar(): React.JSX.Element {
           ))}
 
           {threads.length === 0 && (
-            <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-              暂无任务
-            </div>
+            <div className="px-3 py-8 text-center text-sm text-muted-foreground">暂无任务</div>
           )}
         </div>
       </ScrollArea>
@@ -479,22 +497,43 @@ export function ThreadSidebar(): React.JSX.Element {
         <svg className="size-5 shrink-0" viewBox="0 0 120 120" fill="none">
           <defs>
             <linearGradient id="sidebar-lobster" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#ff4d4d"/>
-              <stop offset="100%" stopColor="#991b1b"/>
+              <stop offset="0%" stopColor="#ff4d4d" />
+              <stop offset="100%" stopColor="#991b1b" />
             </linearGradient>
           </defs>
-          <path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="url(#sidebar-lobster)"/>
-          <path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="url(#sidebar-lobster)"/>
-          <path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="url(#sidebar-lobster)"/>
-          <circle cx="45" cy="35" r="6" fill="#050810"/>
-          <circle cx="75" cy="35" r="6" fill="#050810"/>
-          <circle cx="46" cy="34" r="2.5" fill="#00e5cc"/>
-          <circle cx="76" cy="34" r="2.5" fill="#00e5cc"/>
+          <path
+            d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z"
+            fill="url(#sidebar-lobster)"
+          />
+          <path
+            d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z"
+            fill="url(#sidebar-lobster)"
+          />
+          <path
+            d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z"
+            fill="url(#sidebar-lobster)"
+          />
+          <circle cx="45" cy="35" r="6" fill="#050810" />
+          <circle cx="75" cy="35" r="6" fill="#050810" />
+          <circle cx="46" cy="34" r="2.5" fill="#00e5cc" />
+          <circle cx="76" cy="34" r="2.5" fill="#00e5cc" />
         </svg>
         <div className="flex items-baseline">
-          <span className="text-[14px] text-foreground/70" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>CMBDev</span>
-          <span className="text-[14px] text-red-500/80" style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}>Claw</span>
-          <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">{version || __APP_VERSION__}</span>
+          <span
+            className="text-[14px] text-foreground/70"
+            style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}
+          >
+            CMBDev
+          </span>
+          <span
+            className="text-[14px] text-red-500/80"
+            style={{ fontFamily: "'Inter', ui-sans-serif, sans-serif" }}
+          >
+            Claw
+          </span>
+          <span className="text-[9px] text-foreground/25 ml-1 tabular-nums">
+            {version || __APP_VERSION__}
+          </span>
         </div>
       </div>
     </aside>

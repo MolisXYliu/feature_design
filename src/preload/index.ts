@@ -1414,6 +1414,41 @@ const api = {
     ): Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }> =>
       ipcRenderer.invoke("dashboard:exportExcel", sheets)
   },
+  design: {
+    generate: (
+      sessionId: string,
+      prompt: string,
+      onEvent: (event: { type: string; token?: string; html?: string; error?: string }) => void
+    ): (() => void) => {
+      const channel = `design:stream:${sessionId}`
+      const handler = (_: unknown, data: { type: string; token?: string; html?: string; error?: string }): void => {
+        onEvent(data)
+        if (data.type === "done" || data.type === "error" || data.type === "cancelled") {
+          ipcRenderer.removeListener(channel, handler)
+        }
+      }
+      ipcRenderer.on(channel, handler)
+      ipcRenderer.send("design:generate", { sessionId, prompt })
+      return () => ipcRenderer.removeListener(channel, handler)
+    },
+    askQuestions: (
+      sessionId: string,
+      prompt: string,
+      onEvent: (event: { type: string; questions?: unknown[]; error?: string }) => void
+    ): (() => void) => {
+      const channel = `design:questions:${sessionId}`
+      const handler = (_: unknown, data: { type: string; questions?: unknown[]; error?: string }): void => {
+        onEvent(data)
+        if (data.type === "done" || data.type === "error" || data.type === "cancelled") {
+          ipcRenderer.removeListener(channel, handler)
+        }
+      }
+      ipcRenderer.on(channel, handler)
+      ipcRenderer.send("design:ask-questions", { sessionId, prompt })
+      return () => ipcRenderer.removeListener(channel, handler)
+    },
+    cancel: (sessionId: string): Promise<void> => ipcRenderer.invoke("design:cancel", sessionId),
+  },
   update: {
     check: (): Promise<
       | { hasUpdate: false }
