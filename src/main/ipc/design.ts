@@ -7,7 +7,9 @@
  * and the final HTML is displayed in the canvas panel.
  */
 
-import { ipcMain, BrowserWindow } from "electron"
+import fs from "fs"
+import path from "path"
+import { ipcMain, BrowserWindow, app } from "electron"
 import { ChatOpenAI } from "@langchain/openai"
 import { HumanMessage, SystemMessage } from "@langchain/core/messages"
 import { getCustomModelConfigs } from "../storage"
@@ -16,27 +18,54 @@ import { getCustomModelConfigs } from "../storage"
 // System Prompt — Dynamic Questions Generation
 // ─────────────────────────────────────────────────────────
 
-const QUESTIONS_SYSTEM_PROMPT = `You are a design strategist. When given a user's design request, generate 4–6 targeted clarifying questions to help produce the best design outcome.
+const QUESTIONS_SYSTEM_PROMPT = `You are a design strategist. Analyze the user's design request carefully and generate 4–6 highly targeted clarifying questions that are SPECIFIC to what they asked — not generic design questions.
 
 Return ONLY a valid JSON array. No markdown fences, no explanation, no preamble — just the raw JSON array.
+
+## Question object schema
 
 Each question object must have:
 - "id": unique snake_case identifier
 - "type": "text" | "textarea" | "chips"
-- "label": question label in Chinese
-- "hint": optional helper text in Chinese (omit if not needed)
-- "options": array of Chinese strings (required only for type "chips", each ≤ 8 chars)
+- "label": question label in Chinese (specific to the request)
+- "hint": optional helper text in Chinese — only include when genuinely useful
+- "options": array of Chinese strings — required only for type "chips"
+- "multi": boolean — for chips questions, set true if multiple selections make sense (e.g. features, sections, platforms), set false if only one answer is valid (e.g. product category, tone)
 
-Generate questions that are specific and contextual to the user's request. Cover: visual style preference, target audience, core content/features, brand context, and any domain-specific details.
+## Critical rules
 
-Example output for "宣传我的产品":
+1. **Read the request carefully** — if the user asks for a dashboard, ask about data types and KPIs, not generic style. If they ask for a mobile app, ask about key screens. If they ask for a landing page, ask about CTAs and sections. Never ask questions irrelevant to the task.
+2. **No redundant questions** — don't ask for "brand name" if the request already contains one. Don't ask for "product type" if they clearly said it's a SaaS.
+3. **Mix question types thoughtfully** — use "chips" for categorical choices, "multi:true chips" for features/sections (user may want several), "text" for names/short facts, "textarea" for descriptions or content.
+4. **Options must be relevant and non-obvious** — tailor chip options to the domain, not generic catch-all lists.
+
+## Examples of differentiated questions by request type
+
+For "设计一个数据分析 dashboard":
 [
-  {"id":"brand_name","type":"text","label":"产品或品牌名称是什么？","hint":"将直接显示在设计中"},
-  {"id":"product_type","type":"chips","label":"产品类型是什么？","options":["移动应用","SaaS 工具","实体商品","服务/订阅","游戏","其他"]},
-  {"id":"description","type":"textarea","label":"用一两句话描述你的产品","hint":"它解决什么问题？核心价值是什么？"},
-  {"id":"target_user","type":"text","label":"目标用户是谁？","hint":"描述你的理想用户群体"},
-  {"id":"style","type":"chips","label":"期望的视觉风格","options":["极简现代","商务专业","活泼年轻","科技感","温暖亲切","高端奢华"]},
-  {"id":"color_pref","type":"text","label":"有品牌色或颜色偏好吗？","hint":"如"蓝色+白色"或"暗色系"，没有可留空"}
+  {"id":"metrics","type":"chips","label":"需要展示哪些核心指标？","options":["用户增长","收入趋势","转化率","留存率","活跃用户","漏斗分析","地域分布"],"multi":true},
+  {"id":"data_period","type":"chips","label":"数据时间维度","options":["实时","日","周","月","季度","自定义范围"],"multi":false},
+  {"id":"audience","type":"chips","label":"谁会看这个 dashboard？","options":["CEO/高管","产品经理","运营团队","技术团队","外部客户"],"multi":true},
+  {"id":"chart_style","type":"chips","label":"图表风格偏好","options":["简洁线图","面积图","柱状图","混合多图","卡片数字为主"],"multi":false},
+  {"id":"color_scheme","type":"chips","label":"配色方向","options":["深色主题","浅色商务","品牌色主导","中性灰调"],"multi":false}
+]
+
+For "设计一个移动 App 登录和注册流程":
+[
+  {"id":"app_name","type":"text","label":"App 名称是什么？","hint":"将显示在页面 logo 处"},
+  {"id":"auth_methods","type":"chips","label":"支持哪些登录方式？","options":["手机号+验证码","邮箱+密码","微信一键登录","Apple 登录","Google 登录","人脸/指纹"],"multi":true},
+  {"id":"app_tone","type":"chips","label":"App 的整体调性","options":["专业商务","年轻活泼","温暖治愈","极简高冷","科技感强"],"multi":false},
+  {"id":"brand_color","type":"text","label":"品牌主色是什么？","hint":"如"#FF5C00"或"靛蓝色"，无品牌色可留空"},
+  {"id":"extra_fields","type":"chips","label":"注册时需要收集哪些信息？","options":["昵称","头像","生日","性别","职业","兴趣标签","推荐码"],"multi":true}
+]
+
+For "帮我做一个产品宣传落地页":
+[
+  {"id":"product_name","type":"text","label":"产品或品牌名称","hint":"将作为页面标题展示"},
+  {"id":"core_value","type":"textarea","label":"用一两句话描述产品核心价值","hint":"它解决什么痛点？为谁解决？"},
+  {"id":"sections","type":"chips","label":"落地页需要包含哪些模块？","options":["Hero 大图","功能介绍","用户评价","定价方案","FAQ","团队介绍","合作品牌"],"multi":true},
+  {"id":"cta","type":"text","label":"主要行动按钮的文案是什么？","hint":"如"免费试用"、"立即下载""},
+  {"id":"style","type":"chips","label":"视觉风格方向","options":["极简留白","科技深色","插画轻松","商务稳重","大胆撞色"],"multi":false}
 ]`
 
 // ─────────────────────────────────────────────────────────
@@ -63,7 +92,27 @@ Before writing a single line of HTML, decide what format best serves the content
    - **Variation A** — conventional, safe, closest to established patterns
    - **Variation B** — balanced, refines the concept with one interesting choice
    - **Variation C** — bold, novel, pushes the aesthetic or interaction in a surprising direction
-   Present them side by side or as navigable sections. Label them clearly (A / B / C).
+
+   **CRITICAL — wrapping structure:**
+   Each variation MUST be a direct child of \`<body>\`, carry the EXACT \`id\` attribute shown, AND a \`data-label\` attribute with a short, descriptive Chinese name (2–5 characters) that captures the visual personality of that variation — NOT generic labels like "方案A" or "变体一".
+
+   Good \`data-label\` examples by context:
+   - Color/theme variations: 极简白、暗夜深、暖橙调、薄荷绿、石墨灰
+   - Layout variations: 居中聚焦、左右分栏、全屏沉浸
+   - Style variations: 商务稳重、轻盈现代、大胆撞色、柔和治愈
+   - Component variations: 卡片式、列表式、瀑布流
+   Choose labels that instantly communicate what makes each variant distinct.
+
+   Structure:
+   <body>
+     <div id="variation-a" data-label="极简留白"> ALL of Variation A content here </div>
+     <div id="variation-b" data-label="暖色渐变"> ALL of Variation B content here </div>
+     <div id="variation-c" data-label="暗夜沉浸"> ALL of Variation C content here </div>
+   </body>
+   - Do NOT nest variations inside any other wrapper element.
+   - Each variation div must be fully self-contained (complete UI, no shared DOM between variations).
+   - Shared CSS/JS in \`<head>\` is fine — it will be inherited by each split view.
+
 4. **No filler content** — every element must earn its place. Never pad with placeholder stats, dummy icons, or lorem ipsum sections. Less is more.
 
 ## Design quality bar
@@ -87,6 +136,17 @@ Before writing a single line of HTML, decide what format best serves the content
 ## Context from user's session
 
 The user's prompt will include their clarifying answers (output type, fidelity, style direction, reference context). Use those answers to shape which medium you pick, how polished you go, and what aesthetic direction to take.
+
+## Iteration mode
+
+If the user's prompt contains "CURRENT DESIGN HTML (iterate on this", you are in **iteration mode**:
+
+- Read the existing HTML **carefully** before touching anything.
+- Apply the user's follow-up instruction precisely. Change only what is asked; preserve everything else (colors, fonts, spacing, overall structure, content).
+- **Do NOT regenerate from scratch.** The existing design is the baseline — iterate on it.
+- If the instruction is a targeted tweak (e.g. "change button color", "add a footer"), output **one refined version** — no A/B/C labels needed.
+- If the instruction is broad or exploratory (e.g. "make it bolder", "try a dark theme"), output **3 variations** as usual, each iterating from the existing base in a different direction.
+- Either way, output a complete, self-contained HTML file.
 
 ## Output format
 
@@ -251,6 +311,21 @@ export function registerDesignHandlers(): void {
       activeSessions.delete(sessionId)
     }
   })
+
+  // design:save-variant — persist a single variation HTML to disk
+  ipcMain.handle(
+    "design:save-variant",
+    (_event, variantId: string, html: string): { filePath: string } => {
+      const dir = path.join(app.getPath("userData"), "design-variants")
+      fs.mkdirSync(dir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
+      const filename = `variant-${variantId}-${ts}.html`
+      const filePath = path.join(dir, filename)
+      fs.writeFileSync(filePath, html, "utf-8")
+      console.log(`[Design] Saved variant ${variantId} → ${filePath}`)
+      return { filePath }
+    }
+  )
 }
 
 // ─────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ interface Message {
   content: string
   tags?: string[]           // pill tags shown after question phase for user message
   isStreaming?: boolean
+  isIteration?: boolean     // true = follow-up iteration, false = first generation
 }
 
 interface QuestionDef {
@@ -23,19 +24,30 @@ interface QuestionDef {
   label: string
   hint?: string
   options?: string[]
+  multi?: boolean   // chips: allow multiple selections
 }
 
 type RightPanelTab = "design" | "questions"
 type GenerationState = "idle" | "asking" | "questions_ready" | "generating" | "done" | "error"
+
+type AnswerValue = string | string[]
+
+interface VariationItem {
+  id: string          // 'a' | 'b' | 'c'
+  label: string       // 'Variation A' etc.
+  html: string        // standalone full HTML for this variant
+}
 
 interface TabState {
   messages: Message[]
   html: string
   generationState: GenerationState
   questions: QuestionDef[]
-  answers: Record<string, string>
+  answers: Record<string, AnswerValue>
   originalPrompt: string
   rightTab: RightPanelTab
+  variations: VariationItem[]
+  activeVariationId: string | null  // null = show full html; 'a'|'b'|'c' = show that variant
 }
 
 function makeTabState(): TabState {
@@ -47,10 +59,58 @@ function makeTabState(): TabState {
     answers: {},
     originalPrompt: "",
     rightTab: "design",
+    variations: [],
+    activeVariationId: null,
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Parse A/B/C variations from a full HTML string
+// Looks for elements with id="variation-a/b/c"
+// ─────────────────────────────────────────────────────────
+function parseVariations(fullHtml: string): VariationItem[] {
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(fullHtml, "text/html")
+    const headHtml = doc.head.innerHTML
+
+    return (["a", "b", "c"] as const).reduce<VariationItem[]>((acc, id) => {
+      const el = doc.getElementById(`variation-${id}`)
+      if (!el) return acc
+
+      // Read descriptive label from data-label attribute; fall back to generic
+      const dataLabel = el.getAttribute("data-label")?.trim()
+      const label = dataLabel || `方案 ${id.toUpperCase()}`
+
+      // Wrap variation in a self-contained HTML doc, inherit shared head (fonts, styles)
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+${headHtml}
+<style>html,body{margin:0;padding:0;min-height:100vh;}</style>
+</head>
+<body>
+${el.outerHTML}
+</body>
+</html>`
+
+      acc.push({ id, label, html })
+      return acc
+    }, [])
+  } catch {
+    return []
   }
 }
 
 let tabCounter = 1
+
+const VARIATION_COLORS: Record<string, string> = {
+  a: "#3b82f6",
+  b: "#8b5cf6",
+  c: "#f59e0b",
+}
 
 // ─────────────────────────────────────────────────────────
 // Main Component
@@ -63,6 +123,11 @@ export function DesignView(): React.JSX.Element {
   const [inputValue, setInputValue]   = useState("")
 
   const cancelRef = useRef<(() => void) | null>(null)
+
+  // ── Tweaks toolbar state ──────────────────────────────────
+  const [tweaksOn, setTweaksOn]         = useState(false)
+  const [activeMode, setActiveMode]     = useState<"comment" | "edit" | "draw" | null>(null)
+  const [zoom, setZoom]                 = useState(100)
 
   const ts = tabStates[activeTabId] ?? makeTabState()
 
@@ -135,27 +200,52 @@ export function DesignView(): React.JSX.Element {
 
   // ── Generate Design ───────────────────────────────────────
 
-  const startGeneration = useCallback((prompt: string, tabId: string) => {
+  const startGeneration = useCallback((prompt: string, tabId: string, isIteration = false) => {
     const sessionId = uuid()
     updateTs(tabId, (prev) => ({
       generationState: "generating",
       rightTab: "design",
       messages: [
         ...prev.messages,
-        { role: "assistant" as const, content: "", isStreaming: true },
+        {
+          role: "assistant" as const,
+          content: "",
+          isStreaming: true,
+          isIteration,
+        },
       ],
     }))
 
     const cleanup = window.api.design.generate(sessionId, prompt, (event) => {
       if (event.type === "done" && event.html) {
+        // Parse A/B/C variations from the generated HTML
+        const variations = parseVariations(event.html)
+
         updateTs(tabId, (prev) => {
           const msgs = [...prev.messages]
           const last = msgs.length - 1
           if (msgs[last]?.role === "assistant") {
-            msgs[last] = { ...msgs[last], content: "✓ Design generated", isStreaming: false }
+            const doneLabel = variations.length > 0
+              ? `✓ ${isIteration ? "Design updated" : "Design generated"} — ${variations.length} variations`
+              : isIteration ? "✓ Design updated" : "✓ Design generated"
+            msgs[last] = { ...msgs[last], content: doneLabel, isStreaming: false }
           }
-          return { generationState: "done", html: event.html!, messages: msgs }
+          return {
+            generationState: "done",
+            html: event.html!,
+            messages: msgs,
+            variations,
+            // Auto-select first variation so it renders immediately
+            activeVariationId: variations[0]?.id ?? null,
+          }
         })
+
+        // Auto-save each variant to disk
+        if (variations.length > 0) {
+          variations.forEach((v) => {
+            window.api.design.saveVariant(v.id, v.html).catch(() => {})
+          })
+        }
         cancelRef.current = null
       } else if (event.type === "error") {
         updateTs(tabId, (prev) => {
@@ -201,8 +291,35 @@ export function DesignView(): React.JSX.Element {
     if (existing.length === 0) {
       startAskQuestions(prompt, tabId)
     } else {
-      // Subsequent messages → generate directly
-      startGeneration(prompt, tabId)
+      // Subsequent messages → iterate on existing design
+      // If a specific variation is active, iterate on that; otherwise use the full HTML
+      const currentState = tabStates[tabId]
+      const activeVarId  = currentState?.activeVariationId ?? null
+      const contextHtml  = activeVarId
+        ? (currentState?.variations.find((v) => v.id === activeVarId)?.html ?? currentState?.html ?? "")
+        : (currentState?.html ?? "")
+
+      let iterationPrompt = prompt
+
+      if (contextHtml) {
+        const MAX_HTML_CHARS = 6000
+        const htmlContext = contextHtml.length > MAX_HTML_CHARS
+          ? contextHtml.slice(0, MAX_HTML_CHARS) + "\n<!-- ...truncated... -->"
+          : contextHtml
+
+        const variantNote = activeVarId
+          ? `Iterating on Variation ${activeVarId.toUpperCase()} specifically.`
+          : ""
+
+        iterationPrompt = `User follow-up instruction: ${prompt}
+${variantNote}
+
+---
+CURRENT DESIGN HTML (iterate on this — do NOT ignore it):
+${htmlContext}`
+      }
+
+      startGeneration(iterationPrompt, tabId, /* isIteration */ !!contextHtml)
     }
   }, [inputValue, activeTabId, tabStates, updateTs, startAskQuestions, startGeneration])
 
@@ -219,8 +336,9 @@ export function DesignView(): React.JSX.Element {
     const answerLines = questions
       .map((q) => {
         const val = answers[q.id]
-        if (!val) return null
-        return `- ${q.label}: ${val}`
+        if (!val || (Array.isArray(val) && val.length === 0)) return null
+        const formatted = Array.isArray(val) ? val.join("、") : val
+        return `- ${q.label}: ${formatted}`
       })
       .filter(Boolean)
       .join("\n")
@@ -229,8 +347,12 @@ export function DesignView(): React.JSX.Element {
 
     // Build pill tags for the user message update
     const tags = questions
-      .map((q) => answers[q.id])
-      .filter(Boolean)
+      .map((q) => {
+        const val = answers[q.id]
+        if (!val || (Array.isArray(val) && val.length === 0)) return null
+        return Array.isArray(val) ? val.slice(0, 2).join("、") : val
+      })
+      .filter((v): v is string => Boolean(v))
       .slice(0, 4)
 
     // Update the first user message to show answer tags
@@ -254,7 +376,7 @@ export function DesignView(): React.JSX.Element {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
-  const setAnswer = useCallback((qId: string, value: string) => {
+  const setAnswer = useCallback((qId: string, value: AnswerValue) => {
     updateTs(activeTabId, (prev) => ({ answers: { ...prev.answers, [qId]: value } }))
   }, [activeTabId, updateTs])
 
@@ -354,13 +476,12 @@ export function DesignView(): React.JSX.Element {
         <div style={S.rightPanel}>
           {/* Canvas Tab Bar */}
           <div style={S.canvasBar}>
-            <button style={S.navBtn} title="Back">←</button>
             <button style={S.navBtn} title="Refresh">↻</button>
 
             {/* Right panel tabs */}
             <div style={{ display: "flex", gap: 0, marginLeft: 8 }}>
               <RightTabBtn
-                label="Design Files"
+                label="Design"
                 active={ts.rightTab === "design"}
                 onClick={() => updateTs(activeTabId, { rightTab: "design" })}
               />
@@ -372,11 +493,58 @@ export function DesignView(): React.JSX.Element {
                   closable
                 />
               )}
+              {/* Active variation indicator in top bar */}
+              {ts.variations.length > 0 && ts.activeVariationId && ts.rightTab === "design" && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "0 12px", height: 44, fontSize: 12, fontWeight: 600,
+                  color: VARIATION_COLORS[ts.activeVariationId] ?? "#888",
+                }}>
+                  <span style={{
+                    width: 6, height: 6, borderRadius: "50%",
+                    background: VARIATION_COLORS[ts.activeVariationId] ?? "#888",
+                  }} />
+                  {ts.variations.find(v => v.id === ts.activeVariationId)?.label}
+                </div>
+              )}
             </div>
 
             <div style={{ flex: 1 }} />
+
+            {/* Top-bar tools — tweaks toggle + mode buttons + zoom + export */}
             {ts.html && ts.rightTab === "design" && (
-              <button style={S.canvasActionBtn} onClick={() => downloadHtml(ts.html)}>⬇ Export</button>
+              <div style={S.tweaksBar}>
+                {/* Tweaks toggle */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: tweaksOn ? "#1a1a1a" : "#8a8a8a" }}>Tweaks</span>
+                  <button
+                    onClick={() => { setTweaksOn((v) => !v); setActiveMode(null) }}
+                    style={{ ...S.toggleTrack, background: tweaksOn ? "#1a1a1a" : "#d4d2cc" }}
+                    title={tweaksOn ? "Disable Tweaks" : "Enable Tweaks"}
+                  >
+                    <span style={{ ...S.toggleThumb, transform: tweaksOn ? "translateX(14px)" : "translateX(0)" }} />
+                  </button>
+                </div>
+
+                {tweaksOn && (
+                  <>
+                    <div style={S.tweaksDivider} />
+                    <TweaksBtn label="Comment" icon={<CommentIcon active={activeMode === "comment"} />} active={activeMode === "comment"} onClick={() => setActiveMode(activeMode === "comment" ? null : "comment")} />
+                    <TweaksBtn label="Edit"    icon={<EditIcon    active={activeMode === "edit"}    />} active={activeMode === "edit"}    onClick={() => setActiveMode(activeMode === "edit"    ? null : "edit")}    />
+                    <TweaksBtn label="Draw"    icon={<DrawIcon    active={activeMode === "draw"}    />} active={activeMode === "draw"}    onClick={() => setActiveMode(activeMode === "draw"    ? null : "draw")}    />
+                  </>
+                )}
+
+                <div style={S.tweaksDivider} />
+                {/* Zoom */}
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <button onClick={() => setZoom((z) => Math.max(25, z - 25))} style={S.zoomBtn}>−</button>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: "#4a4a4a", minWidth: 36, textAlign: "center" }}>{zoom}%</span>
+                  <button onClick={() => setZoom((z) => Math.min(200, z + 25))} style={S.zoomBtn}>+</button>
+                </div>
+                <div style={S.tweaksDivider} />
+                <button style={S.canvasActionBtn} onClick={() => downloadHtml(ts.html)}>⬇ Export</button>
+              </div>
             )}
           </div>
 
@@ -398,16 +566,98 @@ export function DesignView(): React.JSX.Element {
                   <div style={S.canvasEmpty}>
                     <div style={S.generatingRow}>
                       <PulsingDot />
-                      <span style={{ fontSize: 14, color: "#8a8a8a" }}>Generating 3 variations…</span>
+                      <span style={{ fontSize: 14, color: "#8a8a8a" }}>Generating variations…</span>
                     </div>
                   </div>
                 ) : ts.html ? (
-                  <iframe
-                    srcDoc={ts.html}
-                    style={S.iframe}
-                    sandbox="allow-scripts allow-same-origin"
-                    title="Design Preview"
-                  />
+                  (() => {
+                    // Resolve which HTML to show: active variation or full HTML
+                    const displayHtml = ts.activeVariationId
+                      ? (ts.variations.find((v) => v.id === ts.activeVariationId)?.html ?? ts.html)
+                      : ts.html
+                    const activeVar = ts.variations.find((v) => v.id === ts.activeVariationId)
+                    const varColor  = ts.activeVariationId === "a" ? "#3b82f6"
+                      : ts.activeVariationId === "b" ? "#8b5cf6"
+                      : ts.activeVariationId === "c" ? "#f59e0b" : undefined
+
+                    return (
+                  <div style={{ position: "relative", width: "100%", height: "100%", overflow: "auto" }}>
+                    {/* Iteration in-progress banner */}
+                    {isGenerating && (
+                      <div style={{
+                        position: "absolute", top: 0, left: 0, right: 0, zIndex: 10,
+                        display: "flex", alignItems: "center", gap: 8,
+                        padding: "8px 16px",
+                        background: "rgba(26,26,26,0.82)",
+                        backdropFilter: "blur(6px)",
+                        color: "#ffffff", fontSize: 13, fontWeight: 500,
+                      }}>
+                        <PulsingDot />
+                        <span>Updating design… previous version shown below</span>
+                        <button
+                          onClick={handleCancel}
+                          style={{ marginLeft: "auto", padding: "3px 12px", fontSize: 12, fontWeight: 600,
+                            background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)",
+                            borderRadius: 6, color: "#fff", cursor: "pointer" }}
+                        >
+                          Stop
+                        </button>
+                      </div>
+                    )}
+                    {/* Active variation label badge */}
+                    {activeVar && !isGenerating && (
+                      <div style={{
+                        position: "absolute", top: 12, right: 16, zIndex: 5,
+                        padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                        background: varColor, color: "#fff",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+                        pointerEvents: "none",
+                      }}>
+                        {activeVar.label}
+                      </div>
+                    )}
+                    <iframe
+                      key={ts.activeVariationId ?? "all"}
+                      srcDoc={displayHtml}
+                      style={{
+                        ...S.iframe,
+                        transformOrigin: "top left",
+                        transform: `scale(${zoom / 100})`,
+                        width: `${10000 / zoom}%`,
+                        height: `${10000 / zoom}%`,
+                        pointerEvents: activeMode ? "none" : "auto",
+                      }}
+                      sandbox="allow-scripts allow-same-origin"
+                      title="Design Preview"
+                    />
+                    {/* Mode overlay badge */}
+                    {activeMode && (
+                      <div style={{
+                        position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+                        padding: "7px 18px", borderRadius: 20,
+                        background: activeMode === "comment" ? "#f59e0b" : activeMode === "edit" ? "#3b82f6" : "#8b5cf6",
+                        color: "#fff", fontSize: 12, fontWeight: 600,
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                        display: "flex", alignItems: "center", gap: 7,
+                        pointerEvents: "none",
+                      }}>
+                        {activeMode === "comment" && "💬"}
+                        {activeMode === "edit" && "✏️"}
+                        {activeMode === "draw" && "🖊️"}
+                        {activeMode.charAt(0).toUpperCase() + activeMode.slice(1)} mode
+                      </div>
+                    )}
+                    {/* Floating Tweaks Panel — bottom-right variation switcher */}
+                    {ts.variations.length > 0 && !isGenerating && (
+                      <TweaksFloatingPanel
+                        variations={ts.variations}
+                        activeId={ts.activeVariationId}
+                        onSelect={(id) => updateTs(activeTabId, { activeVariationId: id, rightTab: "design" })}
+                      />
+                    )}
+                  </div>
+                    )
+                  })()
                 ) : (
                   <div style={S.canvasEmpty}>
                     <p style={S.canvasEmptyText}>Creations will appear here</p>
@@ -424,6 +674,124 @@ export function DesignView(): React.JSX.Element {
 }
 
 // ─────────────────────────────────────────────────────────
+// Floating Tweaks Panel — bottom-right variation switcher
+// ─────────────────────────────────────────────────────────
+
+function TweaksFloatingPanel({
+  variations,
+  activeId,
+  onSelect,
+}: {
+  variations: VariationItem[]
+  activeId: string | null
+  onSelect: (id: string) => void
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+
+  return (
+    <div style={{
+      position: "absolute",
+      bottom: 28,
+      right: 28,
+      zIndex: 30,
+      userSelect: "none",
+    }}>
+      {collapsed ? (
+        /* Collapsed pill */
+        <button
+          onClick={() => setCollapsed(false)}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "8px 16px",
+            background: "#1a1a1a",
+            borderRadius: 999,
+            border: "none", cursor: "pointer",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
+            color: "#ffffff", fontSize: 12, fontWeight: 700,
+            letterSpacing: "0.06em",
+            fontFamily: "inherit",
+          }}
+        >
+          <span style={{ fontSize: 10 }}>◈</span>
+          TWEAKS
+        </button>
+      ) : (
+        /* Expanded card */
+        <div style={{
+          background: "#ffffff",
+          borderRadius: 20,
+          boxShadow: "0 8px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
+          padding: "20px 22px 18px",
+          minWidth: 200,
+        }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", color: "#1a1a1a", textTransform: "uppercase" }}>
+              Tweaks
+            </span>
+            <button
+              onClick={() => setCollapsed(true)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "0 0 0 8px", fontSize: 16, color: "#8a8a8a", lineHeight: 1, fontFamily: "inherit" }}
+            >
+              ×
+            </button>
+          </div>
+
+          {/* Variation label */}
+          <div style={{ fontSize: 12, color: "#8a8a8a", fontWeight: 500, marginBottom: 10, letterSpacing: "0.02em" }}>
+            变体选择
+          </div>
+
+          {/* Variation chips */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {variations.map((v) => {
+              const isActive = activeId === v.id
+              const color = VARIATION_COLORS[v.id] ?? "#888"
+              return (
+                <button
+                  key={v.id}
+                  onClick={() => onSelect(v.id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "8px 14px",
+                    borderRadius: 12,
+                    fontSize: 13, fontWeight: isActive ? 700 : 500,
+                    color: isActive ? "#ffffff" : "#1a1a1a",
+                    background: isActive ? "#1a1a1a" : "#f5f4f0",
+                    border: "none", cursor: "pointer",
+                    fontFamily: "inherit",
+                    transition: "all 0.12s ease",
+                    textAlign: "left" as const,
+                  }}
+                >
+                  <span style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    background: isActive ? color : "#c8c6c0",
+                    flexShrink: 0,
+                    transition: "background 0.12s",
+                  }} />
+                  {v.label}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Active indicator */}
+          {activeId && (
+            <div style={{
+              marginTop: 14, paddingTop: 12, borderTop: "1px solid #f0efeb",
+              fontSize: 11, color: "#8a8a8a", textAlign: "center" as const,
+            }}>
+              后续追问将迭代此变体
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
 // Questions Panel — rendered in right canvas
 // ─────────────────────────────────────────────────────────
 
@@ -435,15 +803,39 @@ function QuestionsPanel({
   onContinue,
 }: {
   questions: QuestionDef[]
-  answers: Record<string, string>
+  answers: Record<string, AnswerValue>
   isLoading: boolean
-  onAnswer: (id: string, value: string) => void
+  onAnswer: (id: string, value: AnswerValue) => void
   onContinue: () => void
 }) {
-  const allAnswered = questions.length > 0 && questions.every((q) => {
-    const v = answers[q.id] ?? ""
+  // Check if a question has been answered
+  function isAnswered(q: QuestionDef): boolean {
+    const v = answers[q.id]
+    if (!v) return false
+    if (Array.isArray(v)) return v.length > 0
     return v.trim().length > 0
-  })
+  }
+
+  const answeredCount = questions.filter(isAnswered).length
+  const allAnswered   = questions.length > 0 && answeredCount === questions.length
+
+  // Toggle a chip option for multi-select
+  function toggleChip(qId: string, opt: string, multi: boolean) {
+    if (!multi) {
+      onAnswer(qId, opt)
+      return
+    }
+    const current = answers[qId]
+    const arr: string[] = Array.isArray(current) ? current : (current ? [current as string] : [])
+    const next = arr.includes(opt) ? arr.filter((v) => v !== opt) : [...arr, opt]
+    onAnswer(qId, next)
+  }
+
+  function isChipSelected(qId: string, opt: string): boolean {
+    const v = answers[qId]
+    if (Array.isArray(v)) return v.includes(opt)
+    return v === opt
+  }
 
   if (isLoading) {
     return (
@@ -462,71 +854,79 @@ function QuestionsPanel({
     )
   }
 
-  // Extract title from first question or use default
-  const title = "告诉我更多关于这个设计"
-
   return (
     <div style={S.questionsContainer}>
       <div style={S.questionsInner}>
-        <h2 style={S.questionsTitle}>{title}</h2>
+        <h2 style={S.questionsTitle}>告诉我更多关于这个设计</h2>
 
-        {questions.map((q) => (
-          <div key={q.id} style={S.questionBlock}>
-            <label style={S.questionLabel}>{q.label}</label>
-            {q.hint && <p style={S.questionHint}>{q.hint}</p>}
+        {questions.map((q) => {
+          const answered = isAnswered(q)
+          return (
+            <div key={q.id} style={{ ...S.questionBlock, opacity: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <label style={S.questionLabel}>{q.label}</label>
+                {q.type === "chips" && q.multi && (
+                  <span style={{ fontSize: 11, color: "#8a8a8a", background: "#f0efeb", padding: "2px 7px", borderRadius: 999, fontWeight: 500 }}>
+                    可多选
+                  </span>
+                )}
+                {answered && (
+                  <span style={{ fontSize: 11, color: "#4ade80", marginLeft: "auto" }}>✓</span>
+                )}
+              </div>
+              {q.hint && <p style={S.questionHint}>{q.hint}</p>}
 
-            {q.type === "chips" && q.options ? (
-              <div style={S.chipsRow}>
-                {q.options.map((opt) => {
-                  const selected = answers[q.id] === opt
-                  return (
-                    <button
-                      key={opt}
-                      onClick={() => onAnswer(q.id, opt)}
-                      style={{
-                        ...S.chip,
-                        background: selected ? "#1a1a1a" : "#ffffff",
-                        color: selected ? "#ffffff" : "#1a1a1a",
-                        border: selected ? "1px solid #1a1a1a" : "1px solid #d4d2cc",
-                      }}
-                    >
-                      {opt}
-                    </button>
-                  )
-                })}
+              {q.type === "chips" && q.options ? (
+                <div style={S.chipsRow}>
+                  {q.options.map((opt) => {
+                    const selected = isChipSelected(q.id, opt)
+                    return (
+                      <button
+                        key={opt}
+                        onClick={() => toggleChip(q.id, opt, q.multi ?? false)}
+                        style={{
+                          ...S.chip,
+                          background: selected ? "#1a1a1a" : "#ffffff",
+                          color: selected ? "#ffffff" : "#1a1a1a",
+                          border: selected ? "1px solid #1a1a1a" : "1px solid #d4d2cc",
+                          // multi-select: show a subtle checkmark prefix when selected
+                          paddingLeft: q.multi && selected ? 10 : undefined,
+                        }}
+                      >
+                        {q.multi && selected && <span style={{ marginRight: 5, fontSize: 11 }}>✓</span>}
+                        {opt}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : q.type === "textarea" ? (
+                <textarea
+                  value={(answers[q.id] as string) ?? ""}
+                  onChange={(e) => onAnswer(q.id, e.target.value)}
+                  placeholder="Your answer..."
+                  rows={3}
+                  style={S.questionTextarea}
+                />
+              ) : (
                 <input
                   type="text"
-                  placeholder="Other..."
-                  value={q.options.includes(answers[q.id] ?? "") ? "" : (answers[q.id] ?? "")}
+                  value={(answers[q.id] as string) ?? ""}
                   onChange={(e) => onAnswer(q.id, e.target.value)}
-                  style={S.chipOtherInput}
+                  placeholder="Your answer..."
+                  style={S.questionInput}
                 />
-              </div>
-            ) : q.type === "textarea" ? (
-              <textarea
-                value={answers[q.id] ?? ""}
-                onChange={(e) => onAnswer(q.id, e.target.value)}
-                placeholder="Your answer..."
-                rows={3}
-                style={S.questionTextarea}
-              />
-            ) : (
-              <input
-                type="text"
-                value={answers[q.id] ?? ""}
-                onChange={(e) => onAnswer(q.id, e.target.value)}
-                placeholder="Your answer..."
-                style={S.questionInput}
-              />
-            )}
-          </div>
-        ))}
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* Footer with Continue */}
       <div style={S.questionsFooter}>
         <span style={{ fontSize: 13, color: "#8a8a8a" }}>
-          {allAnswered ? "Ready to generate" : `${Object.values(answers).filter(v => v.trim()).length} / ${questions.length} answered`}
+          {allAnswered
+            ? "Ready to generate"
+            : `${answeredCount} / ${questions.length} answered`}
         </span>
         <button
           onClick={onContinue}
@@ -583,6 +983,39 @@ function TabButton({
         >×</button>
       )}
     </div>
+  )
+}
+
+function VariationTabBtn({ label, active, color, onClick }: {
+  label: string; active: boolean; color: string; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={active ? `Viewing ${label} — follow-up messages will iterate this variant` : `Switch to ${label}`}
+      style={{
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "0 14px", height: 44,
+        fontSize: 13, fontWeight: active ? 700 : 500,
+        color: active ? color : "#6a6a6a",
+        background: active ? "#ffffff" : "transparent",
+        border: "1px solid",
+        borderColor: active ? color : "transparent",
+        borderBottom: active ? `2px solid ${color}` : "1px solid transparent",
+        borderRadius: active ? "6px 6px 0 0" : 0,
+        cursor: "pointer", fontFamily: "inherit",
+        position: "relative", top: 1,
+        transition: "all 0.12s ease",
+      }}
+    >
+      {/* Color dot */}
+      <span style={{
+        width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+        background: active ? color : "#c8c6c0",
+        transition: "background 0.12s",
+      }} />
+      {label}
+    </button>
   )
 }
 
@@ -643,7 +1076,9 @@ function MessageBubble({ message }: { message: Message }) {
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
         <div style={{ maxWidth: "85%", padding: "9px 13px", borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: isUser ? "#1a1a1a" : "#f4f3ef", color: isUser ? "#fff" : "#1a1a1a", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {message.content || (message.isStreaming ? <span style={{ opacity: 0.4 }}>Generating…</span> : "")}
+          {message.content || (message.isStreaming
+            ? <span style={{ opacity: 0.4 }}>{message.isIteration ? "Updating design…" : "Generating…"}</span>
+            : "")}
         </div>
       </div>
       {/* Pill tags for user messages after question submission */}
@@ -670,6 +1105,61 @@ function ToolbarIcon({ children, title }: { children: React.ReactNode; title?: s
 
 function PulsingDot() {
   return <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#cc785c", flexShrink: 0, animation: "pulse 1.2s ease-in-out infinite" }} />
+}
+
+// ─────────────────────────────────────────────────────────
+// Tweaks toolbar components
+// ─────────────────────────────────────────────────────────
+
+function TweaksBtn({ label, icon, active, onClick }: {
+  label: string; icon: React.ReactNode; active: boolean; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      style={{
+        display: "flex", alignItems: "center", gap: 5,
+        padding: "5px 10px", height: 30,
+        fontSize: 12, fontWeight: 500,
+        color: active ? "#1a1a1a" : "#6a6a6a",
+        background: active ? "#e8e6e0" : "transparent",
+        border: active ? "1px solid #c8c6c0" : "1px solid transparent",
+        borderRadius: 7, cursor: "pointer",
+        fontFamily: "inherit", transition: "all 0.12s ease",
+      }}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
+
+function CommentIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M2 2h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H5l-3 2V3a1 1 0 0 1 1-1z"
+        stroke={active ? "#f59e0b" : "#6a6a6a"} strokeWidth="1.5" fill={active ? "rgba(245,158,11,0.12)" : "none"} strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function EditIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M11 2l3 3-8 8H3v-3l8-8z"
+        stroke={active ? "#3b82f6" : "#6a6a6a"} strokeWidth="1.5" fill={active ? "rgba(59,130,246,0.12)" : "none"} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function DrawIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M2 13c1-1 2-3 4-4s4 0 5-1 1-3 3-4" stroke={active ? "#8b5cf6" : "#6a6a6a"} strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="14" cy="4" r="1.5" fill={active ? "#8b5cf6" : "#6a6a6a"} />
+    </svg>
+  )
 }
 
 // ─────────────────────────────────────────────────────────
@@ -740,4 +1230,11 @@ const S: Record<string, React.CSSProperties> = {
   questionTextarea:  { width: "100%", padding: "10px 14px", fontSize: 14, border: "1px solid #d4d2cc", borderRadius: 10, background: "#ffffff", outline: "none", fontFamily: "inherit", color: "#1a1a1a", resize: "vertical" as const, lineHeight: 1.5, boxSizing: "border-box" as const },
   questionsFooter:   { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 48px", borderTop: "1px solid #e0ded8", background: "#f0efeb", flexShrink: 0 },
   continueBtn:       { padding: "10px 28px", fontSize: 14, fontWeight: 600, color: "#ffffff", border: "none", borderRadius: 10, fontFamily: "inherit", transition: "background 0.15s" },
+
+  // Tweaks toolbar
+  tweaksBar:         { display: "flex", alignItems: "center", gap: 4 },
+  tweaksDivider:     { width: 1, height: 18, background: "#d4d2cc", margin: "0 4px", flexShrink: 0 },
+  toggleTrack:       { width: 28, height: 16, borderRadius: 999, border: "none", cursor: "pointer", position: "relative" as const, padding: 0, transition: "background 0.2s", flexShrink: 0 },
+  toggleThumb:       { position: "absolute" as const, top: 2, left: 2, width: 12, height: 12, borderRadius: "50%", background: "#ffffff", transition: "transform 0.2s", display: "block" },
+  zoomBtn:           { width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "1px solid #d4d2cc", borderRadius: 5, cursor: "pointer", fontSize: 13, color: "#4a4a4a", fontFamily: "inherit", lineHeight: 1 },
 }

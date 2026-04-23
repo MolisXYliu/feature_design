@@ -1448,6 +1448,8 @@ const api = {
       return () => ipcRenderer.removeListener(channel, handler)
     },
     cancel: (sessionId: string): Promise<void> => ipcRenderer.invoke("design:cancel", sessionId),
+    saveVariant: (variantId: string, html: string): Promise<{ filePath: string }> =>
+      ipcRenderer.invoke("design:save-variant", variantId, html),
   },
   update: {
     check: (): Promise<
