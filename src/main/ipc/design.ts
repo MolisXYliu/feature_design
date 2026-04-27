@@ -133,6 +133,64 @@ Before writing a single line of HTML, decide what format best serves the content
 - ❌ Overused font families (Inter, Roboto, Arial, Fraunces)
 - ❌ Unnecessary icons, stats, or filler numbers that add no meaning
 
+## Tweaks (Edit mode) — REQUIRED in every output
+
+Every HTML file you produce **must** include a self-contained Tweaks system. Follow this protocol exactly.
+
+### 1 — Define tweakable defaults with EDITMODE markers
+
+Inside your inline \`<script>\`, declare a \`TWEAK_DEFAULTS\` object wrapped in special comment markers. The block between the markers must be **valid JSON** (double-quoted keys and string values). Choose 4–8 meaningful, design-relevant keys for the specific design — colors, font sizes, spacing, copy variants, feature flags, layout options, etc.
+
+\`\`\`js
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"primaryColor":"#D97757","headingSize":48,"bodySize":16,"dark":false,"ctaText":"Get Started","radius":12}/*EDITMODE-END*/;
+\`\`\`
+
+There must be **exactly one** such block in the entire file, inside an inline \`<script>\` tag (not an external file).
+
+### 2 — Register the postMessage listener BEFORE announcing availability
+
+This order is mandatory — if you post \`__edit_mode_available\` before the listener is registered, the host's activation message can arrive before your handler exists.
+
+\`\`\`js
+// FIRST: register handler
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === '__activate_edit_mode')   showTweaksPanel();
+  if (e.data && e.data.type === '__deactivate_edit_mode') hideTweaksPanel();
+  if (e.data && e.data.type === '__set_tweak_keys') applyTweaks(e.data.edits);
+});
+
+// SECOND: announce readiness
+window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+\`\`\`
+
+### 3 — Build the Tweaks panel UI
+
+The panel lives **inside the iframe**. Make it a floating card in the bottom-right corner, hidden by default, shown only when \`__activate_edit_mode\` is received.
+
+- For color keys: render a color swatch/picker
+- For numeric keys: render a slider or stepper
+- For boolean keys: render a toggle
+- For string/copy keys: render a text input or chip group
+
+When a value changes:
+1. Apply it **live to the DOM** immediately (e.g. update a CSS variable, swap a class, rewrite a text node)
+2. Persist by calling \`window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { key: newValue } }, '*')\`
+
+### 4 — Apply defaults via CSS variables
+
+Wire every TWEAK_DEFAULT into a CSS variable on \`:root\` at startup, then reference those variables throughout your styles. This makes live updates a single line: \`document.documentElement.style.setProperty('--primary', newColor)\`.
+
+\`\`\`js
+function applyTweaks(edits) {
+  const t = Object.assign({}, TWEAK_DEFAULTS, edits);
+  const r = document.documentElement;
+  r.style.setProperty('--primary', t.primaryColor);
+  r.style.setProperty('--heading-size', t.headingSize + 'px');
+  // ... etc
+}
+applyTweaks({}); // apply defaults on load
+\`\`\`
+
 ## Context from user's session
 
 The user's prompt will include their clarifying answers (output type, fidelity, style direction, reference context). Use those answers to shape which medium you pick, how polished you go, and what aesthetic direction to take.

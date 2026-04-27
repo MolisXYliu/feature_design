@@ -38,6 +38,17 @@ interface VariationItem {
   html: string        // standalone full HTML for this variant
 }
 
+interface CommentItem {
+  id: string
+  // Stored as absolute positions in the iframe's document coordinate space (pixels).
+  // These are pageX/pageY from the click event — viewport-relative + scroll offset.
+  pageX: number
+  pageY: number
+  text: string
+  elementDesc: string
+  createdAt: number
+}
+
 interface TabState {
   messages: Message[]
   html: string
@@ -48,6 +59,22 @@ interface TabState {
   rightTab: RightPanelTab
   variations: VariationItem[]
   activeVariationId: string | null  // null = show full html; 'a'|'b'|'c' = show that variant
+  // Per-tab canvas controls
+  tweaksOn: boolean
+  activeMode: "comment" | "edit" | "draw" | null
+  zoom: number
+  // Per-tab input
+  inputValue: string
+  // Per-tab comments
+  comments: CommentItem[]
+  // draftComment uses pageX/pageY (document coords) same as CommentItem
+  draftComment: { pageX: number; pageY: number; elementDesc: string } | null
+  activeCommentId: string | null
+  // Iframe scroll position — updated continuously via __iframe_scroll postMessage
+  iframeScrollX: number
+  iframeScrollY: number
+  // Edit mode
+  editModeAvailable: boolean   // set true when iframe posts __edit_mode_available
 }
 
 function makeTabState(): TabState {
@@ -61,6 +88,16 @@ function makeTabState(): TabState {
     rightTab: "design",
     variations: [],
     activeVariationId: null,
+    tweaksOn: false,
+    activeMode: null,
+    zoom: 100,
+    inputValue: "",
+    comments: [],
+    draftComment: null,
+    activeCommentId: null,
+    iframeScrollX: 0,
+    iframeScrollY: 0,
+    editModeAvailable: false,
   }
 }
 
@@ -113,6 +150,113 @@ const VARIATION_COLORS: Record<string, string> = {
 }
 
 // ─────────────────────────────────────────────────────────
+// Scroll tracker — always injected on iframe load.
+// Sends the iframe's scroll position to the parent whenever it changes.
+// This is separate from comment mode so pins stay aligned even if
+// the user scrolls before/after entering comment mode.
+// ─────────────────────────────────────────────────────────
+
+const SCROLL_INJECT = `(function(){
+  if(window.__st_active)return;
+  window.__st_active=true;
+  function report(){
+    window.parent.postMessage({type:'__iframe_scroll',x:window.scrollX,y:window.scrollY},'*');
+  }
+  window.addEventListener('scroll',report,{passive:true});
+  report();
+  window.__st_cleanup=function(){
+    window.removeEventListener('scroll',report);
+    window.__st_active=false;delete window.__st_cleanup;
+  };
+})();`
+
+const SCROLL_CLEANUP = `(function(){if(window.__st_cleanup)window.__st_cleanup();})();`
+
+// ─────────────────────────────────────────────────────────
+// Comment mode injection script (runs inside the iframe)
+// ─────────────────────────────────────────────────────────
+
+const COMMENT_INJECT = `(function(){
+  if(window.__cm_active)return;
+  window.__cm_active=true;
+  var sty=document.createElement('style');
+  sty.id='__cm_sty';
+  sty.textContent='.__cm_h{outline:2px solid rgba(245,158,11,0.7)!important;outline-offset:1px!important;cursor:crosshair!important;transition:outline 0.08s;}';
+  document.head.appendChild(sty);
+  var hov=null;
+  function over(e){
+    if(hov)hov.classList.remove('__cm_h');
+    var t=e.target;
+    if(t&&t!==document.body&&t!==document.documentElement){hov=t;t.classList.add('__cm_h');}
+  }
+  function out(){if(hov){hov.classList.remove('__cm_h');hov=null;}}
+  function label(t){
+    if(t.id)return'#'+t.id;
+    var tag=t.tagName.toLowerCase();
+    var cls=Array.from(t.classList).filter(function(c){return!c.startsWith('__cm')}).slice(0,2).join('.');
+    var txt=(t.textContent||'').trim().replace(/\\s+/g,' ').slice(0,28);
+    return tag+(cls?'.'+cls:'')+(txt?' \\''+txt+'\\'':'');
+  }
+  function click(e){
+    e.preventDefault();e.stopPropagation();
+    // Use pageX/pageY (= clientX + scrollX) so coordinates are document-absolute,
+    // not viewport-relative. This lets pins stay anchored to the content regardless
+    // of the current scroll position.
+    window.parent.postMessage({
+      type:'__comment_click',
+      pageX:e.pageX,pageY:e.pageY,
+      winW:window.innerWidth,winH:window.innerHeight,
+      elementDesc:label(e.target)
+    },'*');
+  }
+  document.addEventListener('mouseover',over,true);
+  document.addEventListener('mouseout',out,true);
+  document.addEventListener('click',click,true);
+  window.__cm_cleanup=function(){
+    document.removeEventListener('mouseover',over,true);
+    document.removeEventListener('mouseout',out,true);
+    document.removeEventListener('click',click,true);
+    var s=document.getElementById('__cm_sty');if(s)s.remove();
+    if(hov)hov.classList.remove('__cm_h');
+    window.__cm_active=false;delete window.__cm_cleanup;
+  };
+})();`
+
+const COMMENT_CLEANUP = `(function(){if(window.__cm_cleanup)window.__cm_cleanup();})();`
+
+// Merge edits into the /*EDITMODE-BEGIN*/.../*EDITMODE-END*/ JSON block in an HTML string
+function mergeEditModeKeys(html: string, edits: Record<string, unknown>): string {
+  return html.replace(
+    /\/\*EDITMODE-BEGIN\*\/([\s\S]*?)\/\*EDITMODE-END\*\//,
+    (_, existing) => {
+      try {
+        const current = JSON.parse(existing.trim()) as Record<string, unknown>
+        const merged = { ...current, ...edits }
+        return `/*EDITMODE-BEGIN*/${JSON.stringify(merged)}/*EDITMODE-END*/`
+      } catch {
+        return `/*EDITMODE-BEGIN*/${existing}/*EDITMODE-END*/`
+      }
+    }
+  )
+}
+
+// Send a postMessage into the iframe
+function sendToIframe(iframe: HTMLIFrameElement | null, msg: object) {
+  iframe?.contentWindow?.postMessage(msg, "*")
+}
+
+function injectIntoIframe(iframe: HTMLIFrameElement | null, script: string) {
+  try {
+    const doc = iframe?.contentDocument
+    if (!doc) return
+    const s = doc.createElement("script")
+    s.textContent = script
+    doc.head.appendChild(s)
+    s.remove() // self-remove; the code already ran
+  } catch { /* cross-origin or not yet loaded */ }
+}
+
+// ─────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────
 
@@ -120,16 +264,31 @@ export function DesignView(): React.JSX.Element {
   const [chatTabs, setChatTabs]       = useState<ChatTab[]>([{ id: "chat-1", label: "Chat" }])
   const [activeTabId, setActiveTabId] = useState("chat-1")
   const [tabStates, setTabStates]     = useState<Record<string, TabState>>({ "chat-1": makeTabState() })
-  const [inputValue, setInputValue]   = useState("")
 
-  const cancelRef = useRef<(() => void) | null>(null)
+  // Per-tab session tracking: tabId → { cleanup, sessionId }
+  // Stored in a ref so it never triggers re-renders and isn't stale across tabs
+  const tabSessionsRef = useRef<Map<string, { cleanup: () => void; sessionId: string }>>(new Map())
 
-  // ── Tweaks toolbar state ──────────────────────────────────
-  const [tweaksOn, setTweaksOn]         = useState(false)
-  const [activeMode, setActiveMode]     = useState<"comment" | "edit" | "draw" | null>(null)
-  const [zoom, setZoom]                 = useState(100)
+  // Canvas refs
+  const iframeRef         = useRef<HTMLIFrameElement>(null)
+  const canvasContainerRef = useRef<HTMLDivElement>(null)
+  const activeTabIdRef    = useRef(activeTabId)
 
   const ts = tabStates[activeTabId] ?? makeTabState()
+
+  // ── Per-tab derived values (all read from ts) ────────────────
+  const inputValue = ts.inputValue
+  const tweaksOn   = ts.tweaksOn
+  const activeMode = ts.activeMode
+  const zoom       = ts.zoom
+
+  const setInputValue = (val: string) => updateTs(activeTabId, { inputValue: val })
+  const setTweaksOn   = (val: boolean | ((v: boolean) => boolean)) =>
+    updateTs(activeTabId, (prev) => ({ tweaksOn: typeof val === "function" ? val(prev.tweaksOn) : val }))
+  const setActiveMode = (val: "comment" | "edit" | "draw" | null) =>
+    updateTs(activeTabId, { activeMode: val })
+  const setZoom = (val: number | ((v: number) => number)) =>
+    updateTs(activeTabId, (prev) => ({ zoom: typeof val === "function" ? val(prev.zoom) : val }))
 
   // ── helpers ──────────────────────────────────────────────
 
@@ -140,6 +299,104 @@ export function DesignView(): React.JSX.Element {
       return { ...prev, [tabId]: { ...current, ...updates } }
     })
   }, [])
+
+  // ── Keep activeTabIdRef in sync ───────────────────────────
+  useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
+
+  // ── Inject / remove comment script when mode changes ─────
+  useEffect(() => {
+    if (activeMode === "comment") {
+      injectIntoIframe(iframeRef.current, COMMENT_INJECT)
+    } else {
+      injectIntoIframe(iframeRef.current, COMMENT_CLEANUP)
+    }
+  }, [activeMode])
+
+  // ── Send edit mode postMessages when mode changes ─────────
+  useEffect(() => {
+    if (activeMode === "edit") {
+      sendToIframe(iframeRef.current, { type: "__activate_edit_mode" })
+    } else {
+      // Deactivate edit mode whenever we leave it (switching to comment/draw/null)
+      sendToIframe(iframeRef.current, { type: "__deactivate_edit_mode" })
+    }
+  }, [activeMode])
+
+  // ── Listen for all postMessages from iframe ───────────────
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const msg = e.data
+      if (!msg?.type) return
+
+      // ── Iframe scroll position update ─────────────────────
+      if (msg.type === "__iframe_scroll") {
+        const { x, y } = msg as { x: number; y: number }
+        updateTs(activeTabIdRef.current, { iframeScrollX: x, iframeScrollY: y })
+        return
+      }
+
+      // ── Comment click ──────────────────────────────────────
+      if (msg.type === "__comment_click") {
+        const { pageX, pageY, elementDesc } = msg as {
+          pageX: number; pageY: number; elementDesc: string
+        }
+        updateTs(activeTabIdRef.current, {
+          draftComment: { pageX, pageY, elementDesc: elementDesc || "元素" },
+          activeCommentId: null,
+        })
+        return
+      }
+
+      // ── Edit mode: iframe announces it has a Tweaks panel ──
+      if (msg.type === "__edit_mode_available") {
+        updateTs(activeTabIdRef.current, { editModeAvailable: true })
+        // If we're already in edit mode (e.g. iframe just reloaded), immediately activate
+        // Read current activeMode from the tab state via the ref
+        setTabStates((prev) => {
+          const tabId = activeTabIdRef.current
+          const state = prev[tabId]
+          if (state?.activeMode === "edit") {
+            // Send activation — but we can't call sendToIframe here (side-effect in setState)
+            // Instead, schedule it as a microtask
+            Promise.resolve().then(() => sendToIframe(iframeRef.current, { type: "__activate_edit_mode" }))
+          }
+          return prev  // no state change needed
+        })
+        return
+      }
+
+      // ── Edit mode: user changed a value in the Tweaks panel ─
+      if (msg.type === "__edit_mode_set_keys") {
+        const edits = msg.edits as Record<string, unknown>
+        const tabId = activeTabIdRef.current
+        setTabStates((prev) => {
+          const state = prev[tabId]
+          if (!state) return prev
+          // Merge edits into the EDITMODE-BEGIN block of the active HTML
+          const targetHtml = state.activeVariationId
+            ? (state.variations.find((v) => v.id === state.activeVariationId)?.html ?? state.html)
+            : state.html
+          const updated = mergeEditModeKeys(targetHtml, edits)
+          if (state.activeVariationId) {
+            // Update the specific variation's html
+            return {
+              ...prev,
+              [tabId]: {
+                ...state,
+                variations: state.variations.map((v) =>
+                  v.id === state.activeVariationId ? { ...v, html: updated } : v
+                ),
+              },
+            }
+          }
+          return { ...prev, [tabId]: { ...state, html: updated } }
+        })
+        return
+      }
+    }
+    window.addEventListener("message", handler)
+    return () => window.removeEventListener("message", handler)
+  }, [updateTs])
 
   // ── Tab management ────────────────────────────────────────
 
@@ -152,6 +409,13 @@ export function DesignView(): React.JSX.Element {
   }
 
   function closeTab(id: string) {
+    // Cancel any running session for the closed tab
+    const entry = tabSessionsRef.current.get(id)
+    if (entry) {
+      entry.cleanup()
+      window.api.design.cancel(entry.sessionId).catch(() => {})
+      tabSessionsRef.current.delete(id)
+    }
     setChatTabs((prev) => {
       const next = prev.filter((t) => t.id !== id)
       if (activeTabId === id && next.length > 0) setActiveTabId(next[next.length - 1].id)
@@ -161,9 +425,8 @@ export function DesignView(): React.JSX.Element {
   }
 
   function switchTab(id: string) {
+    // Each tab runs independently — do NOT cancel the previous tab's session
     setActiveTabId(id)
-    // cancel any running operation for previous tab
-    if (cancelRef.current) { cancelRef.current(); cancelRef.current = null }
   }
 
   // ── Ask Questions ─────────────────────────────────────────
@@ -172,18 +435,21 @@ export function DesignView(): React.JSX.Element {
     const sessionId = uuid()
     updateTs(tabId, { generationState: "asking", originalPrompt: prompt, rightTab: "questions", questions: [] })
 
+    // Cancel any existing session for this tab before starting a new one
+    const existing = tabSessionsRef.current.get(tabId)
+    if (existing) { existing.cleanup(); window.api.design.cancel(existing.sessionId).catch(() => {}) }
+
     const cleanup = window.api.design.askQuestions(sessionId, prompt, (event) => {
       if (event.type === "done" && event.questions) {
         updateTs(tabId, (prev) => ({
           generationState: "questions_ready",
           questions: event.questions as QuestionDef[],
-          // add "Claude has some questions →" assistant message
           messages: [
             ...prev.messages,
             { role: "questions-prompt" as const, content: "we has some questions →" },
           ],
         }))
-        cancelRef.current = null
+        tabSessionsRef.current.delete(tabId)
       } else if (event.type === "error") {
         updateTs(tabId, (prev) => ({
           generationState: "error",
@@ -192,10 +458,10 @@ export function DesignView(): React.JSX.Element {
             { role: "assistant" as const, content: `❌ ${event.error ?? "Failed to generate questions"}` },
           ],
         }))
-        cancelRef.current = null
+        tabSessionsRef.current.delete(tabId)
       }
     })
-    cancelRef.current = cleanup
+    tabSessionsRef.current.set(tabId, { cleanup, sessionId })
   }, [updateTs])
 
   // ── Generate Design ───────────────────────────────────────
@@ -216,9 +482,12 @@ export function DesignView(): React.JSX.Element {
       ],
     }))
 
+    // Cancel any existing session for this tab before starting a new one
+    const existing = tabSessionsRef.current.get(tabId)
+    if (existing) { existing.cleanup(); window.api.design.cancel(existing.sessionId).catch(() => {}) }
+
     const cleanup = window.api.design.generate(sessionId, prompt, (event) => {
       if (event.type === "done" && event.html) {
-        // Parse A/B/C variations from the generated HTML
         const variations = parseVariations(event.html)
 
         updateTs(tabId, (prev) => {
@@ -235,18 +504,14 @@ export function DesignView(): React.JSX.Element {
             html: event.html!,
             messages: msgs,
             variations,
-            // Auto-select first variation so it renders immediately
             activeVariationId: variations[0]?.id ?? null,
           }
         })
 
-        // Auto-save each variant to disk
         if (variations.length > 0) {
-          variations.forEach((v) => {
-            window.api.design.saveVariant(v.id, v.html).catch(() => {})
-          })
+          variations.forEach((v) => { window.api.design.saveVariant(v.id, v.html).catch(() => {}) })
         }
-        cancelRef.current = null
+        tabSessionsRef.current.delete(tabId)
       } else if (event.type === "error") {
         updateTs(tabId, (prev) => {
           const msgs = [...prev.messages]
@@ -256,7 +521,7 @@ export function DesignView(): React.JSX.Element {
           }
           return { generationState: "error", messages: msgs }
         })
-        cancelRef.current = null
+        tabSessionsRef.current.delete(tabId)
       } else if (event.type === "cancelled") {
         updateTs(tabId, (prev) => {
           const msgs = [...prev.messages]
@@ -264,20 +529,128 @@ export function DesignView(): React.JSX.Element {
           if (msgs[last]?.isStreaming) msgs[last] = { ...msgs[last], isStreaming: false }
           return { generationState: "idle", messages: msgs }
         })
-        cancelRef.current = null
+        tabSessionsRef.current.delete(tabId)
       }
     })
-    cancelRef.current = cleanup
+    tabSessionsRef.current.set(tabId, { cleanup, sessionId })
   }, [updateTs])
+
+  // ── Build comment prompt helper ───────────────────────────
+  const buildCommentPrompt = useCallback((
+    comments: { elementDesc: string; text: string }[],
+    state: TabState
+  ): string => {
+    const activeVarId = state.activeVariationId
+    const contextHtml = activeVarId
+      ? (state.variations.find((v) => v.id === activeVarId)?.html ?? state.html)
+      : state.html
+
+    const MAX_HTML_CHARS = 6000
+    const htmlSnippet = contextHtml.length > MAX_HTML_CHARS
+      ? contextHtml.slice(0, MAX_HTML_CHARS) + "\n<!-- ...truncated... -->"
+      : contextHtml
+
+    const variantNote = activeVarId ? `正在迭代变体 ${activeVarId.toUpperCase()}。` : ""
+    const commentLines = comments
+      .map((c, i) => `[${i + 1}] 元素 (${c.elementDesc}): ${c.text}`)
+      .join("\n")
+
+    return `用户通过 Comment 模式在设计上标注了以下修改意见。请严格按照每条批注对对应元素进行修改，其他部分完全保持不变：
+
+${commentLines}
+
+${variantNote}
+
+---
+CURRENT DESIGN HTML (iterate on this — do NOT ignore it):
+${htmlSnippet}`
+  }, [])
+
+  // ── Send a single comment directly (without saving to list) ─
+  const handleSendDraftComment = useCallback((text: string, elementDesc: string) => {
+    const tabId = activeTabId
+    const state = tabStates[tabId]
+    if (!state || !text.trim()) return
+
+    const prompt = buildCommentPrompt([{ elementDesc, text }], state)
+
+    updateTs(tabId, (prev) => ({
+      draftComment: null,
+      activeCommentId: null,
+      messages: [
+        ...prev.messages,
+        { role: "user" as const, content: `📝 ${text.trim().slice(0, 50)}${text.length > 50 ? "…" : ""}` },
+      ],
+    }))
+    startGeneration(prompt, tabId, true)
+  }, [activeTabId, tabStates, updateTs, startGeneration, buildCommentPrompt])
+
+  // ── Send a saved comment pin → model ─────────────────────
+  const handleSendComment = useCallback((commentId: string, overrideText?: string) => {
+    const tabId = activeTabId
+    const state = tabStates[tabId]
+    if (!state) return
+
+    const comment = state.comments.find((c) => c.id === commentId)
+    if (!comment) return
+
+    const text = overrideText ?? comment.text
+    const prompt = buildCommentPrompt([{ elementDesc: comment.elementDesc, text }], state)
+
+    updateTs(tabId, (prev) => ({
+      comments: prev.comments.filter((c) => c.id !== commentId),
+      draftComment: null,
+      activeCommentId: null,
+      messages: [
+        ...prev.messages,
+        { role: "user" as const, content: `📝 ${text.trim().slice(0, 50)}${text.length > 50 ? "…" : ""}` },
+      ],
+    }))
+    startGeneration(prompt, tabId, true)
+  }, [activeTabId, tabStates, updateTs, startGeneration, buildCommentPrompt])
+
+  // ── Edit a saved comment's text ───────────────────────────
+  const handleEditComment = useCallback((commentId: string, newText: string) => {
+    updateTs(activeTabId, (prev) => ({
+      comments: prev.comments.map((c) =>
+        c.id === commentId ? { ...c, text: newText } : c
+      ),
+    }))
+  }, [activeTabId, updateTs])
+
+  // ── Apply ALL saved comments → send to model ─────────────
+  const handleApplyComments = useCallback(() => {
+    const tabId = activeTabId
+    const state = tabStates[tabId]
+    const pending = state?.comments ?? []
+    if (pending.length === 0) return
+
+    const prompt = buildCommentPrompt(
+      pending.map((c) => ({ elementDesc: c.elementDesc, text: c.text })),
+      state
+    )
+
+    updateTs(tabId, (prev) => ({
+      comments: [],
+      draftComment: null,
+      activeCommentId: null,
+      messages: [
+        ...prev.messages,
+        { role: "user" as const, content: `📝 发送 ${pending.length} 条批注` },
+      ],
+    }))
+
+    startGeneration(prompt, tabId, true)
+  }, [activeTabId, tabStates, updateTs, startGeneration, buildCommentPrompt])
 
   // ── Send message ──────────────────────────────────────────
 
   const handleSend = useCallback(() => {
-    const prompt = inputValue.trim()
+    const prompt = (tabStates[activeTabId]?.inputValue ?? "").trim()
     if (!prompt) return
     const state = tabStates[activeTabId]?.generationState ?? "idle"
     if (state === "asking" || state === "generating") return
-    setInputValue("")
+    updateTs(activeTabId, { inputValue: "" })
 
     const tabId = activeTabId
     const existing = tabStates[tabId]?.messages ?? []
@@ -321,7 +694,7 @@ ${htmlContext}`
 
       startGeneration(iterationPrompt, tabId, /* isIteration */ !!contextHtml)
     }
-  }, [inputValue, activeTabId, tabStates, updateTs, startAskQuestions, startGeneration])
+  }, [activeTabId, tabStates, updateTs, startAskQuestions, startGeneration])
 
   // ── Continue (submit answers) ─────────────────────────────
 
@@ -367,8 +740,12 @@ ${htmlContext}`
   }, [activeTabId, tabStates, updateTs, startGeneration])
 
   const handleCancel = useCallback(() => {
-    if (cancelRef.current) { cancelRef.current(); cancelRef.current = null }
-    window.api.design.cancel(activeTabId).catch(() => {})
+    const entry = tabSessionsRef.current.get(activeTabId)
+    if (entry) {
+      entry.cleanup()
+      window.api.design.cancel(entry.sessionId).catch(() => {})
+      tabSessionsRef.current.delete(activeTabId)
+    }
     updateTs(activeTabId, { generationState: "idle" })
   }, [activeTabId, updateTs])
 
@@ -581,7 +958,13 @@ ${htmlContext}`
                       : ts.activeVariationId === "c" ? "#f59e0b" : undefined
 
                     return (
-                  <div style={{ position: "relative", width: "100%", height: "100%", overflow: "auto" }}>
+                  <div
+                    ref={canvasContainerRef}
+                    style={{ position: "relative", width: "100%", height: "100%", overflow: "auto" }}
+                    onClick={() => {
+                      if (ts.activeCommentId) updateTs(activeTabId, { activeCommentId: null })
+                    }}
+                  >
                     {/* Iteration in-progress banner */}
                     {isGenerating && (
                       <div style={{
@@ -617,6 +1000,7 @@ ${htmlContext}`
                       </div>
                     )}
                     <iframe
+                      ref={iframeRef}
                       key={ts.activeVariationId ?? "all"}
                       srcDoc={displayHtml}
                       style={{
@@ -625,28 +1009,149 @@ ${htmlContext}`
                         transform: `scale(${zoom / 100})`,
                         width: `${10000 / zoom}%`,
                         height: `${10000 / zoom}%`,
-                        pointerEvents: activeMode ? "none" : "auto",
+                        // Comment mode: iframe handles clicks (script injected); other modes: block
+                        pointerEvents: activeMode && activeMode !== "comment" ? "none" : "auto",
                       }}
                       sandbox="allow-scripts allow-same-origin"
                       title="Design Preview"
+                      onLoad={() => {
+                        // Always inject scroll tracker so pins stay anchored to content
+                        injectIntoIframe(iframeRef.current, SCROLL_INJECT)
+                        // Reset scroll state — new iframe always starts at (0, 0)
+                        updateTs(activeTabId, { iframeScrollX: 0, iframeScrollY: 0 })
+                        // Re-inject comment script after iframe reloads (variation switch, etc.)
+                        if (activeMode === "comment") injectIntoIframe(iframeRef.current, COMMENT_INJECT)
+                        // Re-activate edit mode if active
+                        if (activeMode === "edit") sendToIframe(iframeRef.current, { type: "__activate_edit_mode" })
+                      }}
                     />
-                    {/* Mode overlay badge */}
-                    {activeMode && (
+                    {/* ── Comment layer ── */}
+                    {/* No click overlay needed — iframe script handles clicks via postMessage */}
+
+                    {/* Existing comment pins — always visible while comment mode or there are comments */}
+                    {(activeMode === "comment" || ts.comments.length > 0) && (() => {
+                      const zf = zoom / 100
+                      const cw = canvasContainerRef.current?.clientWidth || 800
+                      const ch = canvasContainerRef.current?.clientHeight || 600
+                      return ts.comments.map((c, i) => {
+                        // Convert document-absolute coords to current canvas-relative % via scroll offset
+                        const pinLeft = ((c.pageX - ts.iframeScrollX) * zf / cw) * 100
+                        const pinTop  = ((c.pageY - ts.iframeScrollY) * zf / ch) * 100
+                        // Hide pins that have scrolled out of the visible canvas area
+                        const inView = pinLeft > -6 && pinLeft < 106 && pinTop > -6 && pinTop < 106
+                        if (!inView) return null
+                        return (
+                          <CommentPin
+                            key={c.id}
+                            comment={c}
+                            index={i + 1}
+                            pinLeft={pinLeft}
+                            pinTop={pinTop}
+                            isActive={ts.activeCommentId === c.id}
+                            onToggle={() => updateTs(activeTabId, {
+                              activeCommentId: ts.activeCommentId === c.id ? null : c.id,
+                              draftComment: null,
+                            })}
+                            onSend={(text) => handleSendComment(c.id, text)}
+                            onEdit={(newText) => handleEditComment(c.id, newText)}
+                          />
+                        )
+                      })
+                    })()}
+
+                    {/* Draft comment input — shown after clicking canvas */}
+                    {ts.draftComment && (() => {
+                      const zf = zoom / 100
+                      const cw = canvasContainerRef.current?.clientWidth || 800
+                      const ch = canvasContainerRef.current?.clientHeight || 600
+                      const draftLeft = Math.min(95, Math.max(2,
+                        ((ts.draftComment.pageX - ts.iframeScrollX) * zf / cw) * 100
+                      ))
+                      const draftTop = Math.min(95, Math.max(2,
+                        ((ts.draftComment.pageY - ts.iframeScrollY) * zf / ch) * 100
+                      ))
+                      return (
+                        <CommentDraftInput
+                          x={draftLeft}
+                          y={draftTop}
+                          elementDesc={ts.draftComment.elementDesc}
+                          onSubmit={(text) => {
+                            if (!text.trim()) { updateTs(activeTabId, { draftComment: null }); return }
+                            const newComment: CommentItem = {
+                              id: uuid(),
+                              pageX: ts.draftComment!.pageX,
+                              pageY: ts.draftComment!.pageY,
+                              text: text.trim(),
+                              elementDesc: ts.draftComment!.elementDesc,
+                              createdAt: Date.now(),
+                            }
+                            updateTs(activeTabId, (prev) => ({
+                              comments: [...prev.comments, newComment],
+                              draftComment: null,
+                              activeCommentId: newComment.id,
+                            }))
+                          }}
+                          onSend={(text) => {
+                            if (!text.trim()) return
+                            const draft = ts.draftComment!
+                            handleSendDraftComment(text, draft.elementDesc)
+                          }}
+                          onCancel={() => updateTs(activeTabId, { draftComment: null })}
+                        />
+                      )
+                    })()}
+
+                    {/* Non-comment mode badge (Edit / Draw) */}
+                    {activeMode && activeMode !== "comment" && (
                       <div style={{
                         position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
                         padding: "7px 18px", borderRadius: 20,
-                        background: activeMode === "comment" ? "#f59e0b" : activeMode === "edit" ? "#3b82f6" : "#8b5cf6",
+                        background: activeMode === "edit" ? "#3b82f6" : "#8b5cf6",
                         color: "#fff", fontSize: 12, fontWeight: 600,
                         boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
                         display: "flex", alignItems: "center", gap: 7,
                         pointerEvents: "none",
                       }}>
-                        {activeMode === "comment" && "💬"}
                         {activeMode === "edit" && "✏️"}
                         {activeMode === "draw" && "🖊️"}
                         {activeMode.charAt(0).toUpperCase() + activeMode.slice(1)} mode
                       </div>
                     )}
+
+                    {/* Comment bottom bar: hint when empty, Apply bar when there are comments */}
+                    {activeMode === "comment" && !ts.draftComment && (
+                      <div style={{
+                        position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: ts.comments.length > 0 ? "8px 8px 8px 16px" : "6px 16px",
+                        borderRadius: 999,
+                        background: "rgba(26,26,26,0.82)", backdropFilter: "blur(8px)",
+                        boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+                        whiteSpace: "nowrap",
+                      }}>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: ts.comments.length > 0 ? "#d1d5db" : "#fff" }}>
+                          {ts.comments.length === 0
+                            ? "点击元素添加批注"
+                            : ts.comments.length === 1
+                              ? "1 条批注已保存"
+                              : `${ts.comments.length} 条批注已保存`}
+                        </span>
+                        {ts.comments.length > 1 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleApplyComments() }}
+                            style={{
+                              padding: "5px 14px", borderRadius: 999,
+                              background: "#cc785c", border: "none",
+                              fontSize: 12, fontWeight: 700, color: "#fff",
+                              cursor: "pointer", fontFamily: "inherit",
+                            }}
+                          >
+                            发送全部 →
+                          </button>
+                        )}
+                      </div>
+                    )}
+
                     {/* Floating Tweaks Panel — bottom-right variation switcher */}
                     {ts.variations.length > 0 && !isGenerating && (
                       <TweaksFloatingPanel
@@ -1172,6 +1677,294 @@ function downloadHtml(html: string) {
   const a    = document.createElement("a")
   a.href = url; a.download = "design.html"; a.click()
   URL.revokeObjectURL(url)
+}
+
+// ─────────────────────────────────────────────────────────
+// Comment Pin — positioned pin with expand-on-click popover
+// ─────────────────────────────────────────────────────────
+
+function CommentPin({ comment, index, pinLeft, pinTop, isActive, onToggle, onSend, onEdit }: {
+  comment: CommentItem
+  index: number
+  pinLeft: number   // computed canvas-left % (accounts for scroll + zoom)
+  pinTop: number    // computed canvas-top %
+  isActive: boolean
+  onToggle: () => void
+  onSend: (text: string) => void
+  onEdit: (newText: string) => void
+}) {
+  const AVATAR_SIZE = 26
+  const [editText, setEditText] = useState(comment.text)
+
+  // Keep local edit text in sync if parent updates the comment (e.g. after re-open)
+  useEffect(() => { setEditText(comment.text) }, [comment.text, isActive])
+
+  const hasEdits = editText.trim() !== comment.text.trim()
+
+  const handleClose = () => {
+    if (hasEdits && editText.trim()) onEdit(editText.trim())
+    onToggle()
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: `${pinLeft}%`,
+        top: `${pinTop}%`,
+        zIndex: 20,
+        transform: "translate(-50%, -50%)",
+        pointerEvents: "auto",
+      }}
+    >
+      {/* The pin circle */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggle() }}
+        title={comment.text}
+        style={{
+          width: AVATAR_SIZE, height: AVATAR_SIZE,
+          borderRadius: "50% 50% 50% 0",
+          transform: "rotate(-45deg)",
+          background: "#f59e0b",
+          border: "2px solid #fff",
+          boxShadow: isActive
+            ? "0 0 0 3px rgba(245,158,11,0.35), 0 4px 12px rgba(0,0,0,0.2)"
+            : "0 2px 8px rgba(0,0,0,0.18)",
+          cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0, padding: 0,
+          transition: "box-shadow 0.15s",
+        }}
+      >
+        <span style={{
+          transform: "rotate(45deg)",
+          fontSize: 11, fontWeight: 700, color: "#fff", lineHeight: 1,
+          fontFamily: "inherit",
+        }}>
+          {index}
+        </span>
+      </button>
+
+      {/* Expanded popover */}
+      {isActive && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: AVATAR_SIZE + 8,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 252,
+            background: "#ffffff",
+            borderRadius: 14,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08)",
+            padding: "14px 14px 12px",
+            zIndex: 30,
+          }}
+        >
+          {/* Header row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{
+              width: 20, height: 20, borderRadius: "50%",
+              background: "#f59e0b",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 10, fontWeight: 700, color: "#fff", flexShrink: 0,
+            }}>
+              {index}
+            </span>
+            <span style={{ fontSize: 11, color: "#8a8a8a", flex: 1 }}>
+              {new Date(comment.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <button
+              onClick={handleClose}
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#aaa", padding: "0 2px", lineHeight: 1 }}
+            >×</button>
+          </div>
+
+          {/* Element tag */}
+          <div style={{
+            display: "inline-block", marginBottom: 8,
+            padding: "2px 8px", borderRadius: 5,
+            background: "#fef3c7", color: "#92400e",
+            fontSize: 11, fontFamily: "monospace",
+            maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {comment.elementDesc}
+          </div>
+
+          {/* Editable comment text */}
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault()
+                if (editText.trim()) onSend(editText.trim())
+              }
+              if (e.key === "Escape") { e.preventDefault(); handleClose() }
+            }}
+            rows={3}
+            style={{
+              width: "100%", border: "1px solid #e0ded8", borderRadius: 8,
+              padding: "7px 9px", fontSize: 13, fontFamily: "inherit",
+              resize: "none", outline: "none", lineHeight: 1.5, color: "#1a1a1a",
+              boxSizing: "border-box", marginBottom: 10,
+              background: "#fafaf8",
+            }}
+          />
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 7 }}>
+            <button
+              onClick={handleClose}
+              style={{
+                flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 500,
+                background: "#f5f4f0", border: "none", borderRadius: 8,
+                cursor: "pointer", color: "#6a6a6a", fontFamily: "inherit",
+              }}
+            >
+              {hasEdits ? "保存" : "关闭"}
+            </button>
+            <button
+              onClick={() => { if (editText.trim()) onSend(editText.trim()) }}
+              disabled={!editText.trim()}
+              style={{
+                flex: 2, padding: "6px 0", fontSize: 12, fontWeight: 700,
+                background: editText.trim() ? "#cc785c" : "#e0ded8",
+                border: "none", borderRadius: 8,
+                cursor: editText.trim() ? "pointer" : "default",
+                color: editText.trim() ? "#fff" : "#aaa",
+                fontFamily: "inherit", transition: "background 0.12s",
+              }}
+            >
+              发送 →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+// Comment Draft Input — floating text box on new click
+// ─────────────────────────────────────────────────────────
+
+function CommentDraftInput({ x, y, elementDesc, onSubmit, onSend, onCancel }: {
+  x: number
+  y: number
+  elementDesc: string
+  onSubmit: (text: string) => void   // 保存 — add to pins list
+  onSend: (text: string) => void     // 发送 — skip saving, send directly to model
+  onCancel: () => void
+}) {
+  const [text, setText] = useState("")
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => { textareaRef.current?.focus() }, [])
+
+  const canSubmit = text.trim().length > 0
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        left: `${x}%`,
+        top: `${y}%`,
+        transform: "translate(-50%, 8px)",
+        zIndex: 25,
+        width: 264,
+        background: "#ffffff",
+        borderRadius: 14,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08)",
+        padding: "14px 14px 12px",
+      }}
+    >
+      {/* Draft pin indicator */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{
+          width: 20, height: 20, borderRadius: "50%",
+          background: "#f59e0b",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 12, color: "#fff", fontWeight: 700, flexShrink: 0,
+        }}>+</span>
+        <span style={{ fontSize: 12, color: "#8a8a8a", fontWeight: 500 }}>添加批注</span>
+      </div>
+
+      {/* Element context tag */}
+      <div style={{
+        display: "inline-block", marginBottom: 10,
+        padding: "3px 10px", borderRadius: 6,
+        background: "#fef3c7", color: "#92400e",
+        fontSize: 11, fontFamily: "monospace", fontWeight: 500,
+        maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>
+        {elementDesc}
+      </div>
+
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (canSubmit) onSubmit(text.trim()) }
+          if (e.key === "Escape") { e.preventDefault(); onCancel() }
+        }}
+        placeholder="输入批注内容… (Shift+Enter 换行)"
+        rows={3}
+        style={{
+          width: "100%", border: "1px solid #e0ded8", borderRadius: 8,
+          padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
+          resize: "none", outline: "none", lineHeight: 1.5, color: "#1a1a1a",
+          boxSizing: "border-box",
+        }}
+      />
+
+      {/* 3-button row: 取消 / 保存 / 发送 */}
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        <button
+          onClick={onCancel}
+          style={{
+            flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 500,
+            background: "#f5f4f0", border: "none", borderRadius: 8,
+            cursor: "pointer", color: "#6a6a6a", fontFamily: "inherit",
+          }}
+        >
+          取消
+        </button>
+        <button
+          onClick={() => { if (canSubmit) onSubmit(text.trim()) }}
+          disabled={!canSubmit}
+          style={{
+            flex: 1.4, padding: "6px 0", fontSize: 12, fontWeight: 600,
+            background: canSubmit ? "#f5f4f0" : "#ebebeb",
+            border: canSubmit ? "1px solid #c8c6c0" : "1px solid #e0ded8",
+            borderRadius: 8,
+            cursor: canSubmit ? "pointer" : "default",
+            color: canSubmit ? "#1a1a1a" : "#aaa",
+            fontFamily: "inherit", transition: "all 0.12s",
+          }}
+        >
+          保存
+        </button>
+        <button
+          onClick={() => { if (canSubmit) onSend(text.trim()) }}
+          disabled={!canSubmit}
+          style={{
+            flex: 1.6, padding: "6px 0", fontSize: 12, fontWeight: 700,
+            background: canSubmit ? "#cc785c" : "#e0ded8",
+            border: "none", borderRadius: 8,
+            cursor: canSubmit ? "pointer" : "default",
+            color: canSubmit ? "#fff" : "#aaa",
+            fontFamily: "inherit", transition: "background 0.12s",
+          }}
+        >
+          发送 →
+        </button>
+      </div>
+    </div>
+  )
 }
 
 // ─────────────────────────────────────────────────────────
