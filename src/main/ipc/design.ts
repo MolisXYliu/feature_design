@@ -405,19 +405,94 @@ function extractHtml(text: string): string {
 }
 
 function parseQuestionsJson(text: string): unknown[] {
-  // Strip <think> blocks
+  // Strip <think> blocks (some models emit reasoning inside these before the answer)
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim()
   // Strip markdown code fences
   const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (fenced) cleaned = fenced[1].trim()
-  // Find JSON array in the text
-  const match = cleaned.match(/\[[\s\S]*\]/)
-  if (match) {
-    try {
-      return JSON.parse(match[0]) as unknown[]
-    } catch {
-      // fall through
+
+  // Use bracket-balancing to find the JSON array — avoids the greedy regex problem
+  // where /\[[\s\S]*\]/ can match from the first '[' to the LAST ']' in the document,
+  // swallowing any trailing text (e.g. "See [these] examples.") and breaking JSON.parse.
+  const start = cleaned.indexOf("[")
+  if (start === -1) {
+    console.error("[Design] parseQuestionsJson: no '[' found in model output:", cleaned.slice(0, 200))
+    return []
+  }
+
+  let depth = 0
+  let inString = false
+  let escape = false
+  let end = -1
+
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i]
+    if (escape) { escape = false; continue }
+    if (c === "\\" && inString) { escape = true; continue }
+    if (c === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (c === "[" || c === "{") depth++
+    else if (c === "]" || c === "}") {
+      depth--
+      if (depth === 0 && c === "]") { end = i; break }
     }
   }
+
+  if (end === -1) {
+    console.error("[Design] parseQuestionsJson: unmatched brackets in model output:", cleaned.slice(0, 200))
+    return []
+  }
+
+  const jsonSlice = cleaned.slice(start, end + 1)
+
+  // Attempt 1: parse as-is
+  try {
+    const parsed = JSON.parse(jsonSlice) as unknown[]
+    if (Array.isArray(parsed)) {
+      console.log(`[Design] parseQuestionsJson: parsed ${parsed.length} questions`)
+      return parsed
+    }
+  } catch {
+    // fall through to repair attempts
+  }
+
+  // Attempt 2: strip trailing commas — the most common model mistake
+  // Matches a comma immediately before a closing ] or } (optionally with whitespace in between)
+  const repaired = jsonSlice.replace(/,(\s*[}\]])/g, "$1")
+  try {
+    const parsed = JSON.parse(repaired) as unknown[]
+    if (Array.isArray(parsed)) {
+      console.log(`[Design] parseQuestionsJson: parsed ${parsed.length} questions (after trailing-comma repair)`)
+      return parsed
+    }
+  } catch {
+    // fall through
+  }
+
+  // Attempt 3: also escape unescaped literal newlines/tabs inside string values.
+  // Walk the string character-by-character so we only escape inside JSON strings.
+  let repaired2 = ""
+  let inStr = false
+  let esc = false
+  for (let i = 0; i < repaired.length; i++) {
+    const ch = repaired[i]
+    if (esc) { repaired2 += ch; esc = false; continue }
+    if (ch === "\\" && inStr) { repaired2 += ch; esc = true; continue }
+    if (ch === '"') { inStr = !inStr; repaired2 += ch; continue }
+    if (inStr && ch === "\n") { repaired2 += "\\n"; continue }
+    if (inStr && ch === "\r") { repaired2 += "\\r"; continue }
+    if (inStr && ch === "\t") { repaired2 += "\\t"; continue }
+    repaired2 += ch
+  }
+  try {
+    const parsed = JSON.parse(repaired2) as unknown[]
+    if (Array.isArray(parsed)) {
+      console.log(`[Design] parseQuestionsJson: parsed ${parsed.length} questions (after full repair)`)
+      return parsed
+    }
+  } catch (err) {
+    console.error("[Design] parseQuestionsJson: all parse attempts failed:", err, "\nSlice:", jsonSlice.slice(0, 500))
+  }
+
   return []
 }

@@ -49,6 +49,30 @@ interface CommentItem {
   createdAt: number
 }
 
+// Computed styles of a selected element in Edit mode — gathered from the iframe via postMessage
+interface ElementStyles {
+  fontFamily: string
+  fontSize: number
+  fontWeight: string
+  color: string
+  textAlign: string
+  lineHeight: number
+  letterSpacing: number
+  width: number
+  height: number
+  opacity: number
+  paddingTop: number
+  paddingRight: number
+  paddingBottom: number
+  paddingLeft: number
+  marginTop: number
+  marginRight: number
+  marginBottom: number
+  marginLeft: number
+  borderWidth: number
+  borderRadius: number
+}
+
 interface TabState {
   messages: Message[]
   html: string
@@ -75,6 +99,8 @@ interface TabState {
   iframeScrollY: number
   // Edit mode
   editModeAvailable: boolean   // set true when iframe posts __edit_mode_available
+  // The currently selected element in Edit mode (click-to-select in iframe)
+  selectedElement: { edId: string; tagName: string; styles: ElementStyles } | null
 }
 
 function makeTabState(): TabState {
@@ -98,6 +124,7 @@ function makeTabState(): TabState {
     iframeScrollX: 0,
     iframeScrollY: 0,
     editModeAvailable: false,
+    selectedElement: null,
   }
 }
 
@@ -119,8 +146,15 @@ function parseVariations(fullHtml: string): VariationItem[] {
       const dataLabel = el.getAttribute("data-label")?.trim()
       const label = dataLabel || `方案 ${id.toUpperCase()}`
 
-      // Wrap variation in a self-contained HTML doc, inherit shared head (fonts, styles)
-      const html = `<!DOCTYPE html>
+      // Wrap variation in a self-contained HTML doc, inherit shared head (fonts, styles).
+      // The model's shared JS often references ALL variation elements (e.g. to hide variation-b/c).
+      // In a standalone file only variation-A is in the body, so those getElementById calls return
+      // null → TypeError → the entire JS init crashes → blank page.
+      // Fix: include hidden stub divs for the OTHER variations so JS references don't throw.
+      const otherIds = (["a", "b", "c"] as const).filter((v) => v !== id)
+      const stubs = otherIds.map((v) => `<div id="variation-${v}" style="display:none!important;visibility:hidden!important;position:absolute!important;pointer-events:none!important"></div>`).join("\n")
+
+      const rawHtml = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -130,8 +164,10 @@ ${headHtml}
 </head>
 <body>
 ${el.outerHTML}
+${stubs}
 </body>
 </html>`
+      const html = ensureEditMode(rawHtml)
 
       acc.push({ id, label, html })
       return acc
@@ -224,6 +260,227 @@ const COMMENT_INJECT = `(function(){
 
 const COMMENT_CLEANUP = `(function(){if(window.__cm_cleanup)window.__cm_cleanup();})();`
 
+// ─────────────────────────────────────────────────────────
+// Edit select mode — injected into the iframe when Edit mode is active.
+// Enables click-to-select with hover highlighting, sends computed styles
+// of selected elements to the parent, and listens for live style change messages.
+// ─────────────────────────────────────────────────────────
+
+const EDIT_SELECT_INJECT = `(function(){
+  if(window.__ed_active)return;window.__ed_active=true;
+  var _ec=0,_sel=null,_hov=null;
+  var _sty=document.createElement('style');_sty.id='__ed_sty';
+  _sty.textContent='.__ed_s{outline:2px solid #3b82f6!important;outline-offset:-1px!important;}'+'.__ed_h{outline:1px dashed rgba(59,130,246,.55)!important;outline-offset:-1px!important;}';
+  document.head.appendChild(_sty);
+  function r2h(c){var m=c.match(/rgb\\((\\d+),\\s*(\\d+),\\s*(\\d+)\\)/);if(!m)return c;return'#'+[m[1],m[2],m[3]].map(function(n){return parseInt(n).toString(16).padStart(2,'0')}).join('');}
+  function gs(el){
+    var cs=window.getComputedStyle(el),r=el.getBoundingClientRect();
+    var lh=cs.lineHeight==='normal'?1.2:parseFloat(cs.lineHeight)/parseFloat(cs.fontSize);
+    return{fontFamily:cs.fontFamily.replace(/['"]/g,'').split(',')[0].trim(),fontSize:Math.round(parseFloat(cs.fontSize)*10)/10,fontWeight:cs.fontWeight,color:r2h(cs.color),textAlign:cs.textAlign,lineHeight:Math.round(lh*100)/100,letterSpacing:Math.round(parseFloat(cs.letterSpacing||'0')*10)/10,width:Math.round(r.width*10)/10,height:Math.round(r.height*10)/10,opacity:parseFloat(cs.opacity),paddingTop:Math.round(parseFloat(cs.paddingTop)),paddingRight:Math.round(parseFloat(cs.paddingRight)),paddingBottom:Math.round(parseFloat(cs.paddingBottom)),paddingLeft:Math.round(parseFloat(cs.paddingLeft)),marginTop:Math.round(parseFloat(cs.marginTop)),marginRight:Math.round(parseFloat(cs.marginRight)),marginBottom:Math.round(parseFloat(cs.marginBottom)),marginLeft:Math.round(parseFloat(cs.marginLeft)),borderWidth:Math.round(parseFloat(cs.borderWidth||'0')),borderRadius:Math.round(parseFloat(cs.borderRadius||'0'))};
+  }
+  function over(e){if(_hov&&_hov!==_sel)_hov.classList.remove('__ed_h');var t=e.target;if(t&&t!==document.body&&t!==document.documentElement&&t!==_sel){_hov=t;t.classList.add('__ed_h');}}
+  function out(){if(_hov&&_hov!==_sel){_hov.classList.remove('__ed_h');_hov=null;}}
+  function ck(e){
+    e.preventDefault();e.stopPropagation();
+    if(_sel)_sel.classList.remove('__ed_s');
+    _sel=e.target;
+    if(!_sel.getAttribute('data-ed-id'))_sel.setAttribute('data-ed-id',String(++_ec));
+    _sel.classList.add('__ed_s');
+    if(_hov){_hov.classList.remove('__ed_h');_hov=null;}
+    window.parent.postMessage({type:'__edit_click',edId:_sel.getAttribute('data-ed-id'),tagName:_sel.tagName.toLowerCase(),styles:gs(_sel)},'*');
+  }
+  document.addEventListener('mouseover',over,true);document.addEventListener('mouseout',out,true);document.addEventListener('click',ck,true);
+  var _PX=['fontSize','letterSpacing','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginRight','marginBottom','marginLeft','borderWidth','borderRadius'];
+  window.addEventListener('message',function(e){
+    if(!e.data)return;
+    if(e.data.type==='__edit_style'&&_sel){
+      var p=e.data.property,v=e.data.value;
+      _sel.style[p]=_PX.indexOf(p)>-1?v+'px':String(v);
+      window.parent.postMessage({type:'__edit_click',edId:_sel.getAttribute('data-ed-id'),tagName:_sel.tagName.toLowerCase(),styles:gs(_sel)},'*');
+    }
+    if(e.data.type==='__edit_get_html'){
+      window.parent.postMessage({type:'__edit_html',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');
+    }
+  });
+  window.__ed_cleanup=function(){
+    document.removeEventListener('mouseover',over,true);document.removeEventListener('mouseout',out,true);document.removeEventListener('click',ck,true);
+    var s=document.getElementById('__ed_sty');if(s)s.remove();
+    if(_sel){_sel.classList.remove('__ed_s');_sel=null;}if(_hov){_hov.classList.remove('__ed_h');_hov=null;}
+    window.__ed_active=false;delete window.__ed_cleanup;
+  };
+})();`
+
+const EDIT_SELECT_CLEANUP = `(function(){if(window.__ed_cleanup)window.__ed_cleanup();})();`
+
+// Parse the current values from the /*EDITMODE-BEGIN*/.../*EDITMODE-END*/ block
+function parseEditModeDefaults(html: string): Record<string, unknown> | null {
+  const match = html.match(/\/\*EDITMODE-BEGIN\*\/([\s\S]*?)\/\*EDITMODE-END\*\//)
+  if (!match) return null
+  try {
+    return JSON.parse(match[1].trim()) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Ensures every HTML file has a functioning EDITMODE block so Edit mode always works.
+ *
+ * Strategy 1 – markers already present: return as-is.
+ * Strategy 2 – model wrote TWEAK_DEFAULTS without markers: inject the markers.
+ * Strategy 3 – CSS custom properties in :root {}: derive EDITMODE from them.
+ * Strategy 4 – hardcoded hex colors in <style>: replace them with CSS var() refs,
+ *               inject a :root block, and add the EDITMODE script. Always succeeds.
+ */
+function ensureEditMode(html: string): string {
+  // 1. Already correct
+  if (/\/\*EDITMODE-BEGIN\*\//.test(html)) return html
+
+  // 2. Model wrote `const TWEAK_DEFAULTS = {...};` but without markers
+  const plainMatch = html.match(/\bconst\s+TWEAK_DEFAULTS\s*=\s*(\{[\s\S]{1,4000}?\})\s*;/)
+  if (plainMatch) {
+    return html.replace(plainMatch[1], `/*EDITMODE-BEGIN*/${plainMatch[1]}/*EDITMODE-END*/`)
+  }
+
+  // 3. CSS custom properties already declared in :root
+  const cssVars: Record<string, unknown> = {}
+  for (const rootBlock of html.matchAll(/:root\s*\{([^}]+)\}/g)) {
+    for (const [, name, rawVal] of rootBlock[1].matchAll(/--([a-zA-Z][\w-]+)\s*:\s*([^;]+);/g)) {
+      const v = rawVal.trim()
+      const key = name.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase())
+      if (/^#[0-9a-fA-F]{3,8}$/.test(v))   cssVars[key] = v
+      else if (/^[\d.]+$/.test(v))           cssVars[key] = parseFloat(v)
+      else if (/^(true|false)$/.test(v))     cssVars[key] = v === "true"
+    }
+  }
+  if (Object.keys(cssVars).length > 0) return appendEditScript(html, cssVars)
+
+  // 4. No CSS variables at all — extract hardcoded hex colors from <style> blocks,
+  //    replace them with CSS var() references, and inject :root + EDITMODE script.
+  return injectColorVars(html)
+}
+
+/** Append an EDITMODE script to html. vars keys are camelCase → CSS --kebab-case vars. */
+function appendEditScript(html: string, vars: Record<string, unknown>): string {
+  const setLines = Object.keys(vars).map((k) => {
+    const cv = "--" + k.replace(/([A-Z])/g, "-$1").toLowerCase()
+    return `r.style.setProperty('${cv}',String(t['${k}']));`
+  }).join("")
+  const script = `\n<script>(function(){
+var TWEAK_DEFAULTS=/*EDITMODE-BEGIN*/${JSON.stringify(vars)}/*EDITMODE-END*/;
+function applyTweaks(edits){var t=Object.assign({},TWEAK_DEFAULTS,edits||{}),r=document.documentElement;${setLines}}
+window.addEventListener('message',function(e){if(e.data&&e.data.type==='__set_tweak_keys')applyTweaks(e.data.edits);});
+window.parent.postMessage({type:'__edit_mode_available'},'*');
+applyTweaks({});
+})()</script>`
+  // Try </body>, then </html>, then just append
+  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, script + "\n</body>")
+  if (/<\/html>/i.test(html)) return html.replace(/<\/html>/i, script + "\n</html>")
+  return html + script
+}
+
+/** Strategy 4: replace hardcoded hex colors in <style> with CSS vars, then inject EDITMODE. */
+function injectColorVars(html: string): string {
+  // Collect 6-digit hex colors from <style> blocks AND inline style="" attributes
+  const styleContent = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)]
+    .map((m) => m[1]).join("\n")
+  const inlineContent = [...html.matchAll(/style="([^"]*)"/gi)]
+    .map((m) => m[1]).join("\n")
+  const allCssContent = styleContent + "\n" + inlineContent
+
+  const freq: Map<string, number> = new Map()
+  for (const [, h] of allCssContent.matchAll(/#([0-9a-fA-F]{6})\b/g)) {
+    const c = "#" + h.toLowerCase()
+    freq.set(c, (freq.get(c) ?? 0) + 1)
+  }
+  // Also try 3-digit hex from inline styles
+  for (const [, h] of inlineContent.matchAll(/#([0-9a-fA-F]{3})\b/g)) {
+    const c = "#" + h[0] + h[0] + h[1] + h[1] + h[2] + h[2]  // expand to 6-digit
+    freq.set(c, (freq.get(c) ?? 0) + 1)
+  }
+
+  // Take up to 6 most-used colors (skip pure black/white as they're usually decorative)
+  const palette = [...freq.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .map(([c]) => c)
+    .filter((c) => c !== "#000000" && c !== "#ffffff" && c !== "#fff" && c !== "#000")
+    .slice(0, 6)
+
+  // If there are no interesting colors, still provide generic numeric tweaks
+  const vars: Record<string, unknown> = {}
+  const colorNames = ["primary", "secondary", "accent", "background", "surface", "muted"]
+
+  type Entry = { key: string; cssVar: string; hex: string }
+  const entries: Entry[] = palette.map((hex, i) => {
+    const key = colorNames[i] ?? `color${i + 1}`
+    return { key, cssVar: `--${colorNames[i] ?? "color-" + (i + 1)}`, hex }
+  })
+  entries.forEach(({ key, hex }) => { vars[key] = hex })
+
+  // Numeric tweaks extracted from CSS
+  const fsMatch = styleContent.match(/\bfont-size\s*:\s*([\d.]+)px/)
+  if (fsMatch) vars["fontSize"] = parseFloat(fsMatch[1])
+  const rrMatch = styleContent.match(/\bborder-radius\s*:\s*([\d.]+)px/)
+  if (rrMatch) vars["borderRadius"] = parseFloat(rrMatch[1])
+
+  // Fallback: if no colors at all, use sensible generic defaults
+  if (entries.length === 0) {
+    vars["primaryColor"] = "#3b82f6"
+    vars["fontSize"]     = vars["fontSize"] ?? 16
+    vars["borderRadius"] = vars["borderRadius"] ?? 8
+    return appendEditScript(html, vars)
+  }
+
+  // Replace hardcoded colors in <style> blocks with var() references
+  let patched = html.replace(
+    /<style([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_: string, attrs: string, content: string) => {
+      let updated = content
+      for (const { hex, cssVar } of entries) {
+        updated = updated.replace(
+          new RegExp(hex.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"),
+          `var(${cssVar})`
+        )
+      }
+      return `<style${attrs}>${updated}</style>`
+    }
+  )
+
+  // Build :root variable block
+  const rootBlock = `:root{${entries.map(({ cssVar, hex }) => `${cssVar}:${hex}`).join(";")}}\n`
+
+  // Inject :root into first <style> tag if present; otherwise inject a new <style> in <head>
+  if (/<style[^>]*>/i.test(patched)) {
+    patched = patched.replace(/<style([^>]*)>/, `<style$1>\n${rootBlock}`)
+  } else if (/<\/head>/i.test(patched)) {
+    patched = patched.replace(/<\/head>/i, `<style>\n${rootBlock}</style>\n</head>`)
+  } else {
+    patched = `<style>\n${rootBlock}</style>\n` + patched
+  }
+
+  // Build setProperty lines: color vars + optional numeric vars
+  const colorSet = entries.map(({ key, cssVar }) =>
+    `r.style.setProperty('${cssVar}',String(t['${key}']));`
+  ).join("")
+  const numSet = [
+    vars["fontSize"]     ? `r.style.setProperty('--font-size',t.fontSize+'px');`     : "",
+    vars["borderRadius"] ? `r.style.setProperty('--border-radius',t.borderRadius+'px');` : "",
+  ].join("")
+
+  const script = `\n<script>(function(){
+var TWEAK_DEFAULTS=/*EDITMODE-BEGIN*/${JSON.stringify(vars)}/*EDITMODE-END*/;
+function applyTweaks(edits){var t=Object.assign({},TWEAK_DEFAULTS,edits||{}),r=document.documentElement;${colorSet}${numSet}}
+window.addEventListener('message',function(e){if(e.data&&e.data.type==='__set_tweak_keys')applyTweaks(e.data.edits);});
+window.parent.postMessage({type:'__edit_mode_available'},'*');
+applyTweaks({});
+})()</script>`
+
+  // Try </body>, then </html>, then just append
+  if (/<\/body>/i.test(patched)) return patched.replace(/<\/body>/i, script + "\n</body>")
+  if (/<\/html>/i.test(patched)) return patched.replace(/<\/html>/i, script + "\n</html>")
+  return patched + script
+}
+
 // Merge edits into the /*EDITMODE-BEGIN*/.../*EDITMODE-END*/ JSON block in an HTML string
 function mergeEditModeKeys(html: string, edits: Record<string, unknown>): string {
   return html.replace(
@@ -303,22 +560,21 @@ export function DesignView(): React.JSX.Element {
   // ── Keep activeTabIdRef in sync ───────────────────────────
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
 
-  // ── Inject / remove comment script when mode changes ─────
+  // ── Inject / remove mode scripts when activeMode changes ─
   useEffect(() => {
     if (activeMode === "comment") {
       injectIntoIframe(iframeRef.current, COMMENT_INJECT)
+      injectIntoIframe(iframeRef.current, EDIT_SELECT_CLEANUP)
+    } else if (activeMode === "edit") {
+      injectIntoIframe(iframeRef.current, COMMENT_CLEANUP)
+      injectIntoIframe(iframeRef.current, EDIT_SELECT_INJECT)
     } else {
       injectIntoIframe(iframeRef.current, COMMENT_CLEANUP)
-    }
-  }, [activeMode])
-
-  // ── Send edit mode postMessages when mode changes ─────────
-  useEffect(() => {
-    if (activeMode === "edit") {
-      sendToIframe(iframeRef.current, { type: "__activate_edit_mode" })
-    } else {
-      // Deactivate edit mode whenever we leave it (switching to comment/draw/null)
+      injectIntoIframe(iframeRef.current, EDIT_SELECT_CLEANUP)
       sendToIframe(iframeRef.current, { type: "__deactivate_edit_mode" })
+    }
+    if (activeMode !== "edit") {
+      updateTs(activeTabId, { selectedElement: null })
     }
   }, [activeMode])
 
@@ -361,6 +617,37 @@ export function DesignView(): React.JSX.Element {
             Promise.resolve().then(() => sendToIframe(iframeRef.current, { type: "__activate_edit_mode" }))
           }
           return prev  // no state change needed
+        })
+        return
+      }
+
+      // ── Edit select: user clicked an element in the iframe ───
+      if (msg.type === "__edit_click") {
+        const { edId, tagName, styles } = msg as { edId: string; tagName: string; styles: ElementStyles }
+        updateTs(activeTabIdRef.current, { selectedElement: { edId, tagName, styles } })
+        return
+      }
+
+      // ── Edit select: iframe sent its current outerHTML for saving ─
+      if (msg.type === "__edit_html") {
+        const { html } = msg as { html: string }
+        const tabId = activeTabIdRef.current
+        setTabStates((prev) => {
+          const state = prev[tabId]
+          if (!state) return prev
+          const patchedHtml = ensureEditMode(html)
+          if (state.activeVariationId) {
+            return {
+              ...prev,
+              [tabId]: {
+                ...state,
+                variations: state.variations.map((v) =>
+                  v.id === state.activeVariationId ? { ...v, html: patchedHtml } : v
+                ),
+              },
+            }
+          }
+          return { ...prev, [tabId]: { ...state, html: patchedHtml } }
         })
         return
       }
@@ -440,10 +727,12 @@ export function DesignView(): React.JSX.Element {
     if (existing) { existing.cleanup(); window.api.design.cancel(existing.sessionId).catch(() => {}) }
 
     const cleanup = window.api.design.askQuestions(sessionId, prompt, (event) => {
-      if (event.type === "done" && event.questions) {
+      if (event.type === "done") {
+        const qs = Array.isArray(event.questions) ? (event.questions as QuestionDef[]) : []
         updateTs(tabId, (prev) => ({
           generationState: "questions_ready",
-          questions: event.questions as QuestionDef[],
+          questions: qs,
+          rightTab: "questions",   // re-assert — guards against any interleaved update
           messages: [
             ...prev.messages,
             { role: "questions-prompt" as const, content: "we has some questions →" },
@@ -488,7 +777,9 @@ export function DesignView(): React.JSX.Element {
 
     const cleanup = window.api.design.generate(sessionId, prompt, (event) => {
       if (event.type === "done" && event.html) {
-        const variations = parseVariations(event.html)
+        // Guarantee every generated design has a working EDITMODE block
+        const patchedHtml = ensureEditMode(event.html)
+        const variations = parseVariations(patchedHtml)
 
         updateTs(tabId, (prev) => {
           const msgs = [...prev.messages]
@@ -501,7 +792,7 @@ export function DesignView(): React.JSX.Element {
           }
           return {
             generationState: "done",
-            html: event.html!,
+            html: patchedHtml,
             messages: msgs,
             variations,
             activeVariationId: variations[0]?.id ?? null,
@@ -617,6 +908,54 @@ ${htmlSnippet}`
       ),
     }))
   }, [activeTabId, updateTs])
+
+  // ── Edit mode: apply a tweak live to iframe + persist in HTML ─
+  const handleTweakChange = useCallback((key: string, value: unknown) => {
+    // 1. Send live to iframe via CSS-variable protocol
+    sendToIframe(iframeRef.current, { type: "__set_tweak_keys", edits: { [key]: value } })
+    // 2. Persist into the EDITMODE-BEGIN block so the change survives reloads
+    const tabId = activeTabId
+    setTabStates((prev) => {
+      const state = prev[tabId]
+      if (!state) return prev
+      const targetHtml = state.activeVariationId
+        ? (state.variations.find((v) => v.id === state.activeVariationId)?.html ?? state.html)
+        : state.html
+      const updated = mergeEditModeKeys(targetHtml, { [key]: value })
+      if (state.activeVariationId) {
+        return {
+          ...prev,
+          [tabId]: {
+            ...state,
+            variations: state.variations.map((v) =>
+              v.id === state.activeVariationId ? { ...v, html: updated } : v
+            ),
+          },
+        }
+      }
+      return { ...prev, [tabId]: { ...state, html: updated } }
+    })
+  }, [activeTabId, setTabStates])
+
+  // ── Edit select: apply a style property to the selected element live ─
+  const handleEditStyleChange = useCallback((property: string, value: unknown) => {
+    sendToIframe(iframeRef.current, { type: "__edit_style", property, value })
+    // Optimistic UI: update panel immediately without waiting for __edit_click echo
+    updateTs(activeTabId, (prev) => {
+      if (!prev.selectedElement) return {}
+      return {
+        selectedElement: {
+          ...prev.selectedElement,
+          styles: { ...prev.selectedElement.styles, [property]: value } as ElementStyles,
+        },
+      }
+    })
+  }, [activeTabId, updateTs])
+
+  // ── Edit select: request iframe's current HTML so we can persist changes ─
+  const handleSaveElementEdit = useCallback(() => {
+    sendToIframe(iframeRef.current, { type: "__edit_get_html" })
+  }, [])
 
   // ── Apply ALL saved comments → send to model ─────────────
   const handleApplyComments = useCallback(() => {
@@ -908,7 +1247,6 @@ ${htmlContext}`
                     <div style={S.tweaksDivider} />
                     <TweaksBtn label="Comment" icon={<CommentIcon active={activeMode === "comment"} />} active={activeMode === "comment"} onClick={() => setActiveMode(activeMode === "comment" ? null : "comment")} />
                     <TweaksBtn label="Edit"    icon={<EditIcon    active={activeMode === "edit"}    />} active={activeMode === "edit"}    onClick={() => setActiveMode(activeMode === "edit"    ? null : "edit")}    />
-                    <TweaksBtn label="Draw"    icon={<DrawIcon    active={activeMode === "draw"}    />} active={activeMode === "draw"}    onClick={() => setActiveMode(activeMode === "draw"    ? null : "draw")}    />
                   </>
                 )}
 
@@ -958,9 +1296,10 @@ ${htmlContext}`
                       : ts.activeVariationId === "c" ? "#f59e0b" : undefined
 
                     return (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "row" }}>
                   <div
                     ref={canvasContainerRef}
-                    style={{ position: "relative", width: "100%", height: "100%", overflow: "auto" }}
+                    style={{ position: "relative", flex: 1, minWidth: 0, height: "100%" }}
                     onClick={() => {
                       if (ts.activeCommentId) updateTs(activeTabId, { activeCommentId: null })
                     }}
@@ -999,32 +1338,37 @@ ${htmlContext}`
                         {activeVar.label}
                       </div>
                     )}
-                    <iframe
-                      ref={iframeRef}
-                      key={ts.activeVariationId ?? "all"}
-                      srcDoc={displayHtml}
-                      style={{
-                        ...S.iframe,
-                        transformOrigin: "top left",
-                        transform: `scale(${zoom / 100})`,
-                        width: `${10000 / zoom}%`,
-                        height: `${10000 / zoom}%`,
-                        // Comment mode: iframe handles clicks (script injected); other modes: block
-                        pointerEvents: activeMode && activeMode !== "comment" ? "none" : "auto",
-                      }}
-                      sandbox="allow-scripts allow-same-origin"
-                      title="Design Preview"
-                      onLoad={() => {
-                        // Always inject scroll tracker so pins stay anchored to content
-                        injectIntoIframe(iframeRef.current, SCROLL_INJECT)
-                        // Reset scroll state — new iframe always starts at (0, 0)
-                        updateTs(activeTabId, { iframeScrollX: 0, iframeScrollY: 0 })
-                        // Re-inject comment script after iframe reloads (variation switch, etc.)
-                        if (activeMode === "comment") injectIntoIframe(iframeRef.current, COMMENT_INJECT)
-                        // Re-activate edit mode if active
-                        if (activeMode === "edit") sendToIframe(iframeRef.current, { type: "__activate_edit_mode" })
-                      }}
-                    />
+                    {/* Scroll wrapper — overflow lives here so the iframe's height: 100% resolves
+                        against canvasContainerRef (which has explicit height: "100%") rather than
+                        an overflow:auto ancestor (which breaks CSS % height resolution in Chromium). */}
+                    <div style={{ position: "absolute", inset: 0, overflow: "auto" }}>
+                      <iframe
+                        ref={iframeRef}
+                        key={ts.activeVariationId ?? "all"}
+                        srcDoc={displayHtml}
+                        style={{
+                          display: "block",
+                          border: "none",
+                          transformOrigin: "top left",
+                          transform: `scale(${zoom / 100})`,
+                          width: `${10000 / zoom}%`,
+                          height: `${10000 / zoom}%`,
+                          // Comment + Edit modes need pointer events (scripts handle clicks via postMessage)
+                          pointerEvents: (activeMode === null || activeMode === "comment" || activeMode === "edit") ? "auto" : "none",
+                        }}
+                        sandbox="allow-scripts allow-same-origin"
+                        title="Design Preview"
+                        onLoad={() => {
+                          // Always inject scroll tracker so pins stay anchored to content
+                          injectIntoIframe(iframeRef.current, SCROLL_INJECT)
+                          // Reset scroll state — new iframe always starts at (0, 0)
+                          updateTs(activeTabId, { iframeScrollX: 0, iframeScrollY: 0, selectedElement: null })
+                          // Re-inject mode scripts after iframe reloads (variation switch, etc.)
+                          if (activeMode === "comment") injectIntoIframe(iframeRef.current, COMMENT_INJECT)
+                          if (activeMode === "edit") injectIntoIframe(iframeRef.current, EDIT_SELECT_INJECT)
+                        }}
+                      />
+                    </div>
                     {/* ── Comment layer ── */}
                     {/* No click overlay needed — iframe script handles clicks via postMessage */}
 
@@ -1101,23 +1445,6 @@ ${htmlContext}`
                       )
                     })()}
 
-                    {/* Non-comment mode badge (Edit / Draw) */}
-                    {activeMode && activeMode !== "comment" && (
-                      <div style={{
-                        position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)",
-                        padding: "7px 18px", borderRadius: 20,
-                        background: activeMode === "edit" ? "#3b82f6" : "#8b5cf6",
-                        color: "#fff", fontSize: 12, fontWeight: 600,
-                        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-                        display: "flex", alignItems: "center", gap: 7,
-                        pointerEvents: "none",
-                      }}>
-                        {activeMode === "edit" && "✏️"}
-                        {activeMode === "draw" && "🖊️"}
-                        {activeMode.charAt(0).toUpperCase() + activeMode.slice(1)} mode
-                      </div>
-                    )}
-
                     {/* Comment bottom bar: hint when empty, Apply bar when there are comments */}
                     {activeMode === "comment" && !ts.draftComment && (
                       <div style={{
@@ -1161,6 +1488,16 @@ ${htmlContext}`
                       />
                     )}
                   </div>
+
+                  {/* ── Right Properties Panel (Edit mode) ── */}
+                  {activeMode === "edit" && (
+                    <ElementPropsPanel
+                      selectedElement={ts.selectedElement}
+                      onStyleChange={handleEditStyleChange}
+                      onSave={handleSaveElementEdit}
+                    />
+                  )}
+                  </div>
                     )
                   })()
                 ) : (
@@ -1174,6 +1511,334 @@ ${htmlContext}`
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+// Element Properties Panel — right sidebar in Edit mode
+// Light-themed panel matching the Claude design tool style.
+// Click any element in the iframe to inspect + edit it live.
+// ─────────────────────────────────────────────────────────
+
+/** Inline number input — compact, borderless look, editable on click */
+function PNumInput({ value, onChange, suffix, step = 1, min, max, readonly }: {
+  value: number; onChange: (v: number) => void
+  suffix?: string; step?: number; min?: number; max?: number; readonly?: boolean
+}) {
+  const [local, setLocal] = React.useState(String(value))
+  React.useEffect(() => { setLocal(String(value)) }, [value])
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 1 }}>
+      <input
+        type="number" value={local} readOnly={readonly}
+        step={step} min={min} max={max}
+        onChange={(e) => { setLocal(e.target.value); const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(n) }}
+        onBlur={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) { onChange(n); setLocal(String(n)) } else setLocal(String(value)) }}
+        style={{
+          background: "transparent", border: "none", outline: "none",
+          fontSize: 12, fontWeight: 500, color: readonly ? "#aaa" : "#1a1a1a",
+          textAlign: "right", width: "60px", padding: 0, fontFamily: "inherit",
+          cursor: readonly ? "default" : "text",
+        }}
+      />
+      {suffix && <span style={{ fontSize: 11, color: "#aaa", flexShrink: 0 }}>{suffix}</span>}
+    </div>
+  )
+}
+
+/** A single property row: "Label ............... Value unit" */
+function PropLineRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center",
+      borderBottom: "1px solid #f0efeb", padding: "0 16px",
+      height: 36, gap: 8,
+    }}>
+      <span style={{ fontSize: 12, color: "#8a8a8a", flexShrink: 0, minWidth: 60 }}>{label}</span>
+      <div style={{ flex: 1, display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** Two-column row for paired props: Size/Weight, Width/Height etc. */
+function PropPairRow({ left, right }: {
+  left: { label: string; children: React.ReactNode }
+  right: { label: string; children: React.ReactNode }
+}) {
+  const half: React.CSSProperties = {
+    flex: 1, display: "flex", alignItems: "center",
+    padding: "0 12px", height: 36, gap: 6,
+  }
+  return (
+    <div style={{ display: "flex", borderBottom: "1px solid #f0efeb" }}>
+      <div style={{ ...half, borderRight: "1px solid #f0efeb" }}>
+        <span style={{ fontSize: 12, color: "#8a8a8a", flexShrink: 0, minWidth: 40 }}>{left.label}</span>
+        <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>{left.children}</div>
+      </div>
+      <div style={half}>
+        <span style={{ fontSize: 12, color: "#8a8a8a", flexShrink: 0, minWidth: 40 }}>{right.label}</span>
+        <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>{right.children}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Section header row */
+function PropSectionHeader({ label }: { label: string }) {
+  return (
+    <div style={{
+      padding: "10px 16px 6px",
+      fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
+      color: "#8a8a8a", textTransform: "uppercase",
+      background: "#f8f7f5",
+      borderBottom: "1px solid #f0efeb",
+    }}>
+      {label}
+    </div>
+  )
+}
+
+/** Collapsible compound row (Padding / Margin / Border) */
+function CompoundRow({ label, summary, expanded, onToggle, children }: {
+  label: string; summary: string
+  expanded: boolean; onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <>
+      <div
+        onClick={onToggle}
+        style={{
+          display: "flex", alignItems: "center",
+          borderBottom: "1px solid #f0efeb", padding: "0 16px",
+          height: 36, gap: 8, cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <span style={{ fontSize: 12, color: "#8a8a8a", flex: 1 }}>{label}</span>
+        <span style={{ fontSize: 12, color: "#1a1a1a", fontWeight: 500 }}>{summary}</span>
+        <span style={{ fontSize: 10, color: "#aaa", marginLeft: 4 }}>{expanded ? "∧" : "∨"}</span>
+      </div>
+      {expanded && (
+        <div style={{ background: "#f8f7f5" }}>
+          {children}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** TRBL (top/right/bottom/left) sub-rows, shown when compound is expanded */
+function TRBLRows({ values, onChange }: {
+  values: { t: number; r: number; b: number; l: number }
+  onChange: (side: "t" | "r" | "b" | "l", v: number) => void
+}) {
+  return (
+    <>
+      <div style={{ display: "flex", borderBottom: "1px solid #f0efeb" }}>
+        {(["t", "r"] as const).map((side) => (
+          <div key={side} style={{ flex: 1, display: "flex", alignItems: "center", padding: "0 12px", height: 32, borderRight: side === "t" ? "1px solid #f0efeb" : "none" }}>
+            <span style={{ fontSize: 11, color: "#aaa", minWidth: 10 }}>{side.toUpperCase()}</span>
+            <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+              <PNumInput value={values[side]} suffix="px" onChange={(v) => onChange(side, v)} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", borderBottom: "1px solid #f0efeb" }}>
+        {(["b", "l"] as const).map((side) => (
+          <div key={side} style={{ flex: 1, display: "flex", alignItems: "center", padding: "0 12px", height: 32, borderRight: side === "b" ? "1px solid #f0efeb" : "none" }}>
+            <span style={{ fontSize: 11, color: "#aaa", minWidth: 10 }}>{side.toUpperCase()}</span>
+            <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+              <PNumInput value={values[side]} suffix="px" onChange={(v) => onChange(side, v)} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function ElementPropsPanel({
+  selectedElement,
+  onStyleChange,
+  onSave,
+}: {
+  selectedElement: { edId: string; tagName: string; styles: ElementStyles } | null
+  onStyleChange: (property: string, value: unknown) => void
+  onSave: () => void
+}) {
+  const s = selectedElement?.styles
+  const [paddingOpen, setPaddingOpen] = React.useState(false)
+  const [marginOpen,  setMarginOpen]  = React.useState(true)
+  const [borderOpen,  setBorderOpen]  = React.useState(false)
+
+  // Reset open states when element changes
+  React.useEffect(() => {
+    setPaddingOpen(false); setMarginOpen(true); setBorderOpen(false)
+  }, [selectedElement?.edId])
+
+  const ch = (prop: string) => (v: unknown) => onStyleChange(prop, v)
+
+  const paddingSummary = s
+    ? [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].every(v => v === s.paddingTop)
+      ? `${s.paddingTop} px`
+      : `${s.paddingTop} ${s.paddingRight} ${s.paddingBottom} ${s.paddingLeft} px`
+    : "0 px"
+
+  const marginSummary = s
+    ? [s.marginTop, s.marginRight, s.marginBottom, s.marginLeft].every(v => v === s.marginTop)
+      ? `${s.marginTop} px`
+      : `${s.marginTop} ${s.marginRight} ${s.marginBottom} ${s.marginLeft} px`
+    : "0 px"
+
+  return (
+    <div style={{
+      width: 260, flexShrink: 0,
+      background: "#ffffff", borderLeft: "1px solid #e8e6e0",
+      display: "flex", flexDirection: "column", overflow: "hidden",
+      fontFamily: "'Inter', -apple-system, sans-serif",
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: "0 16px", height: 44,
+        borderBottom: "1px solid #e8e6e0",
+        display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
+        background: "#ffffff",
+      }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>
+          {selectedElement ? `<${selectedElement.tagName}>` : "Properties"}
+        </span>
+        <button
+          onClick={onSave}
+          style={{
+            padding: "4px 12px", fontSize: 11, fontWeight: 600,
+            background: "#1a1a1a", color: "#fff", border: "none",
+            borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
+          }}
+        >
+          Save
+        </button>
+      </div>
+
+      {!s ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24, background: "#f8f7f5" }}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" opacity={0.3}>
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke="#1a1a1a" strokeWidth="1.5"/>
+            <path d="M9 9l6 6M15 9l-6 6" stroke="#1a1a1a" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+          <p style={{ color: "#8a8a8a", fontSize: 12, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+            点击设计中的任意元素<br />即可查看并编辑属性
+          </p>
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: "auto", background: "#ffffff" }}>
+
+          {/* ── TYPOGRAPHY ── */}
+          <PropSectionHeader label="Typography" />
+
+          <PropLineRow label="Font">
+            <input
+              type="text"
+              defaultValue={s.fontFamily}
+              onBlur={(e) => onStyleChange("fontFamily", e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { onStyleChange("fontFamily", (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur() } }}
+              style={{ background: "transparent", border: "none", outline: "none", fontSize: 12, fontWeight: 500, color: "#1a1a1a", textAlign: "right", fontFamily: "inherit", width: "140px" }}
+            />
+          </PropLineRow>
+
+          <PropPairRow
+            left={{ label: "Size", children: <PNumInput value={s.fontSize} suffix="px" step={0.5} onChange={ch("fontSize")} /> }}
+            right={{ label: "Weight", children: <PNumInput value={parseInt(s.fontWeight) || 400} step={100} min={100} max={900} onChange={(v) => onStyleChange("fontWeight", String(v))} /> }}
+          />
+
+          <PropLineRow label="Color">
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : "#000000"}
+                onChange={(e) => onStyleChange("color", e.target.value)}
+                style={{ width: 20, height: 20, border: "1px solid #e0ded8", padding: 1, borderRadius: 4, cursor: "pointer", background: "none", flexShrink: 0 }}
+              />
+              <input
+                type="text"
+                value={s.color}
+                onChange={(e) => onStyleChange("color", e.target.value)}
+                style={{ background: "transparent", border: "none", outline: "none", fontSize: 12, fontWeight: 500, color: "#1a1a1a", textAlign: "right", fontFamily: "monospace", width: "72px" }}
+              />
+            </div>
+          </PropLineRow>
+
+          <PropLineRow label="Align">
+            <div style={{ display: "flex", gap: 2 }}>
+              {[["left","L"],["center","C"],["right","R"],["justify","J"]].map(([v, lbl]) => (
+                <button key={v} onClick={() => onStyleChange("textAlign", v)} style={{
+                  width: 26, height: 22, fontSize: 10, fontWeight: 600,
+                  background: s.textAlign === v ? "#1a1a1a" : "#f0efeb",
+                  border: "none", borderRadius: 4, cursor: "pointer",
+                  color: s.textAlign === v ? "#fff" : "#6a6a6a", fontFamily: "inherit",
+                }}>{lbl}</button>
+              ))}
+            </div>
+          </PropLineRow>
+
+          <PropPairRow
+            left={{ label: "Line", children: <PNumInput value={s.lineHeight} step={0.05} onChange={ch("lineHeight")} /> }}
+            right={{ label: "Tracking", children: <PNumInput value={s.letterSpacing} suffix="px" step={0.5} onChange={ch("letterSpacing")} /> }}
+          />
+
+          {/* ── SIZE ── */}
+          <PropSectionHeader label="Size" />
+          <PropPairRow
+            left={{ label: "Width",  children: <PNumInput value={s.width}  suffix="px" readonly onChange={() => {}} /> }}
+            right={{ label: "Height", children: <PNumInput value={s.height} suffix="px" readonly onChange={() => {}} /> }}
+          />
+
+          {/* ── BOX ── */}
+          <PropSectionHeader label="Box" />
+
+          <PropLineRow label="Opacity">
+            <PNumInput value={s.opacity} step={0.05} min={0} max={1} onChange={ch("opacity")} />
+          </PropLineRow>
+
+          <CompoundRow
+            label="Padding" summary={paddingSummary}
+            expanded={paddingOpen} onToggle={() => setPaddingOpen(v => !v)}
+          >
+            <TRBLRows
+              values={{ t: s.paddingTop, r: s.paddingRight, b: s.paddingBottom, l: s.paddingLeft }}
+              onChange={(side, v) => onStyleChange({ t:"paddingTop", r:"paddingRight", b:"paddingBottom", l:"paddingLeft" }[side]!, v)}
+            />
+          </CompoundRow>
+
+          <CompoundRow
+            label="Margin" summary={marginSummary}
+            expanded={marginOpen} onToggle={() => setMarginOpen(v => !v)}
+          >
+            <TRBLRows
+              values={{ t: s.marginTop, r: s.marginRight, b: s.marginBottom, l: s.marginLeft }}
+              onChange={(side, v) => onStyleChange({ t:"marginTop", r:"marginRight", b:"marginBottom", l:"marginLeft" }[side]!, v)}
+            />
+          </CompoundRow>
+
+          <CompoundRow
+            label="Border" summary={`${s.borderWidth} px`}
+            expanded={borderOpen} onToggle={() => setBorderOpen(v => !v)}
+          >
+            <PropLineRow label="Width">
+              <PNumInput value={s.borderWidth} suffix="px" onChange={ch("borderWidth")} />
+            </PropLineRow>
+          </CompoundRow>
+
+          <PropLineRow label="Radius">
+            <PNumInput value={s.borderRadius} suffix="px" onChange={ch("borderRadius")} />
+          </PropLineRow>
+
+        </div>
+      )}
     </div>
   )
 }
@@ -1292,6 +1957,232 @@ function TweaksFloatingPanel({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+// Edit Tweaks Panel — floating card (bottom-left) for Edit mode
+// Reads EDITMODE-BEGIN/END block, renders live controls, sends
+// changes to iframe via __set_tweak_keys and persists in HTML.
+// ─────────────────────────────────────────────────────────
+
+function tweakLabel(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())
+}
+
+function isColorValue(v: unknown): v is string {
+  if (typeof v !== "string") return false
+  return /^#[0-9a-fA-F]{3,8}$/.test(v) || /^(rgb|hsl)/.test(v)
+}
+
+function TweakControl({ name, value, onChange }: {
+  name: string
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
+  const label = tweakLabel(name)
+
+  // ── Boolean toggle ────────────────────────────────────────
+  if (typeof value === "boolean") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: "#1a1a1a" }}>{label}</span>
+        <button
+          onClick={() => onChange(!value)}
+          style={{
+            width: 36, height: 20, borderRadius: 999, border: "none", cursor: "pointer",
+            background: value ? "#1a1a1a" : "#d4d2cc",
+            position: "relative", padding: 0, transition: "background 0.2s", flexShrink: 0,
+          }}
+        >
+          <span style={{
+            position: "absolute", top: 3, left: value ? 18 : 3,
+            width: 14, height: 14, borderRadius: "50%", background: "#fff",
+            transition: "left 0.2s", display: "block",
+          }} />
+        </button>
+      </div>
+    )
+  }
+
+  // ── Color picker ──────────────────────────────────────────
+  if (isColorValue(value)) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <span style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#6a6a6a", marginBottom: 6 }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="color"
+            value={value as string}
+            onChange={(e) => onChange(e.target.value)}
+            style={{
+              width: 32, height: 32, border: "none", padding: 2,
+              borderRadius: 8, cursor: "pointer", background: "none",
+              flexShrink: 0,
+            }}
+          />
+          <input
+            type="text"
+            value={value as string}
+            onChange={(e) => onChange(e.target.value)}
+            style={{
+              flex: 1, padding: "5px 8px", fontSize: 12, fontFamily: "monospace",
+              border: "1px solid #e0ded8", borderRadius: 7, outline: "none",
+              color: "#1a1a1a", background: "#fafaf8",
+            }}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ── Number slider ─────────────────────────────────────────
+  if (typeof value === "number") {
+    const isSmall = value <= 64
+    const max = isSmall ? 96 : value <= 200 ? 400 : 2000
+    const min = isSmall ? 0 : 0
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 5 }}>
+          <span style={{ fontSize: 12, fontWeight: 500, color: "#6a6a6a" }}>{label}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a", minWidth: 28, textAlign: "right" }}>
+            {value}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={isSmall ? 1 : 2}
+          value={value as number}
+          onChange={(e) => onChange(Number(e.target.value))}
+          style={{ width: "100%", accentColor: "#1a1a1a", cursor: "pointer" }}
+        />
+      </div>
+    )
+  }
+
+  // ── String text input ─────────────────────────────────────
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <span style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#6a6a6a", marginBottom: 5 }}>{label}</span>
+      <input
+        type="text"
+        value={String(value ?? "")}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: "100%", padding: "6px 9px", fontSize: 13, fontFamily: "inherit",
+          border: "1px solid #e0ded8", borderRadius: 7, outline: "none",
+          color: "#1a1a1a", background: "#fafaf8", boxSizing: "border-box",
+        }}
+      />
+    </div>
+  )
+}
+
+function EditTweaksPanel({ html, onTweakChange, onClose }: {
+  html: string
+  onTweakChange: (key: string, value: unknown) => void
+  onClose: () => void
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  const defaults = parseEditModeDefaults(html)
+
+  // Local mirror of tweak values — initialised from HTML, updated on user change
+  const [values, setValues] = useState<Record<string, unknown>>(defaults ?? {})
+
+  // Re-sync when the HTML's EDITMODE block changes (e.g. after a variation switch)
+  useEffect(() => {
+    const fresh = parseEditModeDefaults(html)
+    if (fresh) setValues(fresh)
+  }, [html])
+
+  const change = (key: string, v: unknown) => {
+    setValues((prev) => ({ ...prev, [key]: v }))
+    onTweakChange(key, v)
+  }
+
+  if (collapsed) {
+    return (
+      <div style={{ position: "absolute", bottom: 28, left: 28, zIndex: 30, userSelect: "none" }}>
+        <button
+          onClick={() => setCollapsed(false)}
+          style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "8px 16px",
+            background: "#1a1a1a", borderRadius: 999, border: "none",
+            cursor: "pointer", color: "#fff", fontSize: 12, fontWeight: 700,
+            letterSpacing: "0.06em", fontFamily: "inherit",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
+          }}
+        >
+          <EditIcon active={true} />
+          EDIT
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      style={{
+        position: "absolute", bottom: 28, left: 28, zIndex: 30,
+        width: 240,
+        background: "#ffffff",
+        borderRadius: 20,
+        boxShadow: "0 8px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06)",
+        userSelect: "none",
+        // Scroll if there are many controls
+        maxHeight: "60vh",
+        display: "flex", flexDirection: "column",
+      }}
+    >
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "16px 18px 12px",
+        borderBottom: defaults ? "1px solid #f0efeb" : "none",
+        flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <EditIcon active={true} />
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", color: "#1a1a1a", textTransform: "uppercase" }}>
+            Edit
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            onClick={() => setCollapsed(true)}
+            title="折叠"
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#aaa", lineHeight: 1, padding: "0 3px", fontFamily: "inherit" }}
+          >
+            −
+          </button>
+          <button
+            onClick={onClose}
+            title="关闭编辑模式"
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#aaa", lineHeight: 1, padding: "0 3px", fontFamily: "inherit" }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px 16px" }}>
+        {!defaults ? (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div style={{ fontSize: 20, marginBottom: 8 }}>✏️</div>
+            <p style={{ fontSize: 12, color: "#8a8a8a", lineHeight: 1.6, margin: 0 }}>
+              此设计不包含可编辑参数。<br />
+              重新生成设计即可启用编辑模式。
+            </p>
+          </div>
+        ) : Object.entries(values).map(([key, value]) => (
+          <TweakControl key={key} name={key} value={value} onChange={(v) => change(key, v)} />
+        ))}
+      </div>
     </div>
   )
 }
