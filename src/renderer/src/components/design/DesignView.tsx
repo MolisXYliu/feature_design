@@ -1494,7 +1494,6 @@ ${htmlContext}`
                     <ElementPropsPanel
                       selectedElement={ts.selectedElement}
                       onStyleChange={handleEditStyleChange}
-                      onSave={handleSaveElementEdit}
                     />
                   )}
                   </div>
@@ -1665,11 +1664,9 @@ function TRBLRows({ values, onChange }: {
 function ElementPropsPanel({
   selectedElement,
   onStyleChange,
-  onSave,
 }: {
   selectedElement: { edId: string; tagName: string; styles: ElementStyles } | null
   onStyleChange: (property: string, value: unknown) => void
-  onSave: () => void
 }) {
   const s = selectedElement?.styles
   const [paddingOpen, setPaddingOpen] = React.useState(false)
@@ -1706,22 +1703,12 @@ function ElementPropsPanel({
       <div style={{
         padding: "0 16px", height: 44,
         borderBottom: "1px solid #e8e6e0",
-        display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
+        display: "flex", alignItems: "center", flexShrink: 0,
         background: "#ffffff",
       }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>
           {selectedElement ? `<${selectedElement.tagName}>` : "Properties"}
         </span>
-        <button
-          onClick={onSave}
-          style={{
-            padding: "4px 12px", fontSize: 11, fontWeight: 600,
-            background: "#1a1a1a", color: "#fff", border: "none",
-            borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
-          }}
-        >
-          Save
-        </button>
       </div>
 
       {!s ? (
