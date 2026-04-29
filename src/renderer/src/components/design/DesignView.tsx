@@ -16,6 +16,7 @@ interface Message {
   tags?: string[]           // pill tags shown after question phase for user message
   isStreaming?: boolean
   isIteration?: boolean     // true = follow-up iteration, false = first generation
+  imageUrl?: string         // data URL for screenshot attached to this message
 }
 
 interface QuestionDef {
@@ -101,6 +102,8 @@ interface TabState {
   editModeAvailable: boolean   // set true when iframe posts __edit_mode_available
   // The currently selected element in Edit mode (click-to-select in iframe)
   selectedElement: { edId: string; tagName: string; styles: ElementStyles } | null
+  // Screenshot attachment — image awaiting send
+  attachedImage: { base64: string; mimeType: string; previewUrl: string } | null
 }
 
 function makeTabState(): TabState {
@@ -125,6 +128,7 @@ function makeTabState(): TabState {
     iframeScrollY: 0,
     editModeAvailable: false,
     selectedElement: null,
+    attachedImage: null,
   }
 }
 
@@ -530,6 +534,7 @@ export function DesignView(): React.JSX.Element {
   const iframeRef         = useRef<HTMLIFrameElement>(null)
   const canvasContainerRef = useRef<HTMLDivElement>(null)
   const activeTabIdRef    = useRef(activeTabId)
+  const fileInputRef      = useRef<HTMLInputElement>(null)
 
   const ts = tabStates[activeTabId] ?? makeTabState()
 
@@ -826,6 +831,93 @@ export function DesignView(): React.JSX.Element {
     tabSessionsRef.current.set(tabId, { cleanup, sessionId })
   }, [updateTs])
 
+  // ── Generate Design from Screenshot ──────────────────────
+
+  const startGenerationFromImage = useCallback((
+    prompt: string, imageBase64: string, mimeType: string, tabId: string
+  ) => {
+    const sessionId = uuid()
+    console.log(`[Design:Image] startGenerationFromImage — sessionId=${sessionId} mimeType=${mimeType} base64Len=${imageBase64.length} prompt="${prompt.slice(0, 80)}"`)
+    updateTs(tabId, (prev) => ({
+      generationState: "generating",
+      rightTab: "design",
+      attachedImage: null,  // clear preview once generation starts
+      messages: [
+        ...prev.messages,
+        { role: "assistant" as const, content: "", isStreaming: true, isIteration: false },
+      ],
+    }))
+
+    const existing = tabSessionsRef.current.get(tabId)
+    if (existing) { existing.cleanup(); window.api.design.cancel(existing.sessionId).catch(() => {}) }
+
+    console.log("[Design:Image] Calling window.api.design.generateFromImage…")
+    const cleanup = window.api.design.generateFromImage(sessionId, prompt, imageBase64, mimeType, (event) => {
+      console.log(`[Design:Image] Renderer received event: type=${event.type}${event.error ? " error=" + event.error : ""}`)
+      if (event.type === "done" && event.html) {
+        const patchedHtml = ensureEditMode(event.html)
+        updateTs(tabId, (prev) => {
+          const msgs = [...prev.messages]
+          const last = msgs.length - 1
+          if (msgs[last]?.role === "assistant") {
+            msgs[last] = { ...msgs[last], content: "✓ 设计已生成", isStreaming: false }
+          }
+          return {
+            generationState: "done",
+            html: patchedHtml,
+            messages: msgs,
+            variations: [],
+            activeVariationId: null,
+          }
+        })
+        window.api.design.saveVariant("image", patchedHtml).catch(() => {})
+        tabSessionsRef.current.delete(tabId)
+      } else if (event.type === "error") {
+        updateTs(tabId, (prev) => {
+          const msgs = [...prev.messages]
+          const last = msgs.length - 1
+          if (msgs[last]?.role === "assistant") {
+            msgs[last] = { ...msgs[last], content: `❌ ${event.error ?? "Unknown error"}`, isStreaming: false }
+          }
+          return { generationState: "error", messages: msgs }
+        })
+        tabSessionsRef.current.delete(tabId)
+      } else if (event.type === "cancelled") {
+        updateTs(tabId, (prev) => {
+          const msgs = [...prev.messages]
+          const last = msgs.length - 1
+          if (msgs[last]?.isStreaming) msgs[last] = { ...msgs[last], isStreaming: false }
+          return { generationState: "idle", messages: msgs }
+        })
+        tabSessionsRef.current.delete(tabId)
+      }
+    })
+    tabSessionsRef.current.set(tabId, { cleanup, sessionId })
+  }, [updateTs])
+
+  // ── Handle file input selection (screenshot upload) ───────
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    console.log(`[Design:Image] File selected — name="${file.name}" size=${file.size} type="${file.type}"`)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string
+      const comma = dataUrl.indexOf(",")
+      const header = dataUrl.slice(0, comma)
+      const base64 = dataUrl.slice(comma + 1)
+      const mimeType = header.match(/data:([^;]+)/)?.[1] ?? "image/png"
+      console.log(`[Design:Image] File read as base64 — mimeType="${mimeType}" base64Len=${base64.length}`)
+      updateTs(activeTabId, { attachedImage: { base64, mimeType, previewUrl: dataUrl } })
+    }
+    reader.onerror = (err) => {
+      console.error("[Design:Image] FileReader error:", err)
+    }
+    reader.readAsDataURL(file)
+    // Reset so the same file can be re-selected
+    e.target.value = ""
+  }, [activeTabId, updateTs])
+
   // ── Build comment prompt helper ───────────────────────────
   const buildCommentPrompt = useCallback((
     comments: { elementDesc: string; text: string }[],
@@ -986,13 +1078,27 @@ ${htmlSnippet}`
 
   const handleSend = useCallback(() => {
     const prompt = (tabStates[activeTabId]?.inputValue ?? "").trim()
-    if (!prompt) return
+    const attachedImage = tabStates[activeTabId]?.attachedImage ?? null
+    if (!prompt && !attachedImage) return
     const state = tabStates[activeTabId]?.generationState ?? "idle"
     if (state === "asking" || state === "generating") return
     updateTs(activeTabId, { inputValue: "" })
 
     const tabId = activeTabId
     const existing = tabStates[tabId]?.messages ?? []
+
+    // If a screenshot is attached — skip questions, go straight to image-based generation
+    if (attachedImage) {
+      const userContent = prompt || "请参考截图，生成改进版设计。"
+      updateTs(tabId, (prev) => ({
+        messages: [
+          ...prev.messages,
+          { role: "user" as const, content: userContent, imageUrl: attachedImage.previewUrl },
+        ],
+      }))
+      startGenerationFromImage(prompt, attachedImage.base64, attachedImage.mimeType, tabId)
+      return
+    }
 
     // Always add user message first
     updateTs(tabId, (prev) => ({
@@ -1033,7 +1139,7 @@ ${htmlContext}`
 
       startGeneration(iterationPrompt, tabId, /* isIteration */ !!contextHtml)
     }
-  }, [activeTabId, tabStates, updateTs, startAskQuestions, startGeneration])
+  }, [activeTabId, tabStates, updateTs, startAskQuestions, startGeneration, startGenerationFromImage])
 
   // ── Continue (submit answers) ─────────────────────────────
 
@@ -1134,7 +1240,10 @@ ${htmlContext}`
           {/* Chat Body */}
           <div style={S.chatBody}>
             {ts.messages.length === 0 ? (
-              <EmptyState onSuggestion={(s) => setInputValue(s)} />
+              <EmptyState
+                onSuggestion={(s) => setInputValue(s)}
+                onUploadScreenshot={() => fileInputRef.current?.click()}
+              />
             ) : (
               <div style={S.messageList}>
                 {ts.messages.map((msg, i) => (
@@ -1150,14 +1259,47 @@ ${htmlContext}`
             )}
           </div>
 
+          {/* Hidden file input for screenshot upload */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileSelect}
+            style={{ display: "none" }}
+          />
+
           {/* Bottom Input */}
           <div style={S.inputArea}>
             <div style={S.inputBox}>
+              {/* Screenshot preview strip */}
+              {ts.attachedImage && (
+                <div style={{ padding: "8px 12px 0", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <img
+                      src={ts.attachedImage.previewUrl}
+                      style={{ height: 60, maxWidth: 120, borderRadius: 8, objectFit: "cover", border: "1px solid #e8e6e0", display: "block" }}
+                      alt="截图预览"
+                    />
+                    <button
+                      onClick={() => updateTs(activeTabId, { attachedImage: null })}
+                      style={{
+                        position: "absolute", top: -6, right: -6,
+                        width: 18, height: 18, borderRadius: "50%",
+                        background: "#1a1a1a", border: "none",
+                        color: "#fff", fontSize: 11, cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        lineHeight: 1, fontFamily: "inherit",
+                      }}
+                    >×</button>
+                  </div>
+                  <span style={{ fontSize: 12, color: "#8a8a8a" }}>截图已附加</span>
+                </div>
+              )}
               <textarea
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Describe what you want to create..."
+                placeholder={ts.attachedImage ? "描述你希望如何改进这个设计…（可选）" : "描述你想创建的设计…"}
                 rows={2}
                 style={S.textarea}
                 disabled={isBlocked}
@@ -1165,7 +1307,7 @@ ${htmlContext}`
               <div style={S.inputToolbar}>
                 <div style={{ display: "flex", gap: 4 }}>
                   <ToolbarIcon title="Settings">⚙️</ToolbarIcon>
-                  <ToolbarIcon title="Attach">📎</ToolbarIcon>
+                  <ToolbarIcon title="上传截图" onClick={() => fileInputRef.current?.click()}>📎</ToolbarIcon>
                   <button style={S.importBtn}>Import</button>
                 </div>
                 {isGenerating ? (
@@ -1173,11 +1315,11 @@ ${htmlContext}`
                 ) : (
                   <button
                     onClick={handleSend}
-                    disabled={!inputValue.trim() || isBlocked}
+                    disabled={(!inputValue.trim() && !ts.attachedImage) || isBlocked}
                     style={{
                       ...S.sendBtn,
-                      background: inputValue.trim() && !isBlocked ? "#cc785c" : "#e8b9a8",
-                      cursor: inputValue.trim() && !isBlocked ? "pointer" : "default",
+                      background: (inputValue.trim() || ts.attachedImage) && !isBlocked ? "#cc785c" : "#e8b9a8",
+                      cursor: (inputValue.trim() || ts.attachedImage) && !isBlocked ? "pointer" : "default",
                     }}
                   >
                     ▶ Send
@@ -2286,7 +2428,7 @@ function QuestionsPanel({
                 <textarea
                   value={(answers[q.id] as string) ?? ""}
                   onChange={(e) => onAnswer(q.id, e.target.value)}
-                  placeholder="Your answer..."
+                  placeholder="输入你的回答…"
                   rows={3}
                   style={S.questionTextarea}
                 />
@@ -2295,7 +2437,7 @@ function QuestionsPanel({
                   type="text"
                   value={(answers[q.id] as string) ?? ""}
                   onChange={(e) => onAnswer(q.id, e.target.value)}
-                  placeholder="Your answer..."
+                  placeholder="输入你的回答…"
                   style={S.questionInput}
                 />
               )}
@@ -2331,16 +2473,18 @@ function QuestionsPanel({
 // Sub-components
 // ─────────────────────────────────────────────────────────
 
-function EmptyState({ onSuggestion }: { onSuggestion: (s: string) => void }) {
+function EmptyState({ onSuggestion, onUploadScreenshot }: {
+  onSuggestion: (s: string) => void
+  onUploadScreenshot: () => void
+}) {
   return (
     <div style={S.emptyState}>
-      <h2 style={S.emptyTitle}>Start with context</h2>
-      <p style={S.emptySubtitle}>Designs grounded in real context turn out better.</p>
+      <h2 style={S.emptyTitle}>从上下文开始</h2>
+      <p style={S.emptySubtitle}>提供的背景越充分，设计结果越精准。</p>
       <div style={S.contextCards}>
-        <ContextCard icon="📋" label="Design System"    onClick={() => onSuggestion("Create a design system showcase with colors, typography, and components.")} />
-        <ContextCard icon="🖼️" label="Add screenshot"   onClick={() => {}} />
-        <ContextCard icon="🗂️" label="Attach codebase"  onClick={() => {}} />
-        <ContextCard icon="🎨" label="Drag in a Figma file" hint onClick={() => {}} />
+        <ContextCard icon="🖼️" label="上传截图"         onClick={onUploadScreenshot} />
+        <ContextCard icon="🗂️" label="关联代码"         onClick={() => {}} />
+        <ContextCard icon="🔗" label="通过链接关联设计图" onClick={() => {}} />
       </div>
     </div>
   )
@@ -2457,6 +2601,16 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <div style={{ marginBottom: 10 }}>
+      {/* Image thumbnail for screenshot-based messages */}
+      {isUser && message.imageUrl && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+          <img
+            src={message.imageUrl}
+            style={{ maxHeight: 120, maxWidth: "70%", borderRadius: 10, objectFit: "cover", border: "1px solid #e8e6e0" }}
+            alt="截图参考"
+          />
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
         <div style={{ maxWidth: "85%", padding: "9px 13px", borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: isUser ? "#1a1a1a" : "#f4f3ef", color: isUser ? "#fff" : "#1a1a1a", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {message.content || (message.isStreaming
@@ -2478,9 +2632,9 @@ function MessageBubble({ message }: { message: Message }) {
   )
 }
 
-function ToolbarIcon({ children, title }: { children: React.ReactNode; title?: string }) {
+function ToolbarIcon({ children, title, onClick }: { children: React.ReactNode; title?: string; onClick?: () => void }) {
   return (
-    <button title={title} style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 15 }}>
+    <button onClick={onClick} title={title} style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 15 }}>
       {children}
     </button>
   )

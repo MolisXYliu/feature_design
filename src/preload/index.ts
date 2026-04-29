@@ -1447,6 +1447,24 @@ const api = {
       ipcRenderer.send("design:ask-questions", { sessionId, prompt })
       return () => ipcRenderer.removeListener(channel, handler)
     },
+    generateFromImage: (
+      sessionId: string,
+      prompt: string,
+      imageData: string,
+      mimeType: string,
+      onEvent: (event: { type: string; token?: string; html?: string; error?: string }) => void
+    ): (() => void) => {
+      const channel = `design:image-stream:${sessionId}`
+      const handler = (_: unknown, data: { type: string; token?: string; html?: string; error?: string }): void => {
+        onEvent(data)
+        if (data.type === "done" || data.type === "error" || data.type === "cancelled") {
+          ipcRenderer.removeListener(channel, handler)
+        }
+      }
+      ipcRenderer.on(channel, handler)
+      ipcRenderer.send("design:generate-from-image", { sessionId, prompt, imageData, mimeType })
+      return () => ipcRenderer.removeListener(channel, handler)
+    },
     cancel: (sessionId: string): Promise<void> => ipcRenderer.invoke("design:cancel", sessionId),
     saveVariant: (variantId: string, html: string): Promise<{ filePath: string }> =>
       ipcRenderer.invoke("design:save-variant", variantId, html),

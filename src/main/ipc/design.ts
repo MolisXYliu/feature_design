@@ -214,6 +214,68 @@ Your response must end with: </html>
 `
 
 // ─────────────────────────────────────────────────────────
+// System Prompt — Screenshot / Image reference generation
+// ─────────────────────────────────────────────────────────
+
+const IMAGE_DESIGN_SYSTEM_PROMPT = `You are an expert designer. The user has provided a screenshot or image as a design reference. Analyze the image carefully and create an improved or reimagined version as a complete, self-contained HTML page.
+
+## Output rules
+
+1. **Always output a complete HTML file** — start with \`<!DOCTYPE html>\`, end with \`</html>\`. No fragments, no partial snippets.
+2. **Self-contained** — inline all CSS in \`<style>\` and all JS in \`<script>\`. CDN links for fonts or libraries are fine.
+3. **Single design** — output ONE polished design (no A/B/C variation wrappers). The entire UI goes directly in \`<body>\`.
+4. **No filler content** — every element must earn its place. Never pad with placeholder stats, dummy icons, or lorem ipsum.
+
+## Design quality bar
+
+**Colors**: Use \`oklch()\` to define harmonious palettes. Match the brand/style visible in the reference image.
+**Typography**: Commit to a clear type scale. Avoid Inter, Roboto, Arial — pick something with character (DM Sans, Geist, Epilogue, Sora). Load from Google Fonts.
+**Spacing**: Generous. Cards: 24px+. Use CSS grid.
+**Details**: \`text-wrap: pretty\`, subtle box-shadows, smooth transitions (150–200ms ease), focus rings, hover states.
+
+## Tweaks (Edit mode) — REQUIRED in every output
+
+Every HTML file you produce **must** include a self-contained Tweaks system. Follow this protocol exactly.
+
+### 1 — Define tweakable defaults with EDITMODE markers
+
+\`\`\`js
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"primaryColor":"#D97757","headingSize":48,"bodySize":16,"dark":false,"ctaText":"Get Started","radius":12}/*EDITMODE-END*/;
+\`\`\`
+
+There must be **exactly one** such block, inside an inline \`<script>\` tag.
+
+### 2 — Register the postMessage listener BEFORE announcing availability
+
+\`\`\`js
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === '__activate_edit_mode')   showTweaksPanel();
+  if (e.data && e.data.type === '__deactivate_edit_mode') hideTweaksPanel();
+  if (e.data && e.data.type === '__set_tweak_keys') applyTweaks(e.data.edits);
+});
+window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+\`\`\`
+
+### 3 — Apply defaults via CSS variables
+
+\`\`\`js
+function applyTweaks(edits) {
+  const t = Object.assign({}, TWEAK_DEFAULTS, edits);
+  const r = document.documentElement;
+  r.style.setProperty('--primary', t.primaryColor);
+  // ... etc
+}
+applyTweaks({});
+\`\`\`
+
+## Output format
+
+Respond with ONLY the raw HTML. No explanation, no markdown fences, no preamble.
+Your response must start with: <!DOCTYPE html>
+Your response must end with: </html>
+`
+
+// ─────────────────────────────────────────────────────────
 // Model factory (same pattern as optimizer.ts)
 // ─────────────────────────────────────────────────────────
 
@@ -357,6 +419,103 @@ export function registerDesignHandlers(): void {
         }
       } finally {
         activeSessions.delete(sessionId)
+      }
+    }
+  )
+
+  // design:generate-from-image — multimodal: image + optional prompt → single HTML (no variations)
+  ipcMain.on(
+    "design:generate-from-image",
+    async (
+      event,
+      { sessionId, prompt, imageData, mimeType }: {
+        sessionId: string
+        prompt: string
+        imageData: string
+        mimeType: string
+      }
+    ) => {
+      const channel = `design:image-stream:${sessionId}`
+      const window = BrowserWindow.fromWebContents(event.sender)
+
+      const send = (data: object) => {
+        if (window && !window.isDestroyed()) {
+          event.sender.send(channel, data)
+        }
+      }
+
+      const existing = activeSessions.get(sessionId)
+      if (existing) existing.abort()
+
+      const controller = new AbortController()
+      activeSessions.set(sessionId, controller)
+
+      console.log(`[Design:Image] Handler fired — sessionId=${sessionId} mimeType=${mimeType} imageDataLen=${imageData?.length ?? 0} prompt="${prompt?.slice(0, 80)}"`)
+
+      const model = getModel()
+      if (!model) {
+        console.error("[Design:Image] No model configured")
+        send({ type: "error", error: "No model configured. Please set up a model in Settings." })
+        return
+      }
+      console.log("[Design:Image] Model obtained, preparing to stream…")
+
+      let fullText = ""
+      let tokenCount = 0
+
+      try {
+        send({ type: "start" })
+
+        const userPrompt = prompt?.trim() || "请参考这张截图，生成一个改进版的设计页面。"
+        console.log(`[Design:Image] Sending to model — prompt="${userPrompt.slice(0, 80)}"`)
+
+        const stream = await model.stream(
+          [
+            new SystemMessage(IMAGE_DESIGN_SYSTEM_PROMPT),
+            new HumanMessage({
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: `data:${mimeType};base64,${imageData}` },
+                },
+                { type: "text", text: userPrompt },
+              ],
+            }),
+          ],
+          { signal: controller.signal }
+        )
+        console.log("[Design:Image] Stream opened, receiving tokens…")
+
+        for await (const chunk of stream) {
+          if (controller.signal.aborted) break
+          const token = typeof chunk.content === "string" ? chunk.content : ""
+          if (token) {
+            fullText += token
+            tokenCount++
+            if (tokenCount === 1) console.log("[Design:Image] First token received ✓")
+            if (tokenCount % 100 === 0) console.log(`[Design:Image] ${tokenCount} tokens so far (${fullText.length} chars)`)
+            send({ type: "token", token })
+          }
+        }
+
+        console.log(`[Design:Image] Stream complete — ${tokenCount} tokens, ${fullText.length} chars total`)
+        const html = extractHtml(fullText)
+        console.log(`[Design:Image] HTML extracted — ${html.length} chars, sending done`)
+        send({ type: "done", html })
+      } catch (err) {
+        if (controller.signal.aborted) {
+          console.log("[Design:Image] Cancelled by user")
+          send({ type: "cancelled" })
+        } else {
+          const message = err instanceof Error ? err.message : String(err)
+          const stack = err instanceof Error ? err.stack : undefined
+          console.error("[Design:Image] ❌ Error:", message)
+          if (stack) console.error("[Design:Image] Stack:", stack)
+          send({ type: "error", error: message })
+        }
+      } finally {
+        activeSessions.delete(sessionId)
+        console.log("[Design:Image] Session cleaned up")
       }
     }
   )
